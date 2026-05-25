@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DeviceInfo, PassthroughStatus } from "../types/engine";
+import type { DeviceInfo, PassthroughStatus, Route } from "../types/engine";
+
+// ── Device enumeration ────────────────────────────────────────────────────────
 
 export const listInputDevices = (): Promise<DeviceInfo[]> =>
   invoke<DeviceInfo[]>("list_input_devices");
@@ -7,7 +9,9 @@ export const listInputDevices = (): Promise<DeviceInfo[]> =>
 export const listOutputDevices = (): Promise<DeviceInfo[]> =>
   invoke<DeviceInfo[]>("list_output_devices");
 
-// Tauri 2 IPC converts camelCase keys to snake_case on the Rust side.
+// ── Phase 1 passthrough (kept for compatibility) ──────────────────────────────
+
+// Tauri 2 IPC converts camelCase JS keys to snake_case on the Rust side.
 export const startPassthrough = (inputId: string, outputId: string): Promise<void> =>
   invoke<void>("start_passthrough", { inputId, outputId });
 
@@ -16,3 +20,20 @@ export const stopPassthrough = (): Promise<void> =>
 
 export const getPassthroughStatus = (): Promise<PassthroughStatus> =>
   invoke<PassthroughStatus>("get_passthrough_status");
+
+// ── Phase 2 routing ───────────────────────────────────────────────────────────
+
+export const getRoutes = (): Promise<Route[]> =>
+  invoke<Route[]>("get_routes");
+
+/** Enable or disable a route. Returns the full updated routes list. */
+export const setRoute = (
+  inputId: string,
+  outputId: string,
+  enabled: boolean,
+): Promise<Route[]> =>
+  invoke<Route[]>("set_route", { inputId, outputId, enabled });
+
+/** Stop all routes and clear the list. */
+export const clearRoutes = (): Promise<void> =>
+  invoke<void>("clear_routes");

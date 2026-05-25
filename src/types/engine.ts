@@ -15,3 +15,11 @@ export interface PassthroughStatus {
   input_device: string | null;
   output_device: string | null;
 }
+
+// Rust field names are snake_case; serde serializes them as-is.
+export interface Route {
+  input_id: string;
+  output_id: string;
+  enabled: boolean;
+  active: boolean;
+}
