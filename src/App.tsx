@@ -83,6 +83,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
 
   const loadAll = useCallback(async () => {
+    setError(null);
     try {
       const [ins, outs, rts] = await Promise.all([
         listInputDevices(),
@@ -145,7 +146,6 @@ export default function App() {
     }
   };
 
-  const hasActiveRoute = routes.some((r) => r.active);
   const canEnable = !busy && !!selectedInput && !!selectedOutput;
 
   return (
@@ -218,11 +218,11 @@ export default function App() {
           </select>
 
           <button onClick={handleEnable} disabled={!canEnable}>
-            {busy ? "Working…" : hasActiveRoute ? "Switch Route" : "Enable"}
+            {busy ? "Working…" : "Enable"}
           </button>
         </div>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-          Phase 2: only one route may be active at a time. Enabling a new route stops the current one.
+          Phase 2: only one route may be active at a time. Stop the active route before enabling another.
         </p>
       </section>
 
