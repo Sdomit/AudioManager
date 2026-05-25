@@ -97,7 +97,7 @@ function App() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <select
             value={selectedInput}
-            onChange={(e) => setSelectedInput(e.target.value)}
+            onChange={(e) => { setSelectedInput(e.target.value); setError(null); }}
             disabled={running || busy}
           >
             <option value="" disabled>
@@ -114,7 +114,7 @@ function App() {
 
           <select
             value={selectedOutput}
-            onChange={(e) => setSelectedOutput(e.target.value)}
+            onChange={(e) => { setSelectedOutput(e.target.value); setError(null); }}
             disabled={running || busy}
           >
             <option value="" disabled>

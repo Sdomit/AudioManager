@@ -23,19 +23,31 @@ impl<E: std::fmt::Display> From<E> for EngineError {
 }
 
 // The engine thread owns the cpal::Stream handles (which are !Send on some
-// platforms). PassthroughEngine only holds the stop channel and metadata,
-// both of which are Send + Sync, so no unsafe is needed.
+// platforms). PassthroughEngine only holds the stop channel, join handle,
+// and metadata — all Send — so no unsafe is needed.
+//
+// JoinHandle<()>: Send but !Sync. AppState wraps this in Mutex<Option<...>>,
+// and Mutex<T>: Sync only requires T: Send, so AppState: Send + Sync. ✓
 pub struct PassthroughEngine {
     pub input_device_name: String,
     pub output_device_name: String,
     stop_tx: mpsc::SyncSender<()>,
+    // Held so Drop can join — ensures WASAPI device handles are fully released
+    // before the Mutex lock is dropped. Without joining, a rapid stop→start on
+    // the same device races with the old stream close and can produce
+    // BuildStreamError (device busy).
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Drop for PassthroughEngine {
     fn drop(&mut self) {
-        // Sending stops the engine thread, which drops both streams cleanly
-        // on the same thread they were created (important for COM apartments on Windows).
+        // Signal the engine thread to stop.
         let _ = self.stop_tx.send(());
+        // Block until the thread exits and releases device handles.
+        // Panics in the engine thread are silently discarded (no recovery possible here).
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -51,7 +63,7 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
     let in_name = input_name.clone();
     let out_name = output_name.clone();
 
-    thread::spawn(move || {
+    let thread_handle = thread::spawn(move || {
         // All stream creation and destruction happens on this thread.
         let outcome: Result<_, EngineError> = (|| {
             let host = cpal::default_host();
@@ -181,6 +193,7 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
             input_device_name: input_name,
             output_device_name: output_name,
             stop_tx,
+            thread: Some(thread_handle),
         }),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(EngineError {
