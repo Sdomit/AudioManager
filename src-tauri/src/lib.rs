@@ -2,6 +2,7 @@ mod audio;
 mod state;
 
 use audio::devices::{DeviceInfo, DeviceListError};
+use audio::graph::RouteState;
 use audio::passthrough::EngineError;
 use audio::routing::Route;
 use state::AppState;
@@ -20,7 +21,7 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 
 // ── Phase 1 passthrough (kept for backward compatibility) ─────────────────────
 //
-// These commands now sync route state so the routes list stays consistent
+// These commands now sync graph state so the routes list stays consistent
 // whether the caller uses the old direct API or the new set_route API.
 
 #[derive(serde::Serialize)]
@@ -37,17 +38,14 @@ fn start_passthrough(
     output_id: String,
 ) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    // Stop any existing engine; clear all active flags.
+    // Stop any existing engine; deactivate all graph routes.
     inner.engine = None;
-    for r in inner.routes.iter_mut() {
-        r.active = false;
-        r.enabled = false;
-    }
+    inner.graph.deactivate_all();
     // Start the new engine.
     let engine = audio::passthrough::start(&input_id, &output_id)?;
     inner.engine = Some(engine);
-    // Upsert route to keep the list consistent.
-    upsert_route(&mut inner.routes, &input_id, &output_id, true, true);
+    // Upsert route as Active to keep the graph consistent.
+    inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
     Ok(())
 }
 
@@ -55,10 +53,7 @@ fn start_passthrough(
 fn stop_passthrough(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
     inner.engine = None;
-    for r in inner.routes.iter_mut() {
-        r.active = false;
-        r.enabled = false;
-    }
+    inner.graph.deactivate_all();
     Ok(())
 }
 
@@ -79,11 +74,11 @@ fn get_passthrough_status(state: tauri::State<AppState>) -> PassthroughStatus {
     }
 }
 
-// ── Phase 2 routing commands ──────────────────────────────────────────────────
+// ── Phase 3 routing commands ──────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_routes(state: tauri::State<AppState>) -> Vec<Route> {
-    state.inner.lock().unwrap().routes.clone()
+    state.inner.lock().unwrap().graph.to_routes()
 }
 
 /// Enable or disable a single route.
@@ -93,7 +88,7 @@ fn get_routes(state: tauri::State<AppState>) -> Vec<Route> {
 /// - Enabling a route when a *different* route is active returns an error.
 /// - Enabling an already-active route is a no-op (returns current routes).
 /// - Disabling stops the engine if this route was active.
-/// - Routes are upserted into the routes list; they persist until clear_routes.
+/// - Routes are upserted into the graph; they persist until clear_routes.
 ///
 /// Returns the full updated routes list so the frontend stays in sync.
 #[tauri::command]
@@ -106,21 +101,18 @@ fn set_route(
     let mut inner = state.inner.lock().unwrap();
 
     if enabled {
-        // Conflict check: another route in the list is active.
-        let route_conflict = inner
-            .routes
-            .iter()
-            .any(|r| r.active && !r.matches(&input_id, &output_id));
+        // Conflict check: another route in the graph is Active.
+        let route_conflict = inner.graph.has_other_active_route(&input_id, &output_id);
 
-        // Conflict check: engine is running a route not tracked in the list
-        // (e.g., started via the old start_passthrough command).
+        // Conflict check: engine is running a route not yet reflected in the
+        // graph (e.g., started via the legacy start_passthrough command).
         let engine_conflict = inner.engine.as_ref().map_or(false, |e| {
             !(e.input_device_name == input_id && e.output_device_name == output_id)
         });
 
         if route_conflict || engine_conflict {
             return Err(EngineError {
-                message: "Phase 2 supports only one active route. \
+                message: "Phase 3 still supports only one active audio route. \
                           Stop the current route first."
                     .to_string(),
             });
@@ -138,13 +130,11 @@ fn set_route(
             inner.engine = Some(engine);
         }
 
-        upsert_route(&mut inner.routes, &input_id, &output_id, true, true);
+        inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
     } else {
         // Disabling: stop engine if this route was the active one.
-        let was_active = inner
-            .routes
-            .iter()
-            .any(|r| r.matches(&input_id, &output_id) && r.active);
+        let was_active = inner.graph.find_route_state(&input_id, &output_id)
+            == Some(&RouteState::Active);
 
         let engine_was_this = inner.engine.as_ref().map_or(false, |e| {
             e.input_device_name == input_id && e.output_device_name == output_id
@@ -154,42 +144,19 @@ fn set_route(
             inner.engine = None;
         }
 
-        upsert_route(&mut inner.routes, &input_id, &output_id, false, false);
+        inner.graph.upsert_route(&input_id, &output_id, RouteState::Disabled);
     }
 
-    Ok(inner.routes.clone())
+    Ok(inner.graph.to_routes())
 }
 
-/// Stop all routes and clear the routes list.
+/// Stop all routes and clear the graph.
 #[tauri::command]
 fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
     inner.engine = None;
-    inner.routes.clear();
+    inner.graph.clear();
     Ok(())
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn upsert_route(
-    routes: &mut Vec<Route>,
-    input_id: &str,
-    output_id: &str,
-    enabled: bool,
-    active: bool,
-) {
-    match routes.iter_mut().find(|r| r.matches(input_id, output_id)) {
-        Some(r) => {
-            r.enabled = enabled;
-            r.active = active;
-        }
-        None => {
-            let mut route = Route::new(input_id, output_id);
-            route.enabled = enabled;
-            route.active = active;
-            routes.push(route);
-        }
-    }
 }
 
 // ── Tauri entry point ─────────────────────────────────────────────────────────

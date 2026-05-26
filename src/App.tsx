@@ -158,7 +158,7 @@ export default function App() {
         </button>
       </header>
       <p style={{ opacity: 0.6, marginTop: 4, fontSize: 13 }}>
-        v0.1 · Phase 2 · one active route at a time
+        v0.1 · Phase 3 · graph foundation, one active route
       </p>
 
       {/* Error banner */}
@@ -222,7 +222,7 @@ export default function App() {
           </button>
         </div>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-          Phase 2: only one route may be active at a time. Stop the active route before enabling another.
+          Phase 3: graph foundation, one active route only. Stop the active route before enabling another.
         </p>
       </section>
 
