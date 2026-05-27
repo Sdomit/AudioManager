@@ -11,7 +11,6 @@ export const listOutputDevices = (): Promise<DeviceInfo[]> =>
 
 // ── Phase 1 passthrough (kept for compatibility) ──────────────────────────────
 
-// Tauri 2 IPC converts camelCase JS keys to snake_case on the Rust side.
 export const startPassthrough = (inputId: string, outputId: string): Promise<void> =>
   invoke<void>("start_passthrough", { inputId, outputId });
 
@@ -21,7 +20,7 @@ export const stopPassthrough = (): Promise<void> =>
 export const getPassthroughStatus = (): Promise<PassthroughStatus> =>
   invoke<PassthroughStatus>("get_passthrough_status");
 
-// ── Phase 2 routing ───────────────────────────────────────────────────────────
+// ── Routing ───────────────────────────────────────────────────────────────────
 
 export const getRoutes = (): Promise<Route[]> =>
   invoke<Route[]>("get_routes");
@@ -37,3 +36,12 @@ export const setRoute = (
 /** Stop all routes and clear the list. */
 export const clearRoutes = (): Promise<void> =>
   invoke<void>("clear_routes");
+
+/** Update per-route gain (0.0–2.0) and mute state. Atomic — no engine restart. */
+export const setRouteGain = (
+  inputId: string,
+  outputId: string,
+  volume: number,
+  muted: boolean,
+): Promise<Route[]> =>
+  invoke<Route[]>("set_route_gain", { inputId, outputId, volume, muted });

@@ -4,12 +4,9 @@ use crate::audio::routing::Route;
 
 // ── Identity types ────────────────────────────────────────────────────────────
 
-/// Opaque identifier for an input or output node within the graph.
-/// u32 is sufficient for any realistic device count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(u32);
 
-/// Opaque identifier for a route within the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RouteId(u32);
 
@@ -18,7 +15,7 @@ pub struct RouteId(u32);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputNode {
     pub id: NodeId,
-    pub device_id: String, // WASAPI display name; same as DeviceInfo.id
+    pub device_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,12 +26,8 @@ pub struct OutputNode {
 
 // ── Route state ───────────────────────────────────────────────────────────────
 
-/// Lifecycle state of a single audio route.
-///
 /// `Disabled` — user has not requested audio flow (or has stopped it).
 /// `Enabled`  — user wants audio flow but engine is not running yet.
-///              Reserved for Phase 4+ pre-configuration; Phase 3 goes
-///              directly Disabled → Active on enable.
 /// `Active`   — engine thread is running; audio is flowing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RouteState {
@@ -51,16 +44,14 @@ pub struct AudioRoute {
     pub input: NodeId,
     pub output: NodeId,
     pub state: RouteState,
+    /// Per-route gain in [0.0, 2.0]. Default 1.0.
+    pub volume: f32,
+    /// Muted routes remain configured but contribute silence to the mix.
+    pub muted: bool,
 }
 
 // ── Graph ─────────────────────────────────────────────────────────────────────
 
-/// Internal representation of all configured audio paths.
-///
-/// Inputs and outputs are de-duplicated nodes. Routes are edges connecting
-/// them. This separates device identity from connection intent, enabling
-/// Phase 4+ features (per-node gain/mute, fan-out routing) without changing
-/// the IPC surface — callers still see `Vec<Route>` via `to_routes()`.
 #[derive(Debug, Clone, Default)]
 pub struct AudioGraph {
     pub inputs: Vec<InputNode>,
@@ -111,7 +102,8 @@ impl AudioGraph {
 
     // ── Route operations ──────────────────────────────────────────────────────
 
-    /// Create or update the route for (input_id → output_id) with the given state.
+    /// Create or update state for (input_id → output_id).
+    /// Preserves existing volume/muted when updating an existing route.
     pub fn upsert_route(&mut self, input_id: &str, output_id: &str, state: RouteState) {
         let in_node = self.get_or_create_input(input_id);
         let out_node = self.get_or_create_output(output_id);
@@ -121,52 +113,92 @@ impl AudioGraph {
             .find(|r| r.input == in_node && r.output == out_node)
         {
             r.state = state;
-            return;
+            return; // volume/muted preserved
         }
         let id = self.alloc_route_id();
-        self.routes.push(AudioRoute { id, input: in_node, output: out_node, state });
+        self.routes.push(AudioRoute {
+            id,
+            input: in_node,
+            output: out_node,
+            state,
+            volume: 1.0,
+            muted: false,
+        });
     }
 
-    /// Return the state of the route for (input_id → output_id), if it exists.
-    pub fn find_route_state(&self, input_id: &str, output_id: &str) -> Option<&RouteState> {
-        let in_node = self.inputs.iter().find(|n| n.device_id == input_id)?.id;
-        let out_node = self.outputs.iter().find(|n| n.device_id == output_id)?.id;
+    /// Update gain/mute for an existing route. Returns false if route not found.
+    pub fn set_route_gain(
+        &mut self,
+        input_id: &str,
+        output_id: &str,
+        volume: f32,
+        muted: bool,
+    ) -> bool {
+        let in_node = match self.inputs.iter().find(|n| n.device_id == input_id) {
+            Some(n) => n.id,
+            None => return false,
+        };
+        let out_node = match self.outputs.iter().find(|n| n.device_id == output_id) {
+            Some(n) => n.id,
+            None => return false,
+        };
+        if let Some(r) = self
+            .routes
+            .iter_mut()
+            .find(|r| r.input == in_node && r.output == out_node)
+        {
+            r.volume = volume;
+            r.muted = muted;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Return the output device_id of the first Active route, if any.
+    pub fn active_output(&self) -> Option<String> {
         self.routes
             .iter()
-            .find(|r| r.input == in_node && r.output == out_node)
-            .map(|r| &r.state)
+            .find(|r| r.state == RouteState::Active)
+            .and_then(|r| {
+                self.outputs.iter().find(|n| n.id == r.output).map(|n| n.device_id.clone())
+            })
     }
 
-    /// True if any route *other than* (input_id → output_id) is Active.
-    pub fn has_other_active_route(&self, input_id: &str, output_id: &str) -> bool {
-        let target_in = self.inputs.iter().find(|n| n.device_id == input_id).map(|n| n.id);
-        let target_out = self.outputs.iter().find(|n| n.device_id == output_id).map(|n| n.id);
-        self.routes.iter().any(|r| {
-            r.state == RouteState::Active
-                && !(Some(r.input) == target_in && Some(r.output) == target_out)
-        })
+    /// Return (device_name, volume, muted) for all Active inputs routing to output_id.
+    pub fn active_inputs_for_output(&self, output_id: &str) -> Vec<(String, f32, bool)> {
+        let out_node = match self.outputs.iter().find(|n| n.device_id == output_id) {
+            Some(n) => n.id,
+            None => return vec![],
+        };
+        self.routes
+            .iter()
+            .filter(|r| r.output == out_node && r.state == RouteState::Active)
+            .filter_map(|r| {
+                let name =
+                    self.inputs.iter().find(|n| n.id == r.input)?.device_id.clone();
+                Some((name, r.volume, r.muted))
+            })
+            .collect()
     }
 
-    /// Set all routes to Disabled (used when stopping all audio).
+    /// Set all routes to Disabled.
     pub fn deactivate_all(&mut self) {
         for r in self.routes.iter_mut() {
             r.state = RouteState::Disabled;
         }
     }
 
-    /// Remove all nodes and routes.
+    /// Remove all nodes and routes. Node IDs are NOT reset (monotonically increasing).
     pub fn clear(&mut self) {
         self.inputs.clear();
         self.outputs.clear();
         self.routes.clear();
-        // IDs are NOT reset — monotonically increasing IDs remain unique
-        // across the session even after clear.
     }
 
     // ── IPC bridge ───────────────────────────────────────────────────────────
 
-    /// Convert graph routes to the flat `Route` list that IPC commands return.
-    /// Unknown node IDs produce empty strings (should never occur in practice).
+    /// Convert graph routes to the flat `Route` list returned by IPC commands.
     pub fn to_routes(&self) -> Vec<Route> {
         self.routes
             .iter()
@@ -188,8 +220,71 @@ impl AudioGraph {
                     RouteState::Enabled => (true, false),
                     RouteState::Active => (true, true),
                 };
-                Route { input_id, output_id, enabled, active }
+                Route {
+                    input_id,
+                    output_id,
+                    enabled,
+                    active,
+                    volume: ar.volume,
+                    muted: ar.muted,
+                }
             })
             .collect()
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_defaults_volume_muted() {
+        let mut g = AudioGraph::new();
+        g.upsert_route("mic", "speakers", RouteState::Active);
+        let routes = g.to_routes();
+        assert_eq!(routes.len(), 1);
+        assert!((routes[0].volume - 1.0).abs() < f32::EPSILON);
+        assert!(!routes[0].muted);
+    }
+
+    #[test]
+    fn set_route_gain_updates_values() {
+        let mut g = AudioGraph::new();
+        g.upsert_route("mic", "speakers", RouteState::Active);
+        assert!(g.set_route_gain("mic", "speakers", 0.5, true));
+        let routes = g.to_routes();
+        assert!((routes[0].volume - 0.5).abs() < f32::EPSILON);
+        assert!(routes[0].muted);
+    }
+
+    #[test]
+    fn upsert_preserves_volume_muted_on_state_change() {
+        let mut g = AudioGraph::new();
+        g.upsert_route("mic", "speakers", RouteState::Active);
+        g.set_route_gain("mic", "speakers", 0.7, true);
+        g.upsert_route("mic", "speakers", RouteState::Disabled);
+        let routes = g.to_routes();
+        assert!((routes[0].volume - 0.7).abs() < f32::EPSILON);
+        assert!(routes[0].muted);
+    }
+
+    #[test]
+    fn set_route_gain_returns_false_for_unknown_route() {
+        let mut g = AudioGraph::new();
+        assert!(!g.set_route_gain("nonexistent", "output", 0.5, false));
+    }
+
+    #[test]
+    fn active_inputs_for_output_returns_active_only() {
+        let mut g = AudioGraph::new();
+        g.upsert_route("mic1", "spk", RouteState::Active);
+        g.upsert_route("mic2", "spk", RouteState::Active);
+        g.upsert_route("mic3", "spk", RouteState::Disabled);
+        let inputs = g.active_inputs_for_output("spk");
+        assert_eq!(inputs.len(), 2);
+        assert!(inputs.iter().any(|(n, _, _)| n == "mic1"));
+        assert!(inputs.iter().any(|(n, _, _)| n == "mic2"));
     }
 }

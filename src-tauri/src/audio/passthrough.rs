@@ -1,3 +1,6 @@
+// Kept as reference implementation. Not called in Phase 4+.
+#![allow(dead_code)]
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use ringbuf::RingBuffer;

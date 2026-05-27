@@ -22,4 +22,8 @@ export interface Route {
   output_id: string;
   enabled: boolean;
   active: boolean;
+  /** Per-route gain in [0.0, 2.0]. Default 1.0 (= 100%). */
+  volume: number;
+  /** True when this input is muted (contributes silence). */
+  muted: boolean;
 }

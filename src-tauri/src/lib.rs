@@ -3,9 +3,9 @@ mod state;
 
 use audio::devices::{DeviceInfo, DeviceListError};
 use audio::graph::RouteState;
-use audio::passthrough::EngineError;
+use audio::mixer::{EngineError, MixerInput};
 use audio::routing::Route;
-use state::AppState;
+use state::{AppInner, AppState};
 
 // ── Device enumeration ────────────────────────────────────────────────────────
 
@@ -19,10 +19,25 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
     audio::devices::list_output_devices()
 }
 
-// ── Phase 1 passthrough (kept for backward compatibility) ─────────────────────
-//
-// These commands now sync graph state so the routes list stays consistent
-// whether the caller uses the old direct API or the new set_route API.
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Stop the running engine and restart with all Active inputs for output_id.
+/// Caller must have already updated graph state before calling.
+fn rebuild_mixer(inner: &mut AppInner, output_id: &str) -> Result<(), EngineError> {
+    inner.engine = None;
+    let active = inner.graph.active_inputs_for_output(output_id);
+    if active.is_empty() {
+        return Ok(());
+    }
+    let mixer_inputs: Vec<MixerInput> = active
+        .into_iter()
+        .map(|(name, vol, muted)| MixerInput { device_name: name, gain: vol, muted })
+        .collect();
+    inner.engine = Some(audio::mixer::start(output_id, &mixer_inputs)?);
+    Ok(())
+}
+
+// ── Phase 1 passthrough (thin wrapper over MixerEngine, kept for compatibility) ─
 
 #[derive(serde::Serialize)]
 struct PassthroughStatus {
@@ -38,13 +53,13 @@ fn start_passthrough(
     output_id: String,
 ) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    // Stop any existing engine; deactivate all graph routes.
     inner.engine = None;
     inner.graph.deactivate_all();
-    // Start the new engine.
-    let engine = audio::passthrough::start(&input_id, &output_id)?;
+    let engine = audio::mixer::start(
+        &output_id,
+        &[MixerInput { device_name: input_id.clone(), gain: 1.0, muted: false }],
+    )?;
     inner.engine = Some(engine);
-    // Upsert route as Active to keep the graph consistent.
     inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
     Ok(())
 }
@@ -63,18 +78,16 @@ fn get_passthrough_status(state: tauri::State<AppState>) -> PassthroughStatus {
     match inner.engine.as_ref() {
         Some(e) => PassthroughStatus {
             running: true,
-            input_device: Some(e.input_device_name.clone()),
+            input_device: e.inputs.first().map(|i| i.device_name.clone()),
             output_device: Some(e.output_device_name.clone()),
         },
-        None => PassthroughStatus {
-            running: false,
-            input_device: None,
-            output_device: None,
-        },
+        None => {
+            PassthroughStatus { running: false, input_device: None, output_device: None }
+        }
     }
 }
 
-// ── Phase 3 routing commands ──────────────────────────────────────────────────
+// ── Phase 4 routing commands ──────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_routes(state: tauri::State<AppState>) -> Vec<Route> {
@@ -83,14 +96,13 @@ fn get_routes(state: tauri::State<AppState>) -> Vec<Route> {
 
 /// Enable or disable a single route.
 ///
-/// Rules:
-/// - At most one route may be active (engine running) at a time.
-/// - Enabling a route when a *different* route is active returns an error.
-/// - Enabling an already-active route is a no-op (returns current routes).
-/// - Disabling stops the engine if this route was active.
-/// - Routes are upserted into the graph; they persist until clear_routes.
-///
-/// Returns the full updated routes list so the frontend stays in sync.
+/// Phase 4 rules:
+/// - All Active routes must share the same output device (one output bus).
+/// - Enabling a route to a different output than the currently active bus returns an error.
+/// - Enabling a route rebuilds the mixer with all currently Active inputs + this one.
+/// - Disabling a route rebuilds the mixer with remaining Active inputs.
+/// - Disabling the last Active input stops the engine.
+/// - Volume and mute are preserved across enable/disable cycles.
 #[tauri::command]
 fn set_route(
     state: tauri::State<AppState>,
@@ -101,50 +113,32 @@ fn set_route(
     let mut inner = state.inner.lock().unwrap();
 
     if enabled {
-        // Conflict check: another route in the graph is Active.
-        let route_conflict = inner.graph.has_other_active_route(&input_id, &output_id);
-
-        // Conflict check: engine is running a route not yet reflected in the
-        // graph (e.g., started via the legacy start_passthrough command).
-        let engine_conflict = inner.engine.as_ref().map_or(false, |e| {
-            !(e.input_device_name == input_id && e.output_device_name == output_id)
-        });
-
-        if route_conflict || engine_conflict {
-            return Err(EngineError {
-                message: "Phase 3 still supports only one active audio route. \
-                          Stop the current route first."
-                    .to_string(),
-            });
+        // Reject if a different output bus is already active.
+        if let Some(active_out) = inner.graph.active_output() {
+            if active_out != output_id {
+                return Err(EngineError {
+                    message: "Phase 4 supports one output bus. \
+                              Stop the current output before enabling another."
+                        .to_string(),
+                });
+            }
         }
-
-        // Already running this exact route — no-op.
-        let already_active = inner.engine.as_ref().map_or(false, |e| {
-            e.input_device_name == input_id && e.output_device_name == output_id
-        });
-
-        if !already_active {
-            // Drop old engine (joins thread, releases device handles).
-            inner.engine = None;
-            let engine = audio::passthrough::start(&input_id, &output_id)?;
-            inner.engine = Some(engine);
+        // Also check engine directly (e.g. set via start_passthrough).
+        if let Some(eng) = &inner.engine {
+            if eng.output_device_name != output_id {
+                return Err(EngineError {
+                    message: "Phase 4 supports one output bus. \
+                              Stop the current output before enabling another."
+                        .to_string(),
+                });
+            }
         }
 
         inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
+        rebuild_mixer(&mut inner, &output_id)?;
     } else {
-        // Disabling: stop engine if this route was the active one.
-        let was_active = inner.graph.find_route_state(&input_id, &output_id)
-            == Some(&RouteState::Active);
-
-        let engine_was_this = inner.engine.as_ref().map_or(false, |e| {
-            e.input_device_name == input_id && e.output_device_name == output_id
-        });
-
-        if was_active || engine_was_this {
-            inner.engine = None;
-        }
-
         inner.graph.upsert_route(&input_id, &output_id, RouteState::Disabled);
+        rebuild_mixer(&mut inner, &output_id)?;
     }
 
     Ok(inner.graph.to_routes())
@@ -157,6 +151,32 @@ fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     inner.engine = None;
     inner.graph.clear();
     Ok(())
+}
+
+/// Update per-route gain and mute. Atomic when the route is active — no engine restart.
+#[tauri::command]
+fn set_route_gain(
+    state: tauri::State<AppState>,
+    input_id: String,
+    output_id: String,
+    volume: f32,
+    muted: bool,
+) -> Result<Vec<Route>, EngineError> {
+    let volume = volume.clamp(0.0, 2.0);
+    let mut inner = state.inner.lock().unwrap();
+
+    if !inner.graph.set_route_gain(&input_id, &output_id, volume, muted) {
+        return Err(EngineError {
+            message: format!("Route not found: {input_id} → {output_id}"),
+        });
+    }
+
+    // Atomic update — no restart needed.
+    if let Some(engine) = &inner.engine {
+        engine.update_gain(&input_id, volume, muted);
+    }
+
+    Ok(inner.graph.to_routes())
 }
 
 // ── Tauri entry point ─────────────────────────────────────────────────────────
@@ -175,6 +195,7 @@ pub fn run() {
             get_routes,
             set_route,
             clear_routes,
+            set_route_gain,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

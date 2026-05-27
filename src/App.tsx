@@ -5,6 +5,7 @@ import {
   getRoutes,
   setRoute,
   clearRoutes,
+  setRouteGain,
 } from "./ipc/commands";
 import type { DeviceInfo, Route } from "./types/engine";
 import "./App.css";
@@ -17,7 +18,6 @@ function extractErrorMessage(e: unknown): string {
 }
 
 function shortName(deviceId: string): string {
-  // Trim long WASAPI device names to fit the table.
   return deviceId.length > 40 ? deviceId.slice(0, 38) + "…" : deviceId;
 }
 
@@ -27,11 +27,34 @@ interface RouteRowProps {
   route: Route;
   busy: boolean;
   onToggle: (route: Route, enabled: boolean) => void;
+  onGainChange: (route: Route, volume: number, muted: boolean) => void;
 }
 
-function RouteRow({ route, busy, onToggle }: RouteRowProps) {
+function RouteRow({ route, busy, onToggle, onGainChange }: RouteRowProps) {
+  // Local optimistic state for slider and mute; synced from parent on mount.
+  const [localVol, setLocalVol] = useState(Math.round((route.volume ?? 1.0) * 100));
+  const [localMuted, setLocalMuted] = useState(route.muted ?? false);
+
+  // Sync when the route object is replaced externally (e.g. after enable/disable).
+  useEffect(() => {
+    setLocalVol(Math.round((route.volume ?? 1.0) * 100));
+    setLocalMuted(route.muted ?? false);
+  }, [route.input_id, route.output_id, route.volume, route.muted]);
+
   const statusLabel = route.active ? "Active" : "Off";
   const statusColor = route.active ? "#2ecc71" : "#888";
+
+  const handleVolChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const pct = Number(e.target.value);
+    setLocalVol(pct);
+    onGainChange(route, pct / 100, localMuted);
+  };
+
+  const handleMuteToggle = () => {
+    const next = !localMuted;
+    setLocalMuted(next);
+    onGainChange(route, localVol / 100, next);
+  };
 
   return (
     <tr>
@@ -40,6 +63,43 @@ function RouteRow({ route, busy, onToggle }: RouteRowProps) {
       <td style={{ padding: "8px 12px", maxWidth: 200 }}>{shortName(route.output_id)}</td>
       <td style={{ padding: "8px 12px", color: statusColor, fontWeight: 600, minWidth: 60 }}>
         {statusLabel}
+      </td>
+      <td style={{ padding: "8px 12px", minWidth: 140 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="range"
+            min={0}
+            max={200}
+            step={1}
+            value={localVol}
+            onChange={handleVolChange}
+            disabled={busy}
+            style={{ width: 90, accentColor: "#3498db" }}
+            title={`Volume: ${localVol}%`}
+          />
+          <span style={{ fontSize: 12, minWidth: 34, textAlign: "right", opacity: 0.8 }}>
+            {localVol}%
+          </span>
+        </div>
+      </td>
+      <td style={{ padding: "8px 12px" }}>
+        <button
+          onClick={handleMuteToggle}
+          disabled={busy}
+          style={{
+            background: localMuted ? "#c0392b" : "#555",
+            color: "#fff",
+            border: "none",
+            padding: "4px 10px",
+            borderRadius: 4,
+            cursor: busy ? "not-allowed" : "pointer",
+            fontSize: 12,
+            minWidth: 48,
+          }}
+          title={localMuted ? "Unmute" : "Mute"}
+        >
+          {localMuted ? "Muted" : "Mute"}
+        </button>
       </td>
       <td style={{ padding: "8px 12px" }}>
         {route.active ? (
@@ -104,7 +164,6 @@ export default function App() {
     loadAll();
   }, [loadAll]);
 
-  // Add & enable a new route from the dropdown selection.
   const handleEnable = async () => {
     if (!selectedInput || !selectedOutput) return;
     setBusy(true);
@@ -119,7 +178,6 @@ export default function App() {
     }
   };
 
-  // Toggle an existing route on or off.
   const handleToggle = async (route: Route, enabled: boolean) => {
     setBusy(true);
     setError(null);
@@ -130,6 +188,15 @@ export default function App() {
       setError(extractErrorMessage(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleGainChange = async (route: Route, volume: number, muted: boolean) => {
+    try {
+      const updated = await setRouteGain(route.input_id, route.output_id, volume, muted);
+      setRoutes(updated);
+    } catch (e) {
+      setError(extractErrorMessage(e));
     }
   };
 
@@ -149,7 +216,7 @@ export default function App() {
   const canEnable = !busy && !!selectedInput && !!selectedOutput;
 
   return (
-    <main className="container" style={{ padding: 24, maxWidth: 780 }}>
+    <main className="container" style={{ padding: 24, maxWidth: 860 }}>
       {/* Header */}
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ margin: 0 }}>Audio Manager</h1>
@@ -158,7 +225,7 @@ export default function App() {
         </button>
       </header>
       <p style={{ opacity: 0.6, marginTop: 4, fontSize: 13 }}>
-        v0.1 · Phase 3 · graph foundation, one active route
+        v0.1 · Phase 4 · first multi-input mix
       </p>
 
       {/* Error banner */}
@@ -222,7 +289,7 @@ export default function App() {
           </button>
         </div>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-          Phase 3: graph foundation, one active route only. Stop the active route before enabling another.
+          Phase 4: one output bus. Enabled inputs mix into it.
         </p>
       </section>
 
@@ -267,6 +334,8 @@ export default function App() {
                 <th style={{ padding: "4px 12px" }} />
                 <th style={{ padding: "4px 12px", fontWeight: 500 }}>Output</th>
                 <th style={{ padding: "4px 12px", fontWeight: 500 }}>Status</th>
+                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Volume</th>
+                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Mute</th>
                 <th style={{ padding: "4px 12px" }} />
               </tr>
             </thead>
@@ -277,6 +346,7 @@ export default function App() {
                   route={r}
                   busy={busy}
                   onToggle={handleToggle}
+                  onGainChange={handleGainChange}
                 />
               ))}
             </tbody>
