@@ -9,8 +9,9 @@ use std::thread;
 // ~85 ms at 48 kHz stereo.
 const RING_SIZE: usize = 16384;
 
-// Maximum simultaneous inputs handled in the audio callback without heap alloc.
-const MAX_INPUTS: usize = 8;
+/// Maximum simultaneous inputs the output callback can mix without heap allocation.
+/// Enforced as a hard error in `start()` — no inputs are ever silently dropped.
+pub const MAX_INPUTS: usize = 8;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct EngineError {
@@ -27,7 +28,7 @@ impl<E: std::fmt::Display> From<E> for EngineError {
 /// Atomics are read with Relaxed ordering inside callbacks — the slight race
 /// on gain transitions is inaudible and preferable to a lock.
 pub struct InputSlotShared {
-    pub gain: AtomicU32,  // f32 bits
+    pub gain: AtomicU32, // f32 bits
     pub muted: AtomicBool,
 }
 
@@ -58,6 +59,12 @@ pub struct MixerEngine {
 }
 
 impl MixerEngine {
+    /// True when this engine is running on the given output device.
+    /// Used by set_route_gain to guard live atomic updates to the correct output bus.
+    pub fn is_output_device(&self, output_id: &str) -> bool {
+        self.output_device_name == output_id
+    }
+
     /// Update gain/mute for one input without restarting the engine.
     /// No-op if the device is not in this engine's input list.
     pub fn update_gain(&self, device_name: &str, volume: f32, muted: bool) {
@@ -84,12 +91,20 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
         return Err(EngineError { message: "No inputs provided to mixer".to_string() });
     }
 
+    // Enforce the limit before creating any streams — never silently drop inputs.
+    if inputs.len() > MAX_INPUTS {
+        return Err(EngineError {
+            message: format!(
+                "Phase 4 supports up to {MAX_INPUTS} active inputs. \
+                 Disable another input before enabling this route."
+            ),
+        });
+    }
+
     let output_name = output_name.to_string();
-    // (device_name, initial_gain, initial_muted)
     let input_specs: Vec<(String, f32, bool)> =
         inputs.iter().map(|i| (i.device_name.clone(), i.gain, i.muted)).collect();
 
-    // Build shared atomic slots with initial values.
     let shared_slots: Vec<InputSlotShared> = input_specs
         .iter()
         .map(|(_, gain, muted)| InputSlotShared {
@@ -120,11 +135,21 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
             let out_cfg = output_device.default_output_config()?;
             let out_sample_rate = out_cfg.sample_rate();
             let out_channels = out_cfg.channels() as usize;
+
+            // Phase 4 supports mono (1ch) and stereo (2ch) output only.
+            if out_channels > 2 {
+                return Err(EngineError {
+                    message: format!(
+                        "Unsupported output channel count: '{out_name}' has {out_channels}ch. \
+                         Phase 4 supports mono/stereo only."
+                    ),
+                });
+            }
+
             let out_stream_cfg: StreamConfig = out_cfg.into();
 
-            // One ring + one input stream per input device.
             let mut input_streams = Vec::new();
-            // (Consumer<f32>, in_channels)
+            // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
 
             for (i, (in_name, _, _)) in in_specs.iter().enumerate() {
@@ -150,16 +175,15 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                 }
 
                 let in_channels = in_cfg.channels() as usize;
-                let mono_to_stereo = in_channels == 1 && out_channels == 2;
-                let stereo_to_mono = in_channels == 2 && out_channels == 1;
-                let equal_channels = in_channels == out_channels;
 
-                if !mono_to_stereo && !stereo_to_mono && !equal_channels {
+                // Phase 4 supports only mono (1ch) and stereo (2ch) inputs.
+                // Any combination of {1,2} × {1,2} is valid; anything > 2 is rejected.
+                if in_channels > 2 {
                     return Err(EngineError {
                         message: format!(
-                            "Unsupported channel mapping for input '{in_name}': \
-                             {in_channels}ch → {out_channels}ch. Supported: matching \
-                             counts, mono→stereo, stereo→mono.",
+                            "Unsupported channel mapping: input '{in_name}' has {in_channels}ch, \
+                             output '{out_name}' has {out_channels}ch. \
+                             Phase 4 supports mono/stereo only."
                         ),
                     });
                 }
@@ -192,10 +216,8 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                     &out_stream_cfg,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                         // Load atomics once per block, not per sample.
-                        // Slot count capped at MAX_INPUTS; excess inputs are silently ignored
-                        // (unenforced at Phase 4 — start() rejects > MAX_INPUTS inputs upstream
-                        // if needed, but we don't today since 8 is plenty).
-                        let n = slots.len().min(MAX_INPUTS);
+                        // n == slots.len() <= MAX_INPUTS (enforced at start).
+                        let n = slots.len();
                         let mut gains = [0.0f32; MAX_INPUTS];
                         let mut muted = [false; MAX_INPUTS];
                         for i in 0..n {
@@ -204,40 +226,34 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                             muted[i] = slots[i].muted.load(Ordering::Relaxed);
                         }
 
-                        let frames = if out_channels > 0 { data.len() / out_channels } else { 0 };
+                        let frames =
+                            if out_channels > 0 { data.len() / out_channels } else { 0 };
 
                         for f in 0..frames {
-                            // Stack-allocated mix accumulator (up to 8 channels).
-                            let mut mix = [0.0f32; MAX_INPUTS];
+                            // Stack-allocated accumulator. out_channels is 1 or 2
+                            // (validated before stream creation).
+                            let mut mix = [0.0f32; 2];
 
                             for i in 0..n {
-                                // When muted, gain is 0 — ring still drains normally.
+                                // When muted, gain is 0 — ring still drains to prevent overflow.
                                 let g = if muted[i] { 0.0 } else { gains[i] };
-                                let in_ch = consumers[i].1;
+                                let in_ch = consumers[i].1; // 1 or 2 (validated)
 
-                                // Read one full input frame from ring.
-                                let mut in_frame = [0.0f32; MAX_INPUTS];
-                                for ch in 0..in_ch.min(MAX_INPUTS) {
-                                    in_frame[ch] = consumers[i].0.pop().unwrap_or(0.0);
-                                }
+                                // Read one input frame. in_ch is 1 or 2.
+                                let s0 = consumers[i].0.pop().unwrap_or(0.0);
+                                let s1 =
+                                    if in_ch == 2 { consumers[i].0.pop().unwrap_or(0.0) } else { s0 };
 
-                                // Accumulate into output channels.
-                                for out_ch in 0..out_channels.min(MAX_INPUTS) {
-                                    let s = if in_ch == 1 {
-                                        // mono → all output channels
-                                        in_frame[0]
-                                    } else if out_channels == 1 && in_ch == 2 {
-                                        // stereo → mono downmix
-                                        (in_frame[0] + in_frame[1]) * 0.5
-                                    } else {
-                                        // equal or >= 3 ch equal: direct channel mapping
-                                        in_frame[out_ch]
-                                    };
-                                    mix[out_ch] += s * g;
+                                match (in_ch, out_channels) {
+                                    (1, 1) => mix[0] += s0 * g,
+                                    (1, 2) => { mix[0] += s0 * g; mix[1] += s0 * g; }
+                                    (2, 1) => mix[0] += (s0 + s1) * 0.5 * g,
+                                    (2, 2) => { mix[0] += s0 * g; mix[1] += s1 * g; }
+                                    _ => {} // unreachable — validated above
                                 }
                             }
 
-                            for ch in 0..out_channels.min(MAX_INPUTS) {
+                            for ch in 0..out_channels {
                                 data[f * out_channels + ch] = mix[ch].clamp(-1.0, 1.0);
                             }
                         }
@@ -285,5 +301,72 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
         Err(_) => Err(EngineError {
             message: "Audio engine thread exited unexpectedly during startup".to_string(),
         }),
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_inputs(n: usize) -> Vec<MixerInput> {
+        (0..n)
+            .map(|i| MixerInput {
+                device_name: format!("fake_device_{i}"),
+                gain: 1.0,
+                muted: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn start_rejects_empty_inputs() {
+        let result = start("fake_output", &[]);
+        assert!(result.is_err());
+        assert!(result.err().unwrap().message.contains("No inputs"));
+    }
+
+    #[test]
+    fn start_rejects_more_than_max_inputs() {
+        // MAX_INPUTS + 1 inputs — must fail before any CPAL call.
+        let inputs = fake_inputs(MAX_INPUTS + 1);
+        let result = start("fake_output", &inputs);
+        assert!(result.is_err());
+        let msg = result.err().unwrap().message;
+        assert!(
+            msg.contains(&MAX_INPUTS.to_string()),
+            "Error should mention the limit ({MAX_INPUTS}): {msg}"
+        );
+    }
+
+    #[test]
+    fn start_exactly_max_inputs_reaches_cpal_not_limit_error() {
+        // MAX_INPUTS inputs must pass the limit check and fail on the CPAL
+        // device lookup ("fake_output" not found), not on the limit guard.
+        let inputs = fake_inputs(MAX_INPUTS);
+        let result = start("fake_output", &inputs);
+        assert!(result.is_err());
+        let msg = result.err().unwrap().message;
+        // Must NOT be the limit error — should be a device-not-found error.
+        assert!(
+            !msg.contains("active inputs"),
+            "Should have passed the limit check but failed on device lookup: {msg}"
+        );
+    }
+
+    #[test]
+    fn is_output_device_matches_correctly() {
+        // Build a minimal MixerEngine struct manually — no CPAL involved.
+        let (stop_tx, _stop_rx) = mpsc::sync_channel::<()>(1);
+        let engine = MixerEngine {
+            output_device_name: "Speakers (Realtek)".to_string(),
+            inputs: vec![],
+            shared: Arc::new(vec![]),
+            stop_tx,
+            thread: None,
+        };
+        assert!(engine.is_output_device("Speakers (Realtek)"));
+        assert!(!engine.is_output_device("Headphones (USB)"));
     }
 }

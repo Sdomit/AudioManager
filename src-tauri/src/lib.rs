@@ -171,9 +171,12 @@ fn set_route_gain(
         });
     }
 
-    // Atomic update — no restart needed.
+    // Atomic update — only when the running engine is on the same output bus.
+    // A different-output engine must not have its slots modified here.
     if let Some(engine) = &inner.engine {
-        engine.update_gain(&input_id, volume, muted);
+        if engine.is_output_device(&output_id) {
+            engine.update_gain(&input_id, volume, muted);
+        }
     }
 
     Ok(inner.graph.to_routes())
