@@ -54,3 +54,27 @@ export interface PresetLoadResult {
   routes: Route[];
   warnings: PresetLoadWarning[];
 }
+
+// ── Phase 8A: output buses ────────────────────────────────────────────────────
+
+/** Fixed bus identifier. Serialized as a plain string by the backend. */
+export type BusId = "A1" | "A2" | "B1" | "B2";
+
+export interface BusStatus {
+  id: BusId;
+  name: string;
+  output_device: string | null;
+  /** Per-bus gain in [0.0, 2.0]. Default 1.0. */
+  volume: number;
+  muted: boolean;
+  enabled: boolean;
+  running: boolean;
+  output_peak: number;
+  clipped_recently: boolean;
+  last_error: string | null;
+}
+
+export interface SystemStatus {
+  buses: BusStatus[];
+  last_error: string | null;
+}

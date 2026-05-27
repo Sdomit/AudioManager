@@ -1,11 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BusId,
+  BusStatus,
   DeviceInfo,
   EngineStatus,
   PresetLoadResult,
   PresetSummary,
   PassthroughStatus,
   Route,
+  SystemStatus,
 } from "../types/engine";
 
 // ── Device enumeration ────────────────────────────────────────────────────────
@@ -69,3 +72,42 @@ export const setRouteGain = (
   muted: boolean,
 ): Promise<Route[]> =>
   invoke<Route[]>("set_route_gain", { inputId, outputId, volume, muted });
+
+// ── Phase 8A: output buses ────────────────────────────────────────────────────
+
+/**
+ * Read the current status of every bus (A1/A2/B1/B2). Resets per-bus output
+ * peak/clip atomics — pick either this OR getEngineStatus per polling cycle,
+ * not both.
+ */
+export const listBuses = (): Promise<BusStatus[]> =>
+  invoke<BusStatus[]>("list_buses");
+
+export const getSystemStatus = (): Promise<SystemStatus> =>
+  invoke<SystemStatus>("get_system_status");
+
+/** Assign or unassign the output device for a bus. Pass null to unassign. */
+export const setBusDevice = (
+  busId: BusId,
+  outputDeviceId: string | null,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_device", { busId, outputDeviceId });
+
+/** Atomically update a bus's volume and mute. No engine restart when running. */
+export const setBusVolume = (
+  busId: BusId,
+  volume: number,
+  muted: boolean,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_volume", { busId, volume, muted });
+
+/** Enable or disable a bus. Disabling stops its engine immediately. */
+export const setBusEnabled = (
+  busId: BusId,
+  enabled: boolean,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_enabled", { busId, enabled });
+
+/** Rename a bus. Empty names are rejected. */
+export const renameBus = (busId: BusId, name: string): Promise<BusStatus> =>
+  invoke<BusStatus>("rename_bus", { busId, name });

@@ -156,6 +156,7 @@ impl AudioGraph {
     }
 
     /// Return the output device_id of the first Active route, if any.
+    #[allow(dead_code)] // Kept for Phase 8B matrix work and existing tests.
     pub fn active_output(&self) -> Option<String> {
         self.routes
             .iter()

@@ -47,6 +47,11 @@ pub struct MixerInput {
 struct MixerSharedMeters {
     output_peak: AtomicU32, // f32 bits
     clipped: AtomicBool,
+    // Bus-level controls (Phase 8A). Applied post-sum, pre-clip so a hot bus
+    // gain registers on the clip indicator. Atomic so the IPC thread can
+    // update them without restarting the engine.
+    bus_volume: AtomicU32, // f32 bits, default 1.0
+    bus_muted: AtomicBool,
 }
 
 /// Live handle to a running mixer engine.
@@ -81,6 +86,13 @@ impl MixerEngine {
                 slot.muted.store(muted, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Atomically update bus-level volume and mute. Lock-free; the audio
+    /// thread reads these atomics once per output block.
+    pub fn update_bus_volume(&self, volume: f32, muted: bool) {
+        self.meters.bus_volume.store(volume.to_bits(), Ordering::Relaxed);
+        self.meters.bus_muted.store(muted, Ordering::Relaxed);
     }
 
     /// Read current meters and reset them for the next polling interval.
@@ -133,7 +145,12 @@ fn take_peak(target: &AtomicU32) -> f32 {
     f32::from_bits(target.swap(0.0f32.to_bits(), Ordering::Relaxed))
 }
 
-pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, EngineError> {
+pub fn start(
+    output_name: &str,
+    inputs: &[MixerInput],
+    bus_volume: f32,
+    bus_muted: bool,
+) -> Result<MixerEngine, EngineError> {
     if inputs.is_empty() {
         return Err(EngineError { message: "No inputs provided to mixer".to_string() });
     }
@@ -161,9 +178,16 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
         })
         .collect();
     let shared = Arc::new(shared_slots);
+    let bus_volume = if bus_volume.is_finite() {
+        bus_volume.clamp(0.0, 2.0)
+    } else {
+        1.0
+    };
     let meters = Arc::new(MixerSharedMeters {
         output_peak: AtomicU32::new(0.0f32.to_bits()),
         clipped: AtomicBool::new(false),
+        bus_volume: AtomicU32::new(bus_volume.to_bits()),
+        bus_muted: AtomicBool::new(bus_muted),
     });
 
     let (result_tx, result_rx) = mpsc::channel::<Result<(), EngineError>>();
@@ -287,6 +311,16 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                             muted[i] = slots[i].muted.load(Ordering::Relaxed);
                         }
 
+                        // Bus-level controls loaded once per block. Treat mute
+                        // as bus_vol == 0 so the per-frame math stays branch-free.
+                        let bus_muted_now =
+                            shared_meters.bus_muted.load(Ordering::Relaxed);
+                        let bus_vol = if bus_muted_now {
+                            0.0
+                        } else {
+                            f32::from_bits(shared_meters.bus_volume.load(Ordering::Relaxed))
+                        };
+
                         let frames =
                             if out_channels > 0 { data.len() / out_channels } else { 0 };
                         let mut block_output_peak = 0.0f32;
@@ -317,7 +351,9 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                             }
 
                             for ch in 0..out_channels {
-                                let raw = mix[ch];
+                                // Apply bus gain post-sum, pre-clip. A hot bus
+                                // gain registers correctly on the clip indicator.
+                                let raw = mix[ch] * bus_vol;
                                 if raw < -1.0 || raw > 1.0 {
                                     block_clipped = true;
                                 }
@@ -421,6 +457,8 @@ mod tests {
             meters: Arc::new(MixerSharedMeters {
                 output_peak: AtomicU32::new(output_peak.to_bits()),
                 clipped: AtomicBool::new(clipped),
+                bus_volume: AtomicU32::new(1.0f32.to_bits()),
+                bus_muted: AtomicBool::new(false),
             }),
             stop_tx,
             thread: None,
@@ -429,7 +467,7 @@ mod tests {
 
     #[test]
     fn start_rejects_empty_inputs() {
-        let result = start("fake_output", &[]);
+        let result = start("fake_output", &[], 1.0, false);
         assert!(result.is_err());
         assert!(result.err().unwrap().message.contains("No inputs"));
     }
@@ -438,7 +476,7 @@ mod tests {
     fn start_rejects_more_than_max_inputs() {
         // MAX_INPUTS + 1 inputs — must fail before any CPAL call.
         let inputs = fake_inputs(MAX_INPUTS + 1);
-        let result = start("fake_output", &inputs);
+        let result = start("fake_output", &inputs, 1.0, false);
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         assert!(
@@ -452,7 +490,7 @@ mod tests {
         // MAX_INPUTS inputs must pass the limit check and fail on the CPAL
         // device lookup ("fake_output" not found), not on the limit guard.
         let inputs = fake_inputs(MAX_INPUTS);
-        let result = start("fake_output", &inputs);
+        let result = start("fake_output", &inputs, 1.0, false);
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         // Must NOT be the limit error — should be a device-not-found error.
@@ -460,6 +498,17 @@ mod tests {
             !msg.contains("active inputs"),
             "Should have passed the limit check but failed on device lookup: {msg}"
         );
+    }
+
+    #[test]
+    fn update_bus_volume_stores_atomically() {
+        let engine = test_engine(&[0.1], 0.0, false);
+        engine.update_bus_volume(0.25, true);
+        let stored_vol =
+            f32::from_bits(engine.meters.bus_volume.load(Ordering::Relaxed));
+        let stored_muted = engine.meters.bus_muted.load(Ordering::Relaxed);
+        assert!((stored_vol - 0.25).abs() < f32::EPSILON);
+        assert!(stored_muted);
     }
 
     #[test]

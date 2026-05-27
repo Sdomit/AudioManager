@@ -1,3 +1,4 @@
+pub mod bus;
 pub mod devices;
 pub mod graph;
 pub mod mixer;
