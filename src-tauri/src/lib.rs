@@ -1,10 +1,12 @@
 mod audio;
+mod presets;
 mod state;
 
 use audio::devices::{DeviceInfo, DeviceListError};
 use audio::graph::RouteState;
 use audio::mixer::{EngineError, MixerInput};
 use audio::routing::Route;
+use presets::{PresetLoadResult, PresetLoadWarning, PresetRouteV1, PresetSummary};
 use state::{AppInner, AppState};
 
 // ── Device enumeration ────────────────────────────────────────────────────────
@@ -46,6 +48,32 @@ fn new_last_error(inner: &mut AppInner, message: impl Into<String>) -> EngineErr
     let message = message.into();
     inner.last_error = Some(message.clone());
     EngineError { message }
+}
+
+fn apply_preset_routes(inner: &mut AppInner, routes: &[PresetRouteV1]) -> Result<Vec<Route>, EngineError> {
+    // Safe load: never auto-start audio.
+    inner.engine = None;
+    inner.graph.clear();
+
+    for route in routes {
+        let state = if route.enabled { RouteState::Enabled } else { RouteState::Disabled };
+        inner.graph.upsert_route(&route.input.id, &route.output.id, state);
+        if !inner.graph.set_route_gain(
+            &route.input.id,
+            &route.output.id,
+            route.volume.clamp(0.0, 2.0),
+            route.muted,
+        ) {
+            return Err(EngineError {
+                message: format!(
+                    "Failed to apply preset route '{} → {}'",
+                    route.input.id, route.output.id
+                ),
+            });
+        }
+    }
+
+    Ok(inner.graph.to_routes())
 }
 
 // ── Phase 1 passthrough (thin wrapper over MixerEngine, kept for compatibility) ─
@@ -140,6 +168,61 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
             last_error: inner.last_error.clone(),
         },
     }
+}
+
+#[tauri::command]
+fn list_presets(app: tauri::AppHandle) -> Result<Vec<PresetSummary>, EngineError> {
+    presets::list_preset_summaries(&app)
+}
+
+#[tauri::command]
+fn save_preset(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<PresetSummary, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    let preset = presets::build_preset_from_routes(&name, &inner.graph.to_routes())?;
+    let path = presets::preset_file_path(&app, &preset.name)?;
+    presets::write_preset_file(&path, &preset)?;
+    inner.last_error = None;
+    Ok(presets::preset_summary(&preset))
+}
+
+#[tauri::command]
+fn load_preset(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<PresetLoadResult, EngineError> {
+    let (preset, valid_routes, mut warnings) = presets::load_preset_with_warnings(&app, &name)?;
+    let mut inner = state.inner.lock().unwrap();
+    let routes = apply_preset_routes(&mut inner, &valid_routes)?;
+
+    warnings.push(PresetLoadWarning {
+        code: "safe_load".to_string(),
+        message: "Preset loaded in safe mode. Routes are configured only; manually enable routes to start audio."
+            .to_string(),
+    });
+
+    inner.last_error = None;
+    Ok(PresetLoadResult {
+        preset: presets::preset_summary(&preset),
+        routes,
+        warnings,
+    })
+}
+
+#[tauri::command]
+fn delete_preset(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<(), EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    presets::delete_preset_file(&app, &name)?;
+    inner.last_error = None;
+    Ok(())
 }
 
 // ── Phase 4 routing commands ──────────────────────────────────────────────────
@@ -259,6 +342,10 @@ pub fn run() {
             stop_passthrough,
             get_passthrough_status,
             get_engine_status,
+            list_presets,
+            save_preset,
+            load_preset,
+            delete_preset,
             get_routes,
             set_route,
             clear_routes,

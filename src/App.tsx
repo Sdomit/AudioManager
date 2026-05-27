@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  deletePreset,
   getEngineStatus,
+  listPresets,
   listInputDevices,
   listOutputDevices,
+  loadPreset,
   getRoutes,
+  savePreset,
   setRoute,
   clearRoutes,
   setRouteGain,
 } from "./ipc/commands";
-import type { DeviceInfo, EngineStatus, Route } from "./types/engine";
+import type {
+  DeviceInfo,
+  EngineStatus,
+  PresetLoadWarning,
+  PresetSummary,
+  Route,
+} from "./types/engine";
 import "./App.css";
 
 function extractErrorMessage(e: unknown): string {
@@ -90,8 +100,8 @@ function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowP
     setLocalMuted(route.muted ?? false);
   }, [route.input_id, route.output_id, route.volume, route.muted]);
 
-  const statusLabel = route.active ? "Active" : "Off";
-  const statusColor = route.active ? "#2ecc71" : "#888";
+  const statusLabel = route.active ? "Active" : route.enabled ? "Ready" : "Off";
+  const statusColor = route.active ? "#2ecc71" : route.enabled ? "#f39c12" : "#888";
   const meterPct = Math.round(clamp01(meterLevel) * 100);
 
   const handleVolChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -207,20 +217,30 @@ export default function App() {
   const [inputMeterDisplay, setInputMeterDisplay] = useState<Record<string, number>>({});
   const [outputMeterDisplay, setOutputMeterDisplay] = useState(0);
   const [clipHoldUntil, setClipHoldUntil] = useState(0);
+  const [presets, setPresets] = useState<PresetSummary[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState<string>("");
+  const [presetName, setPresetName] = useState<string>("");
+  const [presetWarnings, setPresetWarnings] = useState<PresetLoadWarning[]>([]);
+  const [presetInfo, setPresetInfo] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setError(null);
     try {
-      const [ins, outs, rts] = await Promise.all([
+      const [ins, outs, rts, psts] = await Promise.all([
         listInputDevices(),
         listOutputDevices(),
         getRoutes(),
+        listPresets(),
       ]);
       setInputs(ins);
       setOutputs(outs);
       setRoutes(rts);
+      setPresets(psts);
       setSelectedInput((prev) => prev || ins.find((d) => d.is_default)?.id || "");
       setSelectedOutput((prev) => prev || outs.find((d) => d.is_default)?.id || "");
+      setSelectedPreset((prev) =>
+        psts.some((p) => p.name === prev) ? prev : (psts[0]?.name ?? ""),
+      );
     } catch (e) {
       setError(extractErrorMessage(e));
     }
@@ -322,6 +342,74 @@ export default function App() {
     }
   };
 
+  const refreshPresets = useCallback(async () => {
+    const items = await listPresets();
+    setPresets(items);
+    setSelectedPreset((prev) =>
+      items.some((p) => p.name === prev) ? prev : (items[0]?.name ?? ""),
+    );
+    return items;
+  }, []);
+
+  const handleSavePreset = async () => {
+    const trimmed = presetName.trim();
+    if (!trimmed) {
+      setError("Preset name cannot be empty.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await savePreset(trimmed);
+      await refreshPresets();
+      setSelectedPreset(saved.name);
+      setPresetName(saved.name);
+      setPresetWarnings([]);
+      setPresetInfo(`Saved preset '${saved.name}'.`);
+    } catch (e) {
+      setError(extractErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLoadPreset = async () => {
+    if (!selectedPreset) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await loadPreset(selectedPreset);
+      setRoutes(result.routes);
+      setPresetWarnings(result.warnings);
+      setPresetInfo(`Loaded preset '${result.preset.name}' in safe mode.`);
+      await pollEngineStatus();
+    } catch (e) {
+      setError(extractErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeletePreset = async () => {
+    if (!selectedPreset) return;
+    const confirmed = window.confirm(`Delete preset '${selectedPreset}'?`);
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await deletePreset(selectedPreset);
+      await refreshPresets();
+      setPresetWarnings([]);
+      setPresetInfo(`Deleted preset '${selectedPreset}'.`);
+    } catch (e) {
+      setError(extractErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const canEnable = !busy && !!selectedInput && !!selectedOutput;
   const clipVisible = clipHoldUntil > Date.now();
   const statusBadgeColor =
@@ -344,7 +432,7 @@ export default function App() {
         </button>
       </header>
       <p style={{ opacity: 0.6, marginTop: 4, fontSize: 13 }}>
-        v0.1 · Phase 5 · meters and engine status
+        v0.1 · Phase 6 · preset save/load
       </p>
 
       {/* Error banner */}
@@ -447,6 +535,81 @@ export default function App() {
         </p>
       </section>
 
+      {/* Presets */}
+      <section
+        style={{
+          marginTop: 16,
+          padding: 16,
+          border: "1px solid #444",
+          borderRadius: 8,
+        }}
+      >
+        <h2 style={{ marginTop: 0, fontSize: 15 }}>Presets</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            value={presetName}
+            onChange={(e) => setPresetName(e.target.value)}
+            placeholder="Preset name"
+            disabled={busy}
+            style={{ minWidth: 220 }}
+          />
+          <button onClick={handleSavePreset} disabled={busy || !presetName.trim()}>
+            {busy ? "Working…" : "Save preset"}
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+            marginTop: 10,
+          }}
+        >
+          <select
+            value={selectedPreset}
+            onChange={(e) => setSelectedPreset(e.target.value)}
+            disabled={busy || presets.length === 0}
+            style={{ minWidth: 220 }}
+          >
+            {presets.length === 0 && <option value="">No presets saved</option>}
+            {presets.map((preset) => (
+              <option key={preset.name} value={preset.name}>
+                {preset.name} ({preset.route_count} routes)
+              </option>
+            ))}
+          </select>
+          <button onClick={handleLoadPreset} disabled={busy || !selectedPreset}>
+            {busy ? "Working…" : "Load preset"}
+          </button>
+          <button onClick={handleDeletePreset} disabled={busy || !selectedPreset}>
+            {busy ? "Working…" : "Delete preset"}
+          </button>
+        </div>
+
+        <p style={{ marginTop: 10, marginBottom: 0, fontSize: 12, opacity: 0.7 }}>
+          Loading a preset is safe: routes are restored as configured and audio will not start
+          until you manually enable routes.
+        </p>
+
+        {presetInfo && (
+          <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12, color: "#2ecc71" }}>
+            {presetInfo}
+          </p>
+        )}
+
+        {presetWarnings.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#f39c12", textAlign: "left" }}>
+            {presetWarnings.map((warning, index) => (
+              <p key={`${warning.code}-${index}`} style={{ margin: "4px 0" }}>
+                {warning.message}
+              </p>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Add route */}
       <section
         style={{
@@ -491,7 +654,7 @@ export default function App() {
           </button>
         </div>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-          Phase 5: one output bus. Enabled inputs mix into it.
+          Phase 6: one output bus. Enabled inputs mix into it.
         </p>
       </section>
 

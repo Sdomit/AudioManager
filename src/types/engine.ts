@@ -37,3 +37,20 @@ export interface EngineStatus {
   clipped_recently: boolean;
   last_error: string | null;
 }
+
+export interface PresetSummary {
+  name: string;
+  saved_at_utc: string;
+  route_count: number;
+}
+
+export interface PresetLoadWarning {
+  code: string;
+  message: string;
+}
+
+export interface PresetLoadResult {
+  preset: PresetSummary;
+  routes: Route[];
+  warnings: PresetLoadWarning[];
+}

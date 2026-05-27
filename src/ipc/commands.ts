@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   DeviceInfo,
   EngineStatus,
+  PresetLoadResult,
+  PresetSummary,
   PassthroughStatus,
   Route,
 } from "../types/engine";
@@ -27,6 +29,20 @@ export const getPassthroughStatus = (): Promise<PassthroughStatus> =>
 
 export const getEngineStatus = (): Promise<EngineStatus> =>
   invoke<EngineStatus>("get_engine_status");
+
+// ── Presets ────────────────────────────────────────────────────────────────────
+
+export const listPresets = (): Promise<PresetSummary[]> =>
+  invoke<PresetSummary[]>("list_presets");
+
+export const savePreset = (name: string): Promise<PresetSummary> =>
+  invoke<PresetSummary>("save_preset", { name });
+
+export const loadPreset = (name: string): Promise<PresetLoadResult> =>
+  invoke<PresetLoadResult>("load_preset", { name });
+
+export const deletePreset = (name: string): Promise<void> =>
+  invoke<void>("delete_preset", { name });
 
 // ── Routing ───────────────────────────────────────────────────────────────────
 
