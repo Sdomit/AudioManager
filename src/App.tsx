@@ -56,30 +56,11 @@ interface MeterBarProps {
 function MeterBar({ value, color, width = 96, title }: MeterBarProps) {
   const pct = Math.round(clamp01(value) * 100);
   return (
-    <div
-      title={title}
-      style={{
-        width,
-        height: 8,
-        borderRadius: 999,
-        background: "rgba(127,127,127,0.25)",
-        overflow: "hidden",
-        flexShrink: 0,
-      }}
-    >
-      <div
-        style={{
-          width: `${pct}%`,
-          height: "100%",
-          background: color,
-          transition: "width 120ms linear",
-        }}
-      />
+    <div className="meter" title={title} style={{ width }}>
+      <div className="meter-fill" style={{ width: `${pct}%`, background: color }} />
     </div>
   );
 }
-
-// ── Route table row ───────────────────────────────────────────────────────────
 
 interface RouteRowProps {
   route: Route;
@@ -90,18 +71,20 @@ interface RouteRowProps {
 }
 
 function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowProps) {
-  // Local optimistic state for slider and mute; synced from parent on mount.
   const [localVol, setLocalVol] = useState(Math.round((route.volume ?? 1.0) * 100));
   const [localMuted, setLocalMuted] = useState(route.muted ?? false);
 
-  // Sync when the route object is replaced externally (e.g. after enable/disable).
   useEffect(() => {
     setLocalVol(Math.round((route.volume ?? 1.0) * 100));
     setLocalMuted(route.muted ?? false);
   }, [route.input_id, route.output_id, route.volume, route.muted]);
 
   const statusLabel = route.active ? "Active" : route.enabled ? "Ready" : "Off";
-  const statusColor = route.active ? "#2ecc71" : route.enabled ? "#f39c12" : "#888";
+  const statusClass = route.active
+    ? "status-active"
+    : route.enabled
+      ? "status-ready"
+      : "status-off";
   const meterPct = Math.round(clamp01(meterLevel) * 100);
 
   const handleVolChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -118,26 +101,22 @@ function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowP
 
   return (
     <tr>
-      <td style={{ padding: "8px 12px", maxWidth: 200 }}>{shortName(route.input_id)}</td>
-      <td style={{ padding: "8px 12px", color: "#888" }}>→</td>
-      <td style={{ padding: "8px 12px", maxWidth: 200 }}>{shortName(route.output_id)}</td>
-      <td style={{ padding: "8px 12px", color: statusColor, fontWeight: 600, minWidth: 60 }}>
-        {statusLabel}
-      </td>
-      <td style={{ padding: "8px 12px", minWidth: 140 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <td className="cell-dev" title={route.input_id}>{shortName(route.input_id)}</td>
+      <td className="cell-arrow">→</td>
+      <td className="cell-dev" title={route.output_id}>{shortName(route.output_id)}</td>
+      <td className={`cell-status ${statusClass}`}>{statusLabel}</td>
+      <td className="cell-meter">
+        <div className="row-tight">
           <MeterBar
             value={meterLevel}
-            color={localMuted ? "#f39c12" : "#3498db"}
+            color={localMuted ? "var(--warn)" : "var(--accent)"}
             title={`Raw input activity: ${meterPct}%`}
           />
-          <span style={{ fontSize: 12, minWidth: 34, textAlign: "right", opacity: 0.8 }}>
-            {meterPct}%
-          </span>
+          <span className="meter-pct">{meterPct}%</span>
         </div>
       </td>
-      <td style={{ padding: "8px 12px", minWidth: 140 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <td className="cell-vol">
+        <div className="row-tight">
           <input
             type="range"
             min={0}
@@ -146,46 +125,27 @@ function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowP
             value={localVol}
             onChange={handleVolChange}
             disabled={busy}
-            style={{ width: 90, accentColor: "#3498db" }}
             title={`Volume: ${localVol}%`}
           />
-          <span style={{ fontSize: 12, minWidth: 34, textAlign: "right", opacity: 0.8 }}>
-            {localVol}%
-          </span>
+          <span className="meter-pct">{localVol}%</span>
         </div>
       </td>
-      <td style={{ padding: "8px 12px" }}>
+      <td>
         <button
           onClick={handleMuteToggle}
           disabled={busy}
-          style={{
-            background: localMuted ? "#c0392b" : "#555",
-            color: "#fff",
-            border: "none",
-            padding: "4px 10px",
-            borderRadius: 4,
-            cursor: busy ? "not-allowed" : "pointer",
-            fontSize: 12,
-            minWidth: 48,
-          }}
+          className={`btn-sm${localMuted ? " btn-danger" : ""}`}
           title={localMuted ? "Unmute" : "Mute"}
         >
           {localMuted ? "Muted" : "Mute"}
         </button>
       </td>
-      <td style={{ padding: "8px 12px" }}>
+      <td>
         {route.active ? (
           <button
             onClick={() => onToggle(route, false)}
             disabled={busy}
-            style={{
-              background: "#c0392b",
-              color: "#fff",
-              border: "none",
-              padding: "4px 12px",
-              borderRadius: 4,
-              cursor: busy ? "not-allowed" : "pointer",
-            }}
+            className="btn-sm btn-danger"
           >
             {busy ? "…" : "Stop"}
           </button>
@@ -193,7 +153,7 @@ function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowP
           <button
             onClick={() => onToggle(route, true)}
             disabled={busy}
-            style={{ padding: "4px 12px", borderRadius: 4 }}
+            className="btn-sm btn-primary"
           >
             {busy ? "…" : "Enable"}
           </button>
@@ -202,8 +162,6 @@ function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowP
     </tr>
   );
 }
-
-// ── Main app ──────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [inputs, setInputs] = useState<DeviceInfo[]>([]);
@@ -412,314 +370,227 @@ export default function App() {
 
   const canEnable = !busy && !!selectedInput && !!selectedOutput;
   const clipVisible = clipHoldUntil > Date.now();
-  const statusBadgeColor =
+  const statusBadgeClass =
     engineStatus.status === "running"
-      ? "#2ecc71"
+      ? "badge-ok"
       : engineStatus.status === "error"
-        ? "#e74c3c"
-        : "#7f8c8d";
+        ? "badge-err"
+        : "badge-stopped";
   const outputMeterPct = Math.round(clamp01(outputMeterDisplay) * 100);
   const routeMeterLevel = (route: Route) =>
     route.active ? inputMeterDisplay[route.input_id] ?? 0 : 0;
 
   return (
-    <main className="container" style={{ padding: 24, maxWidth: 860 }}>
-      {/* Header */}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>Audio Manager</h1>
-        <button onClick={loadAll} disabled={busy}>
+    <main className="app">
+      <header className="app-header">
+        <h1 className="app-title">Audio Manager</h1>
+        <span className="app-version">v0.1 · Phase 7</span>
+
+        <span className="header-spacer" />
+
+        <div className="header-status">
+          <span
+            className={`badge ${statusBadgeClass}`}
+            title={engineStatus.last_error ?? `Engine ${engineStatus.status}`}
+          >
+            {engineStatus.status}
+          </span>
+          {clipVisible && <span className="badge badge-clip">Clip</span>}
+          <span className="output-label" title={engineStatus.output_device ?? "no output"}>
+            {engineStatus.output_device
+              ? `Out: ${shortName(engineStatus.output_device)}`
+              : "Out: none"}
+          </span>
+          <MeterBar
+            value={outputMeterDisplay}
+            color={clipVisible ? "var(--err)" : "var(--ok)"}
+            width={140}
+            title={`Output peak: ${outputMeterPct}%`}
+          />
+          <span className="meter-pct">{outputMeterPct}%</span>
+        </div>
+
+        <button onClick={loadAll} disabled={busy} className="btn-ghost">
           Refresh
         </button>
       </header>
-      <p style={{ opacity: 0.6, marginTop: 4, fontSize: 13 }}>
-        v0.1 · Phase 6 · preset save/load
-      </p>
 
-      {/* Error banner */}
-      {error && (
-        <p
-          style={{
-            color: "#e74c3c",
-            background: "rgba(231,76,60,0.1)",
-            border: "1px solid rgba(231,76,60,0.3)",
-            borderRadius: 6,
-            padding: "8px 12px",
-            marginTop: 12,
-            fontSize: 14,
-          }}
-        >
-          {error}
-        </p>
-      )}
+      <div className="app-grid">
+        <div className="col">
+          <section className="section">
+            <div className="section-header">
+              <h2 className="section-title">Add Route</h2>
+            </div>
+            <div className="stack">
+              <label className="field">
+                Input
+                <select
+                  value={selectedInput}
+                  onChange={(e) => { setSelectedInput(e.target.value); setError(null); }}
+                  disabled={busy}
+                >
+                  <option value="" disabled>Select input…</option>
+                  {inputs.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} ({d.default_sample_rate} Hz · {d.channels}ch)
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-      {/* Engine status */}
-      <section
-        style={{
-          marginTop: 16,
-          padding: 16,
-          border: "1px solid #444",
-          borderRadius: 8,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h2 style={{ margin: 0, fontSize: 15 }}>Engine</h2>
-            <span
-              title={engineStatus.last_error ?? undefined}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                minWidth: 74,
-                padding: "3px 10px",
-                borderRadius: 999,
-                background: statusBadgeColor,
-                color: "#fff",
-                fontSize: 12,
-                fontWeight: 700,
-                textTransform: "uppercase",
-                letterSpacing: 0.4,
-              }}
-            >
-              {engineStatus.status}
-            </span>
-            {clipVisible && (
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minWidth: 48,
-                  padding: "3px 10px",
-                  borderRadius: 999,
-                  background: "#e74c3c",
-                  color: "#fff",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: 0.4,
-                }}
+              <label className="field">
+                Output
+                <select
+                  value={selectedOutput}
+                  onChange={(e) => { setSelectedOutput(e.target.value); setError(null); }}
+                  disabled={busy}
+                >
+                  <option value="" disabled>Select output…</option>
+                  {outputs.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} ({d.default_sample_rate} Hz · {d.channels}ch)
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                onClick={handleEnable}
+                disabled={!canEnable}
+                className="btn-primary"
               >
-                CLIP
-              </span>
-            )}
-          </div>
+                {busy ? "Working…" : "Enable Route"}
+              </button>
+            </div>
+            <p className="section-hint">
+              One output bus. Enabled inputs mix into it.
+            </p>
+          </section>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, opacity: 0.7 }}>
-              {engineStatus.output_device
-                ? `Output: ${shortName(engineStatus.output_device)}`
-                : "Output: none"}
-            </span>
-            <MeterBar
-              value={outputMeterDisplay}
-              color={clipVisible ? "#e74c3c" : "#2ecc71"}
-              width={140}
-              title={`Output peak: ${outputMeterPct}%`}
-            />
-            <span style={{ fontSize: 12, minWidth: 34, textAlign: "right", opacity: 0.8 }}>
-              {outputMeterPct}%
-            </span>
-          </div>
-        </div>
-
-        <p style={{ marginTop: 10, marginBottom: 0, fontSize: 12, opacity: 0.6 }}>
-          Input meters show raw input before mute and volume.
-        </p>
-      </section>
-
-      {/* Presets */}
-      <section
-        style={{
-          marginTop: 16,
-          padding: 16,
-          border: "1px solid #444",
-          borderRadius: 8,
-        }}
-      >
-        <h2 style={{ marginTop: 0, fontSize: 15 }}>Presets</h2>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <input
-            value={presetName}
-            onChange={(e) => setPresetName(e.target.value)}
-            placeholder="Preset name"
-            disabled={busy}
-            style={{ minWidth: 220 }}
-          />
-          <button onClick={handleSavePreset} disabled={busy || !presetName.trim()}>
-            {busy ? "Working…" : "Save preset"}
-          </button>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            alignItems: "center",
-            marginTop: 10,
-          }}
-        >
-          <select
-            value={selectedPreset}
-            onChange={(e) => setSelectedPreset(e.target.value)}
-            disabled={busy || presets.length === 0}
-            style={{ minWidth: 220 }}
-          >
-            {presets.length === 0 && <option value="">No presets saved</option>}
-            {presets.map((preset) => (
-              <option key={preset.name} value={preset.name}>
-                {preset.name} ({preset.route_count} routes)
-              </option>
-            ))}
-          </select>
-          <button onClick={handleLoadPreset} disabled={busy || !selectedPreset}>
-            {busy ? "Working…" : "Load preset"}
-          </button>
-          <button onClick={handleDeletePreset} disabled={busy || !selectedPreset}>
-            {busy ? "Working…" : "Delete preset"}
-          </button>
-        </div>
-
-        <p style={{ marginTop: 10, marginBottom: 0, fontSize: 12, opacity: 0.7 }}>
-          Loading a preset is safe: routes are restored as configured and audio will not start
-          until you manually enable routes.
-        </p>
-
-        {presetInfo && (
-          <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12, color: "#2ecc71" }}>
-            {presetInfo}
-          </p>
-        )}
-
-        {presetWarnings.length > 0 && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "#f39c12", textAlign: "left" }}>
-            {presetWarnings.map((warning, index) => (
-              <p key={`${warning.code}-${index}`} style={{ margin: "4px 0" }}>
-                {warning.message}
-              </p>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Add route */}
-      <section
-        style={{
-          marginTop: 20,
-          padding: 16,
-          border: "1px solid #444",
-          borderRadius: 8,
-        }}
-      >
-        <h2 style={{ marginTop: 0, fontSize: 15 }}>Add Route</h2>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <select
-            value={selectedInput}
-            onChange={(e) => { setSelectedInput(e.target.value); setError(null); }}
-            disabled={busy}
-          >
-            <option value="" disabled>Select input…</option>
-            {inputs.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name} ({d.default_sample_rate} Hz · {d.channels}ch)
-              </option>
-            ))}
-          </select>
-
-          <span aria-hidden style={{ opacity: 0.7 }}>→</span>
-
-          <select
-            value={selectedOutput}
-            onChange={(e) => { setSelectedOutput(e.target.value); setError(null); }}
-            disabled={busy}
-          >
-            <option value="" disabled>Select output…</option>
-            {outputs.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name} ({d.default_sample_rate} Hz · {d.channels}ch)
-              </option>
-            ))}
-          </select>
-
-          <button onClick={handleEnable} disabled={!canEnable}>
-            {busy ? "Working…" : "Enable"}
-          </button>
-        </div>
-        <p style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-          Phase 6: one output bus. Enabled inputs mix into it.
-        </p>
-      </section>
-
-      {/* Route list */}
-      <section
-        style={{
-          marginTop: 16,
-          padding: 16,
-          border: "1px solid #444",
-          borderRadius: 8,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ margin: 0, fontSize: 15 }}>Routes</h2>
-          {routes.length > 0 && (
-            <button
-              onClick={handleClearAll}
-              disabled={busy}
-              style={{ fontSize: 12, opacity: 0.7 }}
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-
-        {routes.length === 0 ? (
-          <p style={{ opacity: 0.5, marginTop: 12, fontSize: 14 }}>
-            No routes configured. Add one above.
-          </p>
-        ) : (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              marginTop: 12,
-              fontSize: 14,
-            }}
-          >
-            <thead>
-              <tr style={{ borderBottom: "1px solid #444", opacity: 0.6, textAlign: "left" }}>
-                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Input</th>
-                <th style={{ padding: "4px 12px" }} />
-                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Output</th>
-                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Status</th>
-                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Input Meter</th>
-                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Volume</th>
-                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Mute</th>
-                <th style={{ padding: "4px 12px" }} />
-              </tr>
-            </thead>
-            <tbody>
-              {routes.map((r) => (
-                <RouteRow
-                  key={`${r.input_id}::${r.output_id}`}
-                  route={r}
-                  busy={busy}
-                  meterLevel={routeMeterLevel(r)}
-                  onToggle={handleToggle}
-                  onGainChange={handleGainChange}
+          <section className="section">
+            <div className="section-header">
+              <h2 className="section-title">Presets</h2>
+            </div>
+            <div className="stack">
+              <div className="row">
+                <input
+                  type="text"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  placeholder="Preset name"
+                  disabled={busy}
+                  style={{ flex: 1, minWidth: 140 }}
                 />
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+                <button
+                  onClick={handleSavePreset}
+                  disabled={busy || !presetName.trim()}
+                  className="btn-primary btn-sm"
+                >
+                  Save
+                </button>
+              </div>
+
+              <div className="row">
+                <select
+                  value={selectedPreset}
+                  onChange={(e) => setSelectedPreset(e.target.value)}
+                  disabled={busy || presets.length === 0}
+                  style={{ flex: 1, minWidth: 140 }}
+                >
+                  {presets.length === 0 && <option value="">No presets saved</option>}
+                  {presets.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.name} ({preset.route_count} routes)
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleLoadPreset}
+                  disabled={busy || !selectedPreset}
+                  className="btn-sm"
+                >
+                  Load
+                </button>
+                <button
+                  onClick={handleDeletePreset}
+                  disabled={busy || !selectedPreset}
+                  className="btn-sm"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+            <p className="section-hint">
+              Load is safe: routes restore as configured. Audio stays off until you enable a route.
+            </p>
+          </section>
+        </div>
+
+        <div className="col">
+          <section className="section">
+            <div className="section-header">
+              <h2 className="section-title">Routes / Mixer</h2>
+              {routes.length > 0 && (
+                <button onClick={handleClearAll} disabled={busy} className="btn-ghost">
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            {routes.length === 0 ? (
+              <div className="routes-empty">
+                No routes configured. Add one on the left.
+              </div>
+            ) : (
+              <table className="routes-table">
+                <thead>
+                  <tr>
+                    <th>Input</th>
+                    <th />
+                    <th>Output</th>
+                    <th>Status</th>
+                    <th>Input Meter</th>
+                    <th>Volume</th>
+                    <th>Mute</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {routes.map((r) => (
+                    <RouteRow
+                      key={`${r.input_id}::${r.output_id}`}
+                      route={r}
+                      busy={busy}
+                      meterLevel={routeMeterLevel(r)}
+                      onToggle={handleToggle}
+                      onGainChange={handleGainChange}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="section-hint">
+              Input meters show raw input before mute and volume.
+            </p>
+          </section>
+        </div>
+      </div>
+
+      {(error || presetInfo || presetWarnings.length > 0) && (
+        <div className="messages">
+          {error && <div className="msg msg-err">{error}</div>}
+          {presetWarnings.length > 0 && (
+            <div className="msg msg-warn">
+              <ul className="msg-list">
+                {presetWarnings.map((warning, index) => (
+                  <li key={`${warning.code}-${index}`}>{warning.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {presetInfo && <div className="msg msg-info">{presetInfo}</div>}
+        </div>
+      )}
     </main>
   );
 }
