@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DeviceInfo, PassthroughStatus, Route } from "../types/engine";
+import type {
+  DeviceInfo,
+  EngineStatus,
+  PassthroughStatus,
+  Route,
+} from "../types/engine";
 
 // ── Device enumeration ────────────────────────────────────────────────────────
 
@@ -19,6 +24,9 @@ export const stopPassthrough = (): Promise<void> =>
 
 export const getPassthroughStatus = (): Promise<PassthroughStatus> =>
   invoke<PassthroughStatus>("get_passthrough_status");
+
+export const getEngineStatus = (): Promise<EngineStatus> =>
+  invoke<EngineStatus>("get_engine_status");
 
 // ── Routing ───────────────────────────────────────────────────────────────────
 

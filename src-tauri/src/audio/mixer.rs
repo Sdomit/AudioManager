@@ -30,6 +30,7 @@ impl<E: std::fmt::Display> From<E> for EngineError {
 pub struct InputSlotShared {
     pub gain: AtomicU32, // f32 bits
     pub muted: AtomicBool,
+    pub input_peak: AtomicU32, // f32 bits
 }
 
 pub struct MixerInputInfo {
@@ -43,6 +44,11 @@ pub struct MixerInput {
     pub muted: bool,
 }
 
+struct MixerSharedMeters {
+    output_peak: AtomicU32, // f32 bits
+    clipped: AtomicBool,
+}
+
 /// Live handle to a running mixer engine.
 ///
 /// Dropping this value signals the engine thread to stop and joins it,
@@ -54,6 +60,7 @@ pub struct MixerEngine {
     pub inputs: Vec<MixerInputInfo>,
     /// Shared atomics; index i corresponds to `inputs[i]`.
     pub shared: Arc<Vec<InputSlotShared>>,
+    meters: Arc<MixerSharedMeters>,
     stop_tx: mpsc::SyncSender<()>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -75,6 +82,18 @@ impl MixerEngine {
             }
         }
     }
+
+    /// Read current meters and reset them for the next polling interval.
+    pub fn read_and_reset_meters(&self) -> (Vec<f32>, f32, bool) {
+        let input_peaks = self
+            .shared
+            .iter()
+            .map(|slot| take_peak(&slot.input_peak))
+            .collect();
+        let output_peak = take_peak(&self.meters.output_peak);
+        let clipped = self.meters.clipped.swap(false, Ordering::Relaxed);
+        (input_peaks, output_peak, clipped)
+    }
 }
 
 impl Drop for MixerEngine {
@@ -84,6 +103,34 @@ impl Drop for MixerEngine {
             let _ = handle.join();
         }
     }
+}
+
+fn store_max(target: &AtomicU32, value: f32) {
+    if !value.is_finite() || value <= 0.0 {
+        return;
+    }
+
+    let next_bits = value.to_bits();
+    let mut current_bits = target.load(Ordering::Relaxed);
+    loop {
+        if f32::from_bits(current_bits) >= value {
+            return;
+        }
+
+        match target.compare_exchange_weak(
+            current_bits,
+            next_bits,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(observed) => current_bits = observed,
+        }
+    }
+}
+
+fn take_peak(target: &AtomicU32) -> f32 {
+    f32::from_bits(target.swap(0.0f32.to_bits(), Ordering::Relaxed))
 }
 
 pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, EngineError> {
@@ -110,14 +157,20 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
         .map(|(_, gain, muted)| InputSlotShared {
             gain: AtomicU32::new(gain.to_bits()),
             muted: AtomicBool::new(*muted),
+            input_peak: AtomicU32::new(0.0f32.to_bits()),
         })
         .collect();
     let shared = Arc::new(shared_slots);
+    let meters = Arc::new(MixerSharedMeters {
+        output_peak: AtomicU32::new(0.0f32.to_bits()),
+        clipped: AtomicBool::new(false),
+    });
 
     let (result_tx, result_rx) = mpsc::channel::<Result<(), EngineError>>();
     let (stop_tx, stop_rx) = mpsc::sync_channel::<()>(1);
 
     let shared_for_thread = Arc::clone(&shared);
+    let meters_for_thread = Arc::clone(&meters);
     let out_name = output_name.clone();
     let in_specs = input_specs.clone();
 
@@ -193,13 +246,20 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                 consumers.push((consumer, in_channels));
 
                 let in_stream_cfg: StreamConfig = in_cfg.into();
+                let input_peak_slots = Arc::clone(&shared_for_thread);
                 let input_stream = input_device
                     .build_input_stream(
                         &in_stream_cfg,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            let mut block_peak = 0.0f32;
                             for &s in data {
+                                let abs = s.abs();
+                                if abs > block_peak {
+                                    block_peak = abs;
+                                }
                                 let _ = producer.push(s);
                             }
+                            store_max(&input_peak_slots[i].input_peak, block_peak);
                         },
                         move |e| eprintln!("[audio] input stream {i} error: {e}"),
                         None,
@@ -210,6 +270,7 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
             }
 
             let slots = Arc::clone(&shared_for_thread);
+            let shared_meters = Arc::clone(&meters_for_thread);
 
             let output_stream = output_device
                 .build_output_stream(
@@ -228,6 +289,8 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
 
                         let frames =
                             if out_channels > 0 { data.len() / out_channels } else { 0 };
+                        let mut block_output_peak = 0.0f32;
+                        let mut block_clipped = false;
 
                         for f in 0..frames {
                             // Stack-allocated accumulator. out_channels is 1 or 2
@@ -254,8 +317,22 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                             }
 
                             for ch in 0..out_channels {
-                                data[f * out_channels + ch] = mix[ch].clamp(-1.0, 1.0);
+                                let raw = mix[ch];
+                                if raw < -1.0 || raw > 1.0 {
+                                    block_clipped = true;
+                                }
+                                let clamped = raw.clamp(-1.0, 1.0);
+                                let abs = clamped.abs();
+                                if abs > block_output_peak {
+                                    block_output_peak = abs;
+                                }
+                                data[f * out_channels + ch] = clamped;
                             }
+                        }
+
+                        store_max(&shared_meters.output_peak, block_output_peak);
+                        if block_clipped {
+                            shared_meters.clipped.store(true, Ordering::Relaxed);
                         }
                     },
                     |e| eprintln!("[audio] output stream error: {e}"),
@@ -294,6 +371,7 @@ pub fn start(output_name: &str, inputs: &[MixerInput]) -> Result<MixerEngine, En
                 .map(|(name, _, _)| MixerInputInfo { device_name: name })
                 .collect(),
             shared,
+            meters,
             stop_tx,
             thread: Some(thread_handle),
         }),
@@ -318,6 +396,35 @@ mod tests {
                 muted: false,
             })
             .collect()
+    }
+
+    fn test_engine(input_peaks: &[f32], output_peak: f32, clipped: bool) -> MixerEngine {
+        let (stop_tx, _stop_rx) = mpsc::sync_channel::<()>(1);
+        let shared = input_peaks
+            .iter()
+            .map(|peak| InputSlotShared {
+                gain: AtomicU32::new(1.0f32.to_bits()),
+                muted: AtomicBool::new(false),
+                input_peak: AtomicU32::new(peak.to_bits()),
+            })
+            .collect();
+        MixerEngine {
+            output_device_name: "Speakers (Realtek)".to_string(),
+            inputs: input_peaks
+                .iter()
+                .enumerate()
+                .map(|(i, _)| MixerInputInfo {
+                    device_name: format!("fake_device_{i}"),
+                })
+                .collect(),
+            shared: Arc::new(shared),
+            meters: Arc::new(MixerSharedMeters {
+                output_peak: AtomicU32::new(output_peak.to_bits()),
+                clipped: AtomicBool::new(clipped),
+            }),
+            stop_tx,
+            thread: None,
+        }
     }
 
     #[test]
@@ -357,16 +464,34 @@ mod tests {
 
     #[test]
     fn is_output_device_matches_correctly() {
-        // Build a minimal MixerEngine struct manually — no CPAL involved.
-        let (stop_tx, _stop_rx) = mpsc::sync_channel::<()>(1);
-        let engine = MixerEngine {
-            output_device_name: "Speakers (Realtek)".to_string(),
-            inputs: vec![],
-            shared: Arc::new(vec![]),
-            stop_tx,
-            thread: None,
-        };
+        let engine = test_engine(&[], 0.0, false);
         assert!(engine.is_output_device("Speakers (Realtek)"));
         assert!(!engine.is_output_device("Headphones (USB)"));
+    }
+
+    #[test]
+    fn store_max_keeps_highest_value() {
+        let peak = AtomicU32::new(0.0f32.to_bits());
+        store_max(&peak, 0.25);
+        store_max(&peak, 0.8);
+        store_max(&peak, 0.5);
+        assert!((f32::from_bits(peak.load(Ordering::Relaxed)) - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn read_and_reset_meters_returns_zero_after_second_read() {
+        let engine = test_engine(&[0.35, 0.7], 0.9, true);
+
+        let (input_peaks, output_peak, clipped) = engine.read_and_reset_meters();
+        assert_eq!(input_peaks.len(), 2);
+        assert!((input_peaks[0] - 0.35).abs() < f32::EPSILON);
+        assert!((input_peaks[1] - 0.7).abs() < f32::EPSILON);
+        assert!((output_peak - 0.9).abs() < f32::EPSILON);
+        assert!(clipped);
+
+        let (input_peaks2, output_peak2, clipped2) = engine.read_and_reset_meters();
+        assert_eq!(input_peaks2, vec![0.0, 0.0]);
+        assert_eq!(output_peak2, 0.0);
+        assert!(!clipped2);
     }
 }

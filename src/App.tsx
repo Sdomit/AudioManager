@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  getEngineStatus,
   listInputDevices,
   listOutputDevices,
   getRoutes,
@@ -7,7 +8,7 @@ import {
   clearRoutes,
   setRouteGain,
 } from "./ipc/commands";
-import type { DeviceInfo, Route } from "./types/engine";
+import type { DeviceInfo, EngineStatus, Route } from "./types/engine";
 import "./App.css";
 
 function extractErrorMessage(e: unknown): string {
@@ -21,16 +22,64 @@ function shortName(deviceId: string): string {
   return deviceId.length > 40 ? deviceId.slice(0, 38) + "…" : deviceId;
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
+
+const EMPTY_ENGINE_STATUS: EngineStatus = {
+  status: "stopped",
+  output_device: null,
+  active_inputs: [],
+  input_peaks: [],
+  output_peak: 0,
+  clipped_recently: false,
+  last_error: null,
+};
+
+interface MeterBarProps {
+  value: number;
+  color: string;
+  width?: number;
+  title: string;
+}
+
+function MeterBar({ value, color, width = 96, title }: MeterBarProps) {
+  const pct = Math.round(clamp01(value) * 100);
+  return (
+    <div
+      title={title}
+      style={{
+        width,
+        height: 8,
+        borderRadius: 999,
+        background: "rgba(127,127,127,0.25)",
+        overflow: "hidden",
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          width: `${pct}%`,
+          height: "100%",
+          background: color,
+          transition: "width 120ms linear",
+        }}
+      />
+    </div>
+  );
+}
+
 // ── Route table row ───────────────────────────────────────────────────────────
 
 interface RouteRowProps {
   route: Route;
   busy: boolean;
+  meterLevel: number;
   onToggle: (route: Route, enabled: boolean) => void;
   onGainChange: (route: Route, volume: number, muted: boolean) => void;
 }
 
-function RouteRow({ route, busy, onToggle, onGainChange }: RouteRowProps) {
+function RouteRow({ route, busy, meterLevel, onToggle, onGainChange }: RouteRowProps) {
   // Local optimistic state for slider and mute; synced from parent on mount.
   const [localVol, setLocalVol] = useState(Math.round((route.volume ?? 1.0) * 100));
   const [localMuted, setLocalMuted] = useState(route.muted ?? false);
@@ -43,6 +92,7 @@ function RouteRow({ route, busy, onToggle, onGainChange }: RouteRowProps) {
 
   const statusLabel = route.active ? "Active" : "Off";
   const statusColor = route.active ? "#2ecc71" : "#888";
+  const meterPct = Math.round(clamp01(meterLevel) * 100);
 
   const handleVolChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const pct = Number(e.target.value);
@@ -63,6 +113,18 @@ function RouteRow({ route, busy, onToggle, onGainChange }: RouteRowProps) {
       <td style={{ padding: "8px 12px", maxWidth: 200 }}>{shortName(route.output_id)}</td>
       <td style={{ padding: "8px 12px", color: statusColor, fontWeight: 600, minWidth: 60 }}>
         {statusLabel}
+      </td>
+      <td style={{ padding: "8px 12px", minWidth: 140 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <MeterBar
+            value={meterLevel}
+            color={localMuted ? "#f39c12" : "#3498db"}
+            title={`Raw input activity: ${meterPct}%`}
+          />
+          <span style={{ fontSize: 12, minWidth: 34, textAlign: "right", opacity: 0.8 }}>
+            {meterPct}%
+          </span>
+        </div>
       </td>
       <td style={{ padding: "8px 12px", minWidth: 140 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -141,6 +203,10 @@ export default function App() {
   const [selectedOutput, setSelectedOutput] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [engineStatus, setEngineStatus] = useState<EngineStatus>(EMPTY_ENGINE_STATUS);
+  const [inputMeterDisplay, setInputMeterDisplay] = useState<Record<string, number>>({});
+  const [outputMeterDisplay, setOutputMeterDisplay] = useState(0);
+  const [clipHoldUntil, setClipHoldUntil] = useState(0);
 
   const loadAll = useCallback(async () => {
     setError(null);
@@ -163,6 +229,49 @@ export default function App() {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  const pollEngineStatus = useCallback(async () => {
+    if (document.hidden) return;
+
+    try {
+      const status = await getEngineStatus();
+      setEngineStatus(status);
+      setInputMeterDisplay((prev) => {
+        const nextRawPeaks = Object.fromEntries(
+          status.active_inputs.map((inputId, index) => [
+            inputId,
+            clamp01(status.input_peaks[index] ?? 0),
+          ]),
+        );
+
+        const keys = new Set([...Object.keys(prev), ...Object.keys(nextRawPeaks)]);
+        const next: Record<string, number> = {};
+        for (const key of keys) {
+          const incoming = nextRawPeaks[key] ?? 0;
+          const decayed = (prev[key] ?? 0) * 0.85;
+          const display = Math.max(incoming, decayed);
+          if (display > 0.001 || incoming > 0) {
+            next[key] = display;
+          }
+        }
+        return next;
+      });
+      setOutputMeterDisplay((prev) => Math.max(clamp01(status.output_peak), prev * 0.85));
+      if (status.clipped_recently) {
+        setClipHoldUntil(Date.now() + 1500);
+      }
+    } catch (e) {
+      setError(extractErrorMessage(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void pollEngineStatus();
+    const intervalId = window.setInterval(() => {
+      void pollEngineStatus();
+    }, 200);
+    return () => window.clearInterval(intervalId);
+  }, [pollEngineStatus]);
 
   const handleEnable = async () => {
     if (!selectedInput || !selectedOutput) return;
@@ -214,6 +323,16 @@ export default function App() {
   };
 
   const canEnable = !busy && !!selectedInput && !!selectedOutput;
+  const clipVisible = clipHoldUntil > Date.now();
+  const statusBadgeColor =
+    engineStatus.status === "running"
+      ? "#2ecc71"
+      : engineStatus.status === "error"
+        ? "#e74c3c"
+        : "#7f8c8d";
+  const outputMeterPct = Math.round(clamp01(outputMeterDisplay) * 100);
+  const routeMeterLevel = (route: Route) =>
+    route.active ? inputMeterDisplay[route.input_id] ?? 0 : 0;
 
   return (
     <main className="container" style={{ padding: 24, maxWidth: 860 }}>
@@ -225,7 +344,7 @@ export default function App() {
         </button>
       </header>
       <p style={{ opacity: 0.6, marginTop: 4, fontSize: 13 }}>
-        v0.1 · Phase 4 · first multi-input mix
+        v0.1 · Phase 5 · meters and engine status
       </p>
 
       {/* Error banner */}
@@ -244,6 +363,89 @@ export default function App() {
           {error}
         </p>
       )}
+
+      {/* Engine status */}
+      <section
+        style={{
+          marginTop: 16,
+          padding: 16,
+          border: "1px solid #444",
+          borderRadius: 8,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>Engine</h2>
+            <span
+              title={engineStatus.last_error ?? undefined}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minWidth: 74,
+                padding: "3px 10px",
+                borderRadius: 999,
+                background: statusBadgeColor,
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+              }}
+            >
+              {engineStatus.status}
+            </span>
+            {clipVisible && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minWidth: 48,
+                  padding: "3px 10px",
+                  borderRadius: 999,
+                  background: "#e74c3c",
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: 0.4,
+                }}
+              >
+                CLIP
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, opacity: 0.7 }}>
+              {engineStatus.output_device
+                ? `Output: ${shortName(engineStatus.output_device)}`
+                : "Output: none"}
+            </span>
+            <MeterBar
+              value={outputMeterDisplay}
+              color={clipVisible ? "#e74c3c" : "#2ecc71"}
+              width={140}
+              title={`Output peak: ${outputMeterPct}%`}
+            />
+            <span style={{ fontSize: 12, minWidth: 34, textAlign: "right", opacity: 0.8 }}>
+              {outputMeterPct}%
+            </span>
+          </div>
+        </div>
+
+        <p style={{ marginTop: 10, marginBottom: 0, fontSize: 12, opacity: 0.6 }}>
+          Input meters show raw input before mute and volume.
+        </p>
+      </section>
 
       {/* Add route */}
       <section
@@ -289,7 +491,7 @@ export default function App() {
           </button>
         </div>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.55 }}>
-          Phase 4: one output bus. Enabled inputs mix into it.
+          Phase 5: one output bus. Enabled inputs mix into it.
         </p>
       </section>
 
@@ -334,6 +536,7 @@ export default function App() {
                 <th style={{ padding: "4px 12px" }} />
                 <th style={{ padding: "4px 12px", fontWeight: 500 }}>Output</th>
                 <th style={{ padding: "4px 12px", fontWeight: 500 }}>Status</th>
+                <th style={{ padding: "4px 12px", fontWeight: 500 }}>Input Meter</th>
                 <th style={{ padding: "4px 12px", fontWeight: 500 }}>Volume</th>
                 <th style={{ padding: "4px 12px", fontWeight: 500 }}>Mute</th>
                 <th style={{ padding: "4px 12px" }} />
@@ -345,6 +548,7 @@ export default function App() {
                   key={`${r.input_id}::${r.output_id}`}
                   route={r}
                   busy={busy}
+                  meterLevel={routeMeterLevel(r)}
                   onToggle={handleToggle}
                   onGainChange={handleGainChange}
                 />

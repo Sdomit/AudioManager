@@ -8,6 +8,7 @@ use crate::audio::{graph::AudioGraph, mixer::MixerEngine};
 pub struct AppInner {
     pub engine: Option<MixerEngine>,
     pub graph: AudioGraph,
+    pub last_error: Option<String>,
 }
 
 pub struct AppState {
@@ -17,7 +18,11 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(AppInner { engine: None, graph: AudioGraph::new() }),
+            inner: Mutex::new(AppInner {
+                engine: None,
+                graph: AudioGraph::new(),
+                last_error: None,
+            }),
         }
     }
 }

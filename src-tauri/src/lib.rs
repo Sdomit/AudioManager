@@ -37,6 +37,17 @@ fn rebuild_mixer(inner: &mut AppInner, output_id: &str) -> Result<(), EngineErro
     Ok(())
 }
 
+fn store_last_error(inner: &mut AppInner, err: EngineError) -> EngineError {
+    inner.last_error = Some(err.message.clone());
+    err
+}
+
+fn new_last_error(inner: &mut AppInner, message: impl Into<String>) -> EngineError {
+    let message = message.into();
+    inner.last_error = Some(message.clone());
+    EngineError { message }
+}
+
 // ── Phase 1 passthrough (thin wrapper over MixerEngine, kept for compatibility) ─
 
 #[derive(serde::Serialize)]
@@ -44,6 +55,17 @@ struct PassthroughStatus {
     running: bool,
     input_device: Option<String>,
     output_device: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct EngineStatus {
+    status: &'static str,
+    output_device: Option<String>,
+    active_inputs: Vec<String>,
+    input_peaks: Vec<f32>,
+    output_peak: f32,
+    clipped_recently: bool,
+    last_error: Option<String>,
 }
 
 #[tauri::command]
@@ -55,12 +77,16 @@ fn start_passthrough(
     let mut inner = state.inner.lock().unwrap();
     inner.engine = None;
     inner.graph.deactivate_all();
-    let engine = audio::mixer::start(
+    let engine = match audio::mixer::start(
         &output_id,
         &[MixerInput { device_name: input_id.clone(), gain: 1.0, muted: false }],
-    )?;
+    ) {
+        Ok(engine) => engine,
+        Err(err) => return Err(store_last_error(&mut inner, err)),
+    };
     inner.engine = Some(engine);
     inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
+    inner.last_error = None;
     Ok(())
 }
 
@@ -69,6 +95,7 @@ fn stop_passthrough(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
     inner.engine = None;
     inner.graph.deactivate_all();
+    inner.last_error = None;
     Ok(())
 }
 
@@ -84,6 +111,34 @@ fn get_passthrough_status(state: tauri::State<AppState>) -> PassthroughStatus {
         None => {
             PassthroughStatus { running: false, input_device: None, output_device: None }
         }
+    }
+}
+
+#[tauri::command]
+fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
+    let inner = state.inner.lock().unwrap();
+    match inner.engine.as_ref() {
+        Some(engine) => {
+            let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
+            EngineStatus {
+                status: "running",
+                output_device: Some(engine.output_device_name.clone()),
+                active_inputs: engine.inputs.iter().map(|input| input.device_name.clone()).collect(),
+                input_peaks,
+                output_peak,
+                clipped_recently,
+                last_error: inner.last_error.clone(),
+            }
+        }
+        None => EngineStatus {
+            status: if inner.last_error.is_some() { "error" } else { "stopped" },
+            output_device: None,
+            active_inputs: vec![],
+            input_peaks: vec![],
+            output_peak: 0.0,
+            clipped_recently: false,
+            last_error: inner.last_error.clone(),
+        },
     }
 }
 
@@ -116,31 +171,36 @@ fn set_route(
         // Reject if a different output bus is already active.
         if let Some(active_out) = inner.graph.active_output() {
             if active_out != output_id {
-                return Err(EngineError {
-                    message: "Phase 4 supports one output bus. \
-                              Stop the current output before enabling another."
-                        .to_string(),
-                });
+                return Err(new_last_error(
+                    &mut inner,
+                    "Phase 4 supports one output bus. \
+                     Stop the current output before enabling another.",
+                ));
             }
         }
         // Also check engine directly (e.g. set via start_passthrough).
         if let Some(eng) = &inner.engine {
             if eng.output_device_name != output_id {
-                return Err(EngineError {
-                    message: "Phase 4 supports one output bus. \
-                              Stop the current output before enabling another."
-                        .to_string(),
-                });
+                return Err(new_last_error(
+                    &mut inner,
+                    "Phase 4 supports one output bus. \
+                     Stop the current output before enabling another.",
+                ));
             }
         }
 
         inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
-        rebuild_mixer(&mut inner, &output_id)?;
+        if let Err(err) = rebuild_mixer(&mut inner, &output_id) {
+            return Err(store_last_error(&mut inner, err));
+        }
     } else {
         inner.graph.upsert_route(&input_id, &output_id, RouteState::Disabled);
-        rebuild_mixer(&mut inner, &output_id)?;
+        if let Err(err) = rebuild_mixer(&mut inner, &output_id) {
+            return Err(store_last_error(&mut inner, err));
+        }
     }
 
+    inner.last_error = None;
     Ok(inner.graph.to_routes())
 }
 
@@ -150,6 +210,7 @@ fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
     inner.engine = None;
     inner.graph.clear();
+    inner.last_error = None;
     Ok(())
 }
 
@@ -166,9 +227,10 @@ fn set_route_gain(
     let mut inner = state.inner.lock().unwrap();
 
     if !inner.graph.set_route_gain(&input_id, &output_id, volume, muted) {
-        return Err(EngineError {
-            message: format!("Route not found: {input_id} → {output_id}"),
-        });
+        return Err(new_last_error(
+            &mut inner,
+            format!("Route not found: {input_id} → {output_id}"),
+        ));
     }
 
     // Atomic update — only when the running engine is on the same output bus.
@@ -179,6 +241,7 @@ fn set_route_gain(
         }
     }
 
+    inner.last_error = None;
     Ok(inner.graph.to_routes())
 }
 
@@ -195,6 +258,7 @@ pub fn run() {
             start_passthrough,
             stop_passthrough,
             get_passthrough_status,
+            get_engine_status,
             get_routes,
             set_route,
             clear_routes,

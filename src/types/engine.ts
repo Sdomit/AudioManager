@@ -27,3 +27,13 @@ export interface Route {
   /** True when this input is muted (contributes silence). */
   muted: boolean;
 }
+
+export interface EngineStatus {
+  status: "stopped" | "running" | "error";
+  output_device: string | null;
+  active_inputs: string[];
+  input_peaks: number[];
+  output_peak: number;
+  clipped_recently: boolean;
+  last_error: string | null;
+}
