@@ -11,10 +11,17 @@ import styles from "./TopBar.module.css";
 interface TopBarProps {
   presets: Preset[];
   loadedPresetId: string | null;
+  defaultPresetId: string | null;
   density: Density;
   streamSetupSteps: StreamSetupStep[];
   onLoadPreset: (id: string) => void;
-  onSavePreset: () => void;
+  /** Open the save-preset dialog. Parent owns the dialog state. */
+  onOpenSaveDialog: () => void;
+  /** Open the rename-preset dialog for the given preset. */
+  onRenamePreset: (id: string) => void;
+  onDeletePreset: (id: string) => void;
+  /** Pass null to clear the default. */
+  onSetDefaultPreset: (id: string | null) => void;
   onDensityChange: (d: Density) => void;
   onOpenStreamSetup: () => void;
 }
@@ -25,10 +32,14 @@ interface TopBarProps {
 export function TopBar({
   presets,
   loadedPresetId,
+  defaultPresetId,
   density,
   streamSetupSteps,
   onLoadPreset,
-  onSavePreset,
+  onOpenSaveDialog,
+  onRenamePreset,
+  onDeletePreset,
+  onSetDefaultPreset,
   onDensityChange,
   onOpenStreamSetup,
 }: TopBarProps) {
@@ -45,8 +56,12 @@ export function TopBar({
         <PresetMenu
           presets={presets}
           loaded={loaded}
+          defaultPresetId={defaultPresetId}
           onLoad={onLoadPreset}
-          onSave={onSavePreset}
+          onSave={onOpenSaveDialog}
+          onRename={onRenamePreset}
+          onDelete={onDeletePreset}
+          onSetDefault={onSetDefaultPreset}
         />
       </div>
 
@@ -92,15 +107,28 @@ function Wordmark() {
 function PresetMenu({
   presets,
   loaded,
+  defaultPresetId,
   onLoad,
   onSave,
+  onRename,
+  onDelete,
+  onSetDefault,
 }: {
   presets: Preset[];
   loaded?: Preset;
+  defaultPresetId: string | null;
   onLoad: (id: string) => void;
   onSave: () => void;
+  onRename: (id: string) => void;
+  onDelete: (id: string) => void;
+  onSetDefault: (id: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [ctxFor, setCtxFor] = useState<string | null>(null);
+  const [ctxPos, setCtxPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const ctxTarget = ctxFor ? presets.find((p) => p.id === ctxFor) ?? null : null;
+  const closeCtx = () => setCtxFor(null);
 
   return (
     <div className={styles.presetMenu}>
@@ -118,7 +146,14 @@ function PresetMenu({
       </button>
       {open && (
         <>
-          <div className={styles.menuBackdrop} onClick={() => setOpen(false)} aria-hidden />
+          <div
+            className={styles.menuBackdrop}
+            onClick={() => {
+              closeCtx();
+              setOpen(false);
+            }}
+            aria-hidden
+          />
           <div className={styles.menuPanel} role="menu">
             <div className={styles.menuHeader}>Load preset</div>
             {presets.length === 0 ? (
@@ -133,8 +168,22 @@ function PresetMenu({
                     onLoad(p.id);
                     setOpen(false);
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setCtxFor(p.id);
+                    setCtxPos({ x: e.clientX, y: e.clientY });
+                  }}
+                  title="Click to load, right-click for options"
                 >
-                  <span className={styles.menuItemName}>{p.name}</span>
+                  <span className={styles.menuItemName}>
+                    {p.id === defaultPresetId && (
+                      <span className={styles.menuStar} aria-label="Default preset" title="Default preset">
+                        ★
+                      </span>
+                    )}
+                    {p.name}
+                  </span>
                   {p.version === 1 && (
                     <span className={styles.menuV1}>v1</span>
                   )}
@@ -155,7 +204,104 @@ function PresetMenu({
           </div>
         </>
       )}
+
+      {ctxTarget && (
+        <PresetContextMenu
+          target={ctxTarget}
+          isDefault={ctxTarget.id === defaultPresetId}
+          isLoaded={ctxTarget.id === loaded?.id}
+          x={ctxPos.x}
+          y={ctxPos.y}
+          onLoad={() => {
+            onLoad(ctxTarget.id);
+            closeCtx();
+            setOpen(false);
+          }}
+          onRename={() => {
+            onRename(ctxTarget.id);
+            closeCtx();
+            setOpen(false);
+          }}
+          onDelete={() => {
+            const ok = window.confirm(
+              `Delete preset “${ctxTarget.name}”? This cannot be undone.`,
+            );
+            if (!ok) return;
+            onDelete(ctxTarget.id);
+            closeCtx();
+            setOpen(false);
+          }}
+          onSetDefault={() => {
+            onSetDefault(
+              ctxTarget.id === defaultPresetId ? null : ctxTarget.id,
+            );
+            closeCtx();
+          }}
+          onClose={closeCtx}
+        />
+      )}
     </div>
+  );
+}
+
+/* ── Preset right-click context menu ────────────────────────────────────── */
+
+function PresetContextMenu({
+  target,
+  isDefault,
+  isLoaded,
+  x,
+  y,
+  onLoad,
+  onRename,
+  onDelete,
+  onSetDefault,
+  onClose,
+}: {
+  target: Preset;
+  isDefault: boolean;
+  isLoaded: boolean;
+  x: number;
+  y: number;
+  onLoad: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onSetDefault: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div className={styles.ctxBackdrop} onClick={onClose} aria-hidden />
+      <div
+        className={styles.ctxMenu}
+        role="menu"
+        aria-label={`Preset ${target.name} actions`}
+        style={{ left: x, top: y }}
+      >
+        <button
+          role="menuitem"
+          className={styles.ctxItem}
+          onClick={onLoad}
+          disabled={isLoaded}
+        >
+          Load preset
+        </button>
+        <button role="menuitem" className={styles.ctxItem} onClick={onRename}>
+          Rename…
+        </button>
+        <button role="menuitem" className={styles.ctxItem} onClick={onSetDefault}>
+          {isDefault ? "Remove as default" : "Set as default"}
+        </button>
+        <div className={styles.ctxDivider} />
+        <button
+          role="menuitem"
+          className={`${styles.ctxItem} ${styles.ctxItemDanger}`}
+          onClick={onDelete}
+        >
+          Delete preset
+        </button>
+      </div>
+    </>
   );
 }
 

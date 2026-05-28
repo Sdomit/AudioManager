@@ -115,7 +115,19 @@ export interface AudioManagerActions {
 
   loadPreset: (id: string) => void;
   savePreset: (name: string) => void;
+  /**
+   * Rename a preset by saving under a new name then deleting the old
+   * one (backend has no rename command). Both calls happen serially;
+   * on save failure nothing is touched.
+   */
+  renamePreset: (oldId: string, newName: string) => void;
   deletePreset: (id: string) => void;
+  /**
+   * Persist a user-pinned default preset to localStorage. On next app
+   * boot the default is auto-loaded via the safe-load path (sets
+   * routes/sends/gains; never auto-enables buses). Pass null to clear.
+   */
+  setDefaultPreset: (id: string | null) => void;
   dismissPresetBanner: () => void;
 
   setRoutingView: (v: RoutingView) => void;
@@ -132,6 +144,8 @@ export interface AudioManagerState {
   sends: Send[];
   presets: Preset[];
   loadedPresetId: string | null;
+  /** ID of the preset pinned as the user's default. Persisted to localStorage. */
+  defaultPresetId: string | null;
   presetBannerVisible: boolean;
   streamSetupOpen: boolean;
   streamSetupSteps: StreamSetupStep[];

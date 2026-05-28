@@ -18,6 +18,7 @@ import {
   adaptSendsFromInputs,
   busHasAnySend,
 } from "./adapters";
+import type { PresetLoadWarning } from "../../types/engine";
 import type {
   Bus,
   BusId,
@@ -121,20 +122,23 @@ export async function setSendMuted(_inputId: string, _busId: BusId, _muted: bool
   // Phase D
 }
 
-/* ── Presets (Phase D) ──────────────────────────────────────────────────── */
+/* ── Presets ────────────────────────────────────────────────────────────── */
 
-export async function loadPreset(_id: string): Promise<void> {
-  // Phase D: ipc.loadPreset(_id) — and dispatch hydrate again on success.
+export async function loadPreset(id: string): Promise<PresetLoadWarning[]> {
+  const result = await ipc.loadPreset(id);
+  return result.warnings;
 }
 
-export async function savePreset(_name: string): Promise<Preset> {
-  // Phase D
-  throw new Error("savePreset not wired yet");
+export async function savePreset(name: string): Promise<Preset> {
+  const saved = await ipc.savePreset(name);
+  return adaptPreset(saved);
 }
 
-export async function deletePreset(_id: string): Promise<void> {
-  // Phase D: ipc.deletePreset(_id);
+export async function deletePreset(id: string): Promise<void> {
+  await ipc.deletePreset(id);
 }
+
+export type { PresetLoadWarning };
 
 /* ── Metering ───────────────────────────────────────────────────────────── */
 /**

@@ -4,6 +4,7 @@ import { DetailPanel } from "./DetailPanel";
 import { DevicePicker } from "./DevicePicker";
 import { InputList } from "./InputList";
 import { PresetBanner } from "./PresetBanner";
+import { PresetSaveDialog } from "./PresetSaveDialog";
 import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
 import { TopBar } from "./TopBar";
@@ -40,6 +41,16 @@ export function AudioManager() {
   const [inputPickerOpen, setInputPickerOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
+  // Preset dialog: "save" mode collects a new name; "rename" mode
+  // captures the existing id so the rename action can save+delete.
+  const [presetDialog, setPresetDialog] = useState<
+    | { kind: "closed" }
+    | { kind: "save" }
+    | { kind: "rename"; oldId: string; oldName: string }
+  >({ kind: "closed" });
+
+  const presetNames = state.presets.map((p) => p.name);
+
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
 
   return (
@@ -50,10 +61,18 @@ export function AudioManager() {
       <TopBar
         presets={state.presets}
         loadedPresetId={state.loadedPresetId}
+        defaultPresetId={state.defaultPresetId}
         density={state.density}
         streamSetupSteps={state.streamSetupSteps}
         onLoadPreset={am.loadPreset}
-        onSavePreset={() => am.savePreset(`Preset ${state.presets.length + 1}`)}
+        onOpenSaveDialog={() => setPresetDialog({ kind: "save" })}
+        onRenamePreset={(id) => {
+          const p = state.presets.find((x) => x.id === id);
+          if (!p) return;
+          setPresetDialog({ kind: "rename", oldId: id, oldName: p.name });
+        }}
+        onDeletePreset={am.deletePreset}
+        onSetDefaultPreset={am.setDefaultPreset}
         onDensityChange={am.setDensity}
         onOpenStreamSetup={am.openStreamSetup}
       />
@@ -185,6 +204,37 @@ export function AudioManager() {
           onClose={() => setInputPickerOpen(false)}
         />
       )}
+
+      <PresetSaveDialog
+        open={presetDialog.kind === "save"}
+        existingNames={presetNames}
+        title="Save preset"
+        confirmLabel="Save"
+        onConfirm={(name) => {
+          am.savePreset(name);
+          setPresetDialog({ kind: "closed" });
+        }}
+        onClose={() => setPresetDialog({ kind: "closed" })}
+      />
+
+      <PresetSaveDialog
+        open={presetDialog.kind === "rename"}
+        initialName={
+          presetDialog.kind === "rename" ? presetDialog.oldName : ""
+        }
+        existingNames={presetNames.filter(
+          (n) => presetDialog.kind === "rename" && n !== presetDialog.oldName,
+        )}
+        title="Rename preset"
+        confirmLabel="Rename"
+        onConfirm={(name) => {
+          if (presetDialog.kind === "rename") {
+            am.renamePreset(presetDialog.oldId, name);
+          }
+          setPresetDialog({ kind: "closed" });
+        }}
+        onClose={() => setPresetDialog({ kind: "closed" })}
+      />
     </div>
   );
 }

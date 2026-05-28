@@ -250,3 +250,66 @@
   color: var(--am-text-primary);
   background: var(--am-surface-3);
 }
+
+/* ── Preset default star ───────────────────────────────────────────────── */
+.menuStar {
+  color: var(--am-warning, #F59E0B);
+  margin-right: 6px;
+  font-size: 11px;
+  vertical-align: 1px;
+}
+
+/* ── Preset right-click context menu ──────────────────────────────────── */
+.ctxBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.ctxMenu {
+  position: fixed;
+  z-index: 101;
+  min-width: 200px;
+  background: var(--am-bg-elev, #1c2027);
+  border: 1px solid var(--am-border, #2e333a);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ctxItem {
+  background: transparent;
+  border: 0;
+  color: var(--am-text-primary, #e6e8ea);
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.ctxItem:hover:not(:disabled) {
+  background: var(--am-surface-3, rgba(255, 255, 255, 0.05));
+}
+
+.ctxItem:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ctxItemDanger {
+  color: var(--am-danger, #EF4444);
+}
+
+.ctxItemDanger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.ctxDivider {
+  height: 1px;
+  background: var(--am-border, #2e333a);
+  margin: 4px 0;
+}

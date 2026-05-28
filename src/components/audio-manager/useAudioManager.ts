@@ -18,7 +18,12 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import * as ipc from "../../ipc/commands";
 import { uiVolumeToBackend } from "./adapters";
 import { mockStreamSetupSteps } from "./mockData";
-import { hydrate as fetchHydrate } from "./tauriCommands";
+import {
+  hydrate as fetchHydrate,
+  loadPreset as tcLoadPreset,
+  savePreset as tcSavePreset,
+  deletePreset as tcDeletePreset,
+} from "./tauriCommands";
 import type {
   AudioInput,
   AudioManagerState,
@@ -34,12 +39,34 @@ import type {
 
 /* ── State + reducer ────────────────────────────────────────────────────── */
 
+const DEFAULT_PRESET_STORAGE_KEY = "audioManager.defaultPresetId";
+
+function readDefaultPresetIdFromStorage(): string | null {
+  try {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(DEFAULT_PRESET_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeDefaultPresetIdToStorage(id: string | null): void {
+  try {
+    if (typeof window === "undefined") return;
+    if (id === null) window.localStorage.removeItem(DEFAULT_PRESET_STORAGE_KEY);
+    else window.localStorage.setItem(DEFAULT_PRESET_STORAGE_KEY, id);
+  } catch {
+    // best-effort
+  }
+}
+
 const initialState: AudioManagerState = {
   buses: [],
   inputs: [],
   sends: [],
   presets: [],
   loadedPresetId: null,
+  defaultPresetId: readDefaultPresetIdFromStorage(),
   presetBannerVisible: false,
   streamSetupOpen: false,
   streamSetupSteps: mockStreamSetupSteps,
@@ -64,6 +91,7 @@ type Action =
   | { type: "load_preset"; id: string }
   | { type: "save_preset"; name: string }
   | { type: "delete_preset"; id: string }
+  | { type: "set_default_preset"; id: string | null }
   | { type: "dismiss_preset_banner" }
   | { type: "set_routing_view"; view: RoutingView }
   | { type: "set_density"; density: Density }
@@ -216,7 +244,11 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
         ...state,
         presets: state.presets.filter((p) => p.id !== action.id),
         loadedPresetId: state.loadedPresetId === action.id ? null : state.loadedPresetId,
+        defaultPresetId: state.defaultPresetId === action.id ? null : state.defaultPresetId,
       };
+
+    case "set_default_preset":
+      return { ...state, defaultPresetId: action.id };
 
     case "dismiss_preset_banner":
       return { ...state, presetBannerVisible: false };
@@ -305,6 +337,10 @@ export function useAudioManager(): UseAudioManager {
   // mount. Phase D will replace per-action dispatches with optimistic
   // dispatch + invoke; Phase E will replace the RAF meter loop below
   // with a real Tauri event subscription.
+  // Initial hydrate. If a default preset is pinned AND it exists in the
+  // backend's preset list, auto-load it via the safe-load path (sets
+  // routes/gains/devices; the backend never auto-starts buses).
+  const didAutoLoadDefault = useRef(false);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -318,6 +354,37 @@ export function useAudioManager(): UseAudioManager {
           sends: result.sends,
           presets: result.presets,
         });
+
+        if (didAutoLoadDefault.current) return;
+        const pinned = readDefaultPresetIdFromStorage();
+        if (!pinned) return;
+        const exists = result.presets.some((p) => p.id === pinned);
+        if (!exists) {
+          // Default preset was deleted out-of-band; clear the pin.
+          writeDefaultPresetIdToStorage(null);
+          return;
+        }
+        didAutoLoadDefault.current = true;
+        try {
+          const warnings = await tcLoadPreset(pinned);
+          if (cancelled) return;
+          if (warnings.length > 0) {
+            console.warn("Default preset load warnings:", warnings);
+          }
+          dispatch({ type: "load_preset", id: pinned });
+          // Re-hydrate to pick up the backend's restored state.
+          const after = await fetchHydrate();
+          if (cancelled) return;
+          dispatch({
+            type: "hydrate",
+            buses: after.buses,
+            inputs: after.inputs,
+            sends: after.sends,
+            presets: after.presets,
+          });
+        } catch (e) {
+          console.error("Default preset auto-load failed:", e);
+        }
       } catch (e) {
         // Leave the UI in its empty initial state; surface in console
         // until Phase D wires an error banner.
@@ -603,14 +670,87 @@ export function useAudioManager(): UseAudioManager {
     },
     [getSend],
   );
-  const loadPreset = useCallback((id: string) => {
-    dispatch({ type: "load_preset", id });
-  }, []);
-  const savePreset = useCallback((name: string) => {
-    dispatch({ type: "save_preset", name });
-  }, []);
-  const deletePreset = useCallback((id: string) => {
-    dispatch({ type: "delete_preset", id });
+  const loadPreset = useCallback(
+    (id: string) => {
+      tcLoadPreset(id)
+        .then((warnings) => {
+          if (warnings.length > 0) {
+            console.warn("Preset load warnings:", warnings);
+          }
+          // Backend resets routes/buses/inputs to preset state without
+          // auto-starting buses. Hydrate refreshes UI; load_preset
+          // reducer action sets loadedPresetId + presetBannerVisible.
+          dispatch({ type: "load_preset", id });
+          refresh();
+        })
+        .catch((e) => {
+          console.error("loadPreset failed:", e);
+        });
+    },
+    [refresh],
+  );
+
+  const savePreset = useCallback(
+    (name: string) => {
+      tcSavePreset(name)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("savePreset failed:", e);
+        });
+    },
+    [refresh],
+  );
+
+  const deletePreset = useCallback(
+    (id: string) => {
+      if (stateRef.current.defaultPresetId === id) {
+        writeDefaultPresetIdToStorage(null);
+      }
+      dispatch({ type: "delete_preset", id });
+      tcDeletePreset(id)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("deletePreset failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
+  const renamePreset = useCallback(
+    (oldId: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed || trimmed === oldId) return;
+      // No backend rename: save under new name first; only if that
+      // succeeds, delete the old. On any failure we refresh so the UI
+      // reflects whatever the backend now holds (one, both, or neither).
+      tcSavePreset(trimmed)
+        .then(() =>
+          tcDeletePreset(oldId).catch((e) => {
+            console.error(
+              `renamePreset: saved as "${trimmed}" but failed to delete old "${oldId}":`,
+              e,
+            );
+          }),
+        )
+        .then(() => {
+          // Move default-pin to the new name if the renamed preset was default.
+          if (stateRef.current.defaultPresetId === oldId) {
+            writeDefaultPresetIdToStorage(trimmed);
+            dispatch({ type: "set_default_preset", id: trimmed });
+          }
+          refresh();
+        })
+        .catch((e) => {
+          console.error("renamePreset (save) failed:", e);
+        });
+    },
+    [refresh],
+  );
+
+  const setDefaultPreset = useCallback((id: string | null) => {
+    writeDefaultPresetIdToStorage(id);
+    dispatch({ type: "set_default_preset", id });
   }, []);
   const dismissPresetBanner = useCallback(() => {
     dispatch({ type: "dismiss_preset_banner" });
@@ -642,7 +782,9 @@ export function useAudioManager(): UseAudioManager {
     setSendMuted,
     loadPreset,
     savePreset,
+    renamePreset,
     deletePreset,
+    setDefaultPreset,
     dismissPresetBanner,
     setRoutingView,
     setDensity,
