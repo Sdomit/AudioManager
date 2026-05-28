@@ -388,29 +388,33 @@ fn run_writer(
     const BATCH: usize = 4096;
 
     loop {
-        let mut drained = 0;
-        while drained < BATCH {
+        let mut written_this_batch = 0usize;
+        let mut write_failed = false;
+        while written_this_batch < BATCH {
             match consumer.pop() {
                 Some(sample) => {
                     if let Err(e) = writer.write_sample(sample) {
                         set_first_error(&error, format!("WAV write failed: {e}"));
-                        // Preserve successful writes in this partial batch.
-                        bytes_written.fetch_add((drained as u64) * 4, Ordering::Relaxed);
-                        finalize_writer(writer, &path, &bytes_written, &error);
-                        return;
+                        write_failed = true;
+                        break;
                     }
-                    drained += 1;
+                    written_this_batch += 1;
                 }
                 None => break,
             }
         }
-        // Update byte counter approximately (sample_count * 4 bytes for f32).
-        bytes_written.fetch_add((drained as u64) * 4, Ordering::Relaxed);
+        // Update byte counter once per batch from successful writes only.
+        add_written_bytes(&bytes_written, written_this_batch);
+
+        if write_failed {
+            finalize_writer(writer, &path, &bytes_written, &error);
+            return;
+        }
 
         if stop_flag.load(Ordering::Acquire) {
             break;
         }
-        if drained == 0 {
+        if written_this_batch == 0 {
             thread::sleep(WRITER_IDLE_SLEEP);
         }
     }
@@ -425,7 +429,7 @@ fn run_writer(
         }
         tail += 1;
     }
-    bytes_written.fetch_add((tail as u64) * 4, Ordering::Relaxed);
+    add_written_bytes(&bytes_written, tail);
 
     finalize_writer(writer, &path, &bytes_written, &error);
 }
@@ -508,6 +512,13 @@ fn recording_status_error(error: Option<String>, dropped_samples: u64) -> Option
         ));
     }
     None
+}
+
+#[inline]
+fn add_written_bytes(bytes_written: &Arc<AtomicU64>, successful_samples: usize) {
+    if successful_samples > 0 {
+        bytes_written.fetch_add((successful_samples as u64) * 4, Ordering::Relaxed);
+    }
 }
 
 fn bus_short(id: BusId) -> &'static str {
@@ -765,6 +776,21 @@ mod tests {
         set_first_error(&err, "first".to_string());
         set_first_error(&err, "second".to_string());
         assert_eq!(err.lock().unwrap().clone(), Some("first".to_string()));
+    }
+
+    #[test]
+    fn add_written_bytes_counts_successful_samples_once() {
+        let bytes = Arc::new(AtomicU64::new(0));
+        add_written_bytes(&bytes, 4096);
+        add_written_bytes(&bytes, 1024); // partial batch before a later failure
+        assert_eq!(bytes.load(Ordering::Relaxed), (4096_u64 + 1024_u64) * 4);
+    }
+
+    #[test]
+    fn add_written_bytes_ignores_zero_successes() {
+        let bytes = Arc::new(AtomicU64::new(1234));
+        add_written_bytes(&bytes, 0); // failed sample is never counted
+        assert_eq!(bytes.load(Ordering::Relaxed), 1234);
     }
 
     #[test]
