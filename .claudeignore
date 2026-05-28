@@ -1,0 +1,53 @@
+# ── Rust / Cargo ──────────────────────────────────────────────────────────────
+src-tauri/target/
+target/
+*.rlib
+*.rmeta
+*.pdb
+*.d
+
+# ── Node / pnpm ───────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.npm/
+
+# ── Tauri build outputs ───────────────────────────────────────────────────────
+src-tauri/gen/
+dist/
+build/
+
+# ── Lock files (large, rarely useful in context) ─────────────────────────────
+pnpm-lock.yaml
+Cargo.lock
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.user
+.DS_Store
+Thumbs.db
+
+# ── Logs / crash ──────────────────────────────────────────────────────────────
+*.log
+logs/
+crash_reports/
+
+# ── Version control ───────────────────────────────────────────────────────────
+.git/
+
+# ── Audio files & recordings ───────────────────────────────────────────────────
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+*.aiff
+*.wma
+
+# ── Config / metadata ──────────────────────────────────────────────────────────
+*.toml.bak
+Cargo.lock.old
+.env.local
+*.ini.bak
