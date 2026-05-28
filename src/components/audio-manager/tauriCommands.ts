@@ -129,6 +129,10 @@ export async function setBusDevice(_id: BusId, _device: string | null): Promise<
   // Phase D: ipc.setBusDevice(_id, _device);
 }
 
+export async function renameBus(id: BusId, name: string): Promise<void> {
+  await ipc.renameBus(id, name);
+}
+
 /* ── Input writes (Phase D) ─────────────────────────────────────────────── */
 
 export async function setInputGain(_id: string, _gain: number): Promise<void> {

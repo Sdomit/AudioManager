@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { iconForBusRole, iconForKind } from "./Icon";
 import type { AudioInput, Bus, BusId, DetailSelection, Send } from "./types";
+import { gainToDb } from "./units";
 import styles from "./MatrixView.module.css";
 
 interface MatrixViewProps {
@@ -147,10 +148,4 @@ export function MatrixView({
       </div>
     </div>
   );
-}
-
-function gainToDb(g: number): string {
-  if (g < 0.001) return "-∞ dB";
-  const db = (g - 0.75) * 80;
-  return `${db > 0 ? "+" : ""}${db.toFixed(0)} dB`;
 }

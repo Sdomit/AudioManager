@@ -8,8 +8,11 @@ import type {
   PresetLoadResult,
   PresetSummary,
   PassthroughStatus,
+  RecordingFile,
+  RecordingInfo,
   Route,
   SystemStatus,
+  TapSpec,
 } from "../types/engine";
 
 // ── Device enumeration ────────────────────────────────────────────────────────
@@ -145,3 +148,44 @@ export const setBusEnabled = (
 /** Rename a bus. Empty names are rejected. */
 export const renameBus = (busId: BusId, name: string): Promise<BusStatus> =>
   invoke<BusStatus>("rename_bus", { busId, name });
+
+// ── Recording ─────────────────────────────────────────────────────────────────
+
+/** Start a single recording at the requested tap point. */
+export const startRecording = (spec: TapSpec): Promise<RecordingInfo> =>
+  invoke<RecordingInfo>("start_recording", { spec });
+
+/**
+ * Start one BusOut recording for every running bus. Files land in a
+ * shared session sub-folder so they line up at sample 0.
+ */
+export const startMasterRecording = (): Promise<RecordingInfo[]> =>
+  invoke<RecordingInfo[]>("start_master_recording");
+
+/** Stop one recording by id; returns the final info with byte count. */
+export const stopRecording = (id: string): Promise<RecordingInfo> =>
+  invoke<RecordingInfo>("stop_recording", { id });
+
+/** Stop every active recording. Returns final info for each. */
+export const stopAllRecordings = (): Promise<RecordingInfo[]> =>
+  invoke<RecordingInfo[]>("stop_all_recordings");
+
+/** Snapshot of all active recordings (size, dropped frames, etc). */
+export const listActiveRecordings = (): Promise<RecordingInfo[]> =>
+  invoke<RecordingInfo[]>("list_active_recordings");
+
+/** Files currently in the recordings dir (recursively). */
+export const listRecordingFiles = (): Promise<RecordingFile[]> =>
+  invoke<RecordingFile[]>("list_recording_files");
+
+export const getRecordingsDir = (): Promise<string> =>
+  invoke<string>("get_recordings_dir");
+
+export const setRecordingsDir = (path: string): Promise<string> =>
+  invoke<string>("set_recordings_dir", { path });
+
+export const deleteRecordingFile = (path: string): Promise<void> =>
+  invoke<void>("delete_recording_file", { path });
+
+export const openRecordingsFolder = (): Promise<void> =>
+  invoke<void>("open_recordings_folder");

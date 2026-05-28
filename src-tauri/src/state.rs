@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::audio::bus::{BusId, BusRuntime};
 use crate::audio::graph::AudioGraph;
+use crate::audio::recorder::RecorderHandle;
 
 /// All mutable engine state under a single lock.
 /// One Mutex prevents lock-ordering bugs that would arise from separate
@@ -15,6 +16,8 @@ use crate::audio::graph::AudioGraph;
 pub struct AppInner {
     pub buses: BTreeMap<BusId, BusRuntime>,
     pub graph: AudioGraph,
+    /// Active recording handles, keyed by recording id.
+    pub recorders: BTreeMap<String, RecorderHandle>,
     /// Global last-error string for operations not tied to a single bus.
     /// Per-bus errors live on `BusRuntime.last_error`.
     pub last_error: Option<String>,
@@ -30,6 +33,7 @@ impl AppState {
             inner: Mutex::new(AppInner {
                 buses: BusRuntime::default_set(),
                 graph: AudioGraph::new(),
+                recorders: BTreeMap::new(),
                 last_error: None,
             }),
         }

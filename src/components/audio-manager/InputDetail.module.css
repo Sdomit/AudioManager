@@ -148,6 +148,13 @@
   text-align: right;
 }
 
+.masterActions {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  flex-wrap: wrap;
+}
+
 .muteBtn {
   display: inline-flex;
   align-items: center;

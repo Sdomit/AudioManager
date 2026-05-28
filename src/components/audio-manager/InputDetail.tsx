@@ -6,19 +6,31 @@ import {
   PlusIcon,
 } from "./Icon";
 import { MeterCanvas } from "./MeterCanvas";
-import type { AudioInput, Bus, BusId, Send } from "./types";
+import { RecordButton } from "./RecordButton";
+import type {
+  ActiveRecording,
+  AudioInput,
+  Bus,
+  BusId,
+  Send,
+  TapSpec,
+} from "./types";
+import { gainToDb } from "./units";
 import styles from "./InputDetail.module.css";
 
 interface InputDetailProps {
   input: AudioInput;
   buses: Bus[];
   sends: Send[];
+  activeRecordings: ActiveRecording[];
   onGainChange: (v: number) => void;
   onMuteToggle: () => void;
   onRemove: () => void;
   onToggleSend: (busId: BusId) => void;
   onSendGainChange: (busId: BusId, v: number) => void;
   onSendMuted: (busId: BusId, muted: boolean) => void;
+  onStartRecording: (spec: TapSpec) => void;
+  onStopRecording: (id: string) => void;
 }
 
 /**
@@ -34,15 +46,26 @@ export function InputDetail({
   input,
   buses,
   sends,
+  activeRecordings,
   onGainChange,
   onMuteToggle,
   onRemove,
   onToggleSend,
   onSendGainChange,
   onSendMuted,
+  onStartRecording,
+  onStopRecording,
 }: InputDetailProps) {
   const sendMap = new Map<BusId, Send>();
   sends.forEach((s) => sendMap.set(s.busId, s));
+  const preSpec: TapSpec = { kind: "input_pre", device_id: input.id };
+  // Pre-gain capture is only possible while at least one bus engine has
+  // this input loaded (it taps inside the bus engine's output callback).
+  const anyEngineRunning = buses.some(
+    (b) =>
+      (b.state === "running" || b.state === "clipping") &&
+      sends.some((s) => s.busId === b.id && s.enabled),
+  );
 
   return (
     <div className={styles.wrap}>
@@ -99,14 +122,25 @@ export function InputDetail({
           </div>
           <span className={styles.gainReadout}>{gainToDb(input.gain)}</span>
         </div>
-        <button
-          className={`${styles.muteBtn} ${input.muted ? styles.muteBtnActive : ""}`}
-          onClick={onMuteToggle}
-          aria-pressed={input.muted}
-        >
-          <MuteIcon size={14} />
-          <span>{input.muted ? "Muted" : "Mute"}</span>
-        </button>
+        <div className={styles.masterActions}>
+          <button
+            className={`${styles.muteBtn} ${input.muted ? styles.muteBtnActive : ""}`}
+            onClick={onMuteToggle}
+            aria-pressed={input.muted}
+          >
+            <MuteIcon size={14} />
+            <span>{input.muted ? "Muted" : "Mute"}</span>
+          </button>
+          <RecordButton
+            spec={preSpec}
+            active={activeRecordings}
+            onStart={onStartRecording}
+            onStop={onStopRecording}
+            disabled={!anyEngineRunning}
+            title="Record pre-gain (dry input)"
+            size={14}
+          />
+        </div>
       </section>
 
       {/* Sends */}
@@ -164,6 +198,22 @@ export function InputDetail({
                     >
                       <MuteIcon size={12} />
                     </button>
+                    <RecordButton
+                      spec={{
+                        kind: "input_post",
+                        device_id: input.id,
+                        bus_id: bus.id,
+                      }}
+                      active={activeRecordings}
+                      onStart={onStartRecording}
+                      onStop={onStopRecording}
+                      disabled={
+                        !(bus.state === "running" || bus.state === "clipping")
+                      }
+                      title={`Record ${input.name} → ${bus.label} (post-gain)`}
+                      size={12}
+                      compact
+                    />
                   </div>
                 )}
               </div>
@@ -173,10 +223,4 @@ export function InputDetail({
       </section>
     </div>
   );
-}
-
-function gainToDb(g: number): string {
-  if (g < 0.001) return "-∞ dB";
-  const db = (g - 0.75) * 80;
-  return `${db > 0 ? "+" : ""}${db.toFixed(0)} dB`;
 }

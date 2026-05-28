@@ -5,7 +5,13 @@ import {
   RecordIcon,
   SettingsIcon,
 } from "./Icon";
-import type { Density, Preset, StreamSetupStep } from "./types";
+import { ElapsedTime } from "./RecordButton";
+import type {
+  ActiveRecording,
+  Density,
+  Preset,
+  StreamSetupStep,
+} from "./types";
 import styles from "./TopBar.module.css";
 
 interface TopBarProps {
@@ -14,6 +20,12 @@ interface TopBarProps {
   defaultPresetId: string | null;
   density: Density;
   streamSetupSteps: StreamSetupStep[];
+  canUndo: boolean;
+  canRedo: boolean;
+  /** Live recordings (used for the master REC indicator). */
+  activeRecordings: ActiveRecording[];
+  onUndo: () => void;
+  onRedo: () => void;
   onLoadPreset: (id: string) => void;
   /** Open the save-preset dialog. Parent owns the dialog state. */
   onOpenSaveDialog: () => void;
@@ -24,6 +36,12 @@ interface TopBarProps {
   onSetDefaultPreset: (id: string | null) => void;
   onDensityChange: (d: Density) => void;
   onOpenStreamSetup: () => void;
+  /** Start a master recording (one BusOut tap per running bus). */
+  onStartMasterRecording: () => void;
+  /** Stop every active recording. */
+  onStopAllRecordings: () => void;
+  /** Open the recordings drawer. */
+  onOpenRecordings: () => void;
 }
 
 /**
@@ -35,6 +53,11 @@ export function TopBar({
   defaultPresetId,
   density,
   streamSetupSteps,
+  canUndo,
+  canRedo,
+  activeRecordings,
+  onUndo,
+  onRedo,
   onLoadPreset,
   onOpenSaveDialog,
   onRenamePreset,
@@ -42,14 +65,44 @@ export function TopBar({
   onSetDefaultPreset,
   onDensityChange,
   onOpenStreamSetup,
+  onStartMasterRecording,
+  onStopAllRecordings,
+  onOpenRecordings,
 }: TopBarProps) {
   const loaded = presets.find((p) => p.id === loadedPresetId);
   const streamHealth = computeStreamHealth(streamSetupSteps);
+  const isRecording = activeRecordings.length > 0;
+  const oldestStart =
+    activeRecordings.length > 0
+      ? activeRecordings.reduce((min, r) =>
+          r.started_at_unix_ms < min ? r.started_at_unix_ms : min,
+        Number.MAX_SAFE_INTEGER)
+      : 0;
 
   return (
     <header className={styles.bar} role="banner">
       <div className={styles.left}>
         <Wordmark />
+        <div className={styles.undoGroup} role="group" aria-label="History">
+          <button
+            className={styles.undoBtn}
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            aria-label="Undo"
+          >
+            ↶
+          </button>
+          <button
+            className={styles.undoBtn}
+            onClick={onRedo}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Shift+Z)"
+            aria-label="Redo"
+          >
+            ↷
+          </button>
+        </div>
       </div>
 
       <div className={styles.center}>
@@ -66,6 +119,40 @@ export function TopBar({
       </div>
 
       <div className={styles.right}>
+        <button
+          type="button"
+          className={`${styles.recordBtn} ${isRecording ? styles.recordBtnActive : ""}`}
+          onClick={() => {
+            if (isRecording) onStopAllRecordings();
+            else onStartMasterRecording();
+          }}
+          title={
+            isRecording
+              ? `Stop all recordings (${activeRecordings.length} active)`
+              : "Start master recording (records every running bus)"
+          }
+          aria-pressed={isRecording}
+          aria-label={isRecording ? "Stop master recording" : "Start master recording"}
+        >
+          <RecordIcon size={14} />
+          <span className={styles.recordBtnLabel}>
+            {isRecording ? <ElapsedTime startedAtMs={oldestStart} /> : "REC"}
+          </span>
+          {isRecording && activeRecordings.length > 1 && (
+            <span className={styles.recordBtnCount}>{activeRecordings.length}</span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={onOpenRecordings}
+          title="Open recordings panel"
+          aria-label="Open recordings panel"
+        >
+          <RecordIcon size={16} />
+        </button>
+
         <button
           className={`${styles.streamPill} ${styles[`streamPill_${streamHealth.tone}`]}`}
           onClick={onOpenStreamSetup}

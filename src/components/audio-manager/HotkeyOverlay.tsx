@@ -40,6 +40,12 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
     ],
   },
   {
+    title: "Recording",
+    entries: [
+      { keys: ["R"], description: "Toggle master recording (every running bus)" },
+    ],
+  },
+  {
     title: "Presets",
     entries: [
       { keys: ["Ctrl", "S"], description: "Save current preset…" },

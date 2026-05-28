@@ -12,6 +12,7 @@ interface BusCardProps {
   onToggleMuted: () => void;
   onVolumeChange: (v: number) => void;
   onPickDevice: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   meterWidth?: number;
 }
 
@@ -35,6 +36,7 @@ export function BusCard({
   onToggleMuted,
   onVolumeChange,
   onPickDevice,
+  onContextMenu,
   meterWidth = 260,
 }: BusCardProps) {
   const accentColor = `var(--am-bus-${bus.id.toLowerCase()})`;
@@ -48,6 +50,7 @@ export function BusCard({
         ["--bus-accent-muted" as any]: accentMuted,
       }}
       onClick={onSelect}
+      onContextMenu={onContextMenu}
       role="group"
       aria-label={ariaLabelForBus(bus)}
       tabIndex={0}

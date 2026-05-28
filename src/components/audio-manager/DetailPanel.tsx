@@ -2,11 +2,13 @@ import { InputDetail } from "./InputDetail";
 import { BusDetail } from "./BusDetail";
 import { InfoIcon } from "./Icon";
 import type {
+  ActiveRecording,
   AudioInput,
   Bus,
   BusId,
   DetailSelection,
   Send,
+  TapSpec,
 } from "./types";
 import styles from "./DetailPanel.module.css";
 
@@ -15,6 +17,7 @@ interface DetailPanelProps {
   buses: Bus[];
   inputs: AudioInput[];
   sends: Send[];
+  activeRecordings: ActiveRecording[];
   onInputGainChange: (id: string, v: number) => void;
   onInputMuted: (id: string) => void;
   onRemoveInput: (id: string) => void;
@@ -26,6 +29,8 @@ interface DetailPanelProps {
   onBusMutedChange: (id: BusId) => void;
   onPickDevice: (id: BusId) => void;
   onSelectInputContext: (id: string) => void;
+  onStartRecording: (spec: TapSpec) => void;
+  onStopRecording: (id: string) => void;
 }
 
 /**
@@ -52,12 +57,15 @@ export function DetailPanel(props: DetailPanelProps) {
           input={input}
           buses={buses}
           sends={sends.filter((s) => s.inputId === input.id)}
+          activeRecordings={props.activeRecordings}
           onGainChange={(v) => props.onInputGainChange(input.id, v)}
           onMuteToggle={() => props.onInputMuted(input.id)}
           onRemove={() => props.onRemoveInput(input.id)}
           onToggleSend={(busId) => props.onToggleSend(input.id, busId)}
           onSendGainChange={(busId, v) => props.onSendGainChange(input.id, busId, v)}
           onSendMuted={(busId, muted) => props.onSendMuted(input.id, busId, muted)}
+          onStartRecording={props.onStartRecording}
+          onStopRecording={props.onStopRecording}
         />
       </aside>
     );
@@ -79,11 +87,14 @@ export function DetailPanel(props: DetailPanelProps) {
       <BusDetail
         bus={bus}
         routedInputs={routedInputs}
+        activeRecordings={props.activeRecordings}
         onVolumeChange={(v) => props.onBusVolumeChange(bus.id, v)}
         onToggleEnabled={() => props.onBusEnabledChange(bus.id)}
         onToggleMuted={() => props.onBusMutedChange(bus.id)}
         onPickDevice={() => props.onPickDevice(bus.id)}
         onSelectInput={props.onSelectInputContext}
+        onStartRecording={props.onStartRecording}
+        onStopRecording={props.onStopRecording}
       />
     </aside>
   );

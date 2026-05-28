@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import * as ipc from "../../ipc/commands";
-import { uiVolumeToBackend } from "./adapters";
+import { busRoleFor, uiVolumeToBackend } from "./adapters";
 import { mockStreamSetupSteps } from "./mockData";
 import {
   hydrate as fetchHydrate,
@@ -24,19 +24,29 @@ import {
   savePreset as tcSavePreset,
   deletePreset as tcDeletePreset,
   pollMeters,
+  renameBus as tcRenameBus,
 } from "./tauriCommands";
 import type {
+  ActiveRecording,
   AudioInput,
   AudioManagerState,
   Bus,
   BusId,
+  BusRole,
   Density,
   DetailSelection,
   Preset,
+  RecordingFile,
   RoutingView,
   Send,
+  TapSpec,
   UseAudioManager,
 } from "./types";
+import { takeSnapshot, useHistory, type Snapshot } from "./useHistory";
+
+function defaultBusRoleFor(id: BusId): BusRole {
+  return busRoleFor(id);
+}
 
 /* ── State + reducer ────────────────────────────────────────────────────── */
 
@@ -61,6 +71,39 @@ function writeDefaultPresetIdToStorage(id: string | null): void {
   }
 }
 
+/* Bus role overrides — client-side icon/accent re-mapping.
+ *
+ * Stored per-user in localStorage so a user who wants A2 to act as
+ * "Stream" (rather than the default "Speakers") sees the broadcast
+ * icon + purple accent on the A2 card without any backend change.
+ * Persisted only on this machine; not part of presets and not synced. */
+const BUS_ROLE_OVERRIDES_STORAGE_KEY = "audioManager.busRoleOverrides";
+
+function readBusRoleOverridesFromStorage(): Record<string, BusRole> {
+  try {
+    if (typeof window === "undefined") return {};
+    const raw = window.localStorage.getItem(BUS_ROLE_OVERRIDES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Record<string, BusRole>;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function writeBusRoleOverridesToStorage(map: Record<string, BusRole>): void {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      BUS_ROLE_OVERRIDES_STORAGE_KEY,
+      JSON.stringify(map),
+    );
+  } catch {
+    // best-effort
+  }
+}
+
 const initialState: AudioManagerState = {
   buses: [],
   inputs: [],
@@ -74,6 +117,12 @@ const initialState: AudioManagerState = {
   routingView: "nodes",
   density: "comfortable",
   selection: { kind: "none" },
+  canUndo: false,
+  canRedo: false,
+  activeRecordings: [],
+  recordingFiles: [],
+  recordingsDir: null,
+  recordingsPanelOpen: false,
 };
 
 type Action =
@@ -82,6 +131,8 @@ type Action =
   | { type: "set_bus_muted"; id: BusId; muted: boolean }
   | { type: "set_bus_volume"; id: BusId; volume: number }
   | { type: "set_bus_device"; id: BusId; device: string | null }
+  | { type: "rename_bus"; id: BusId; name: string }
+  | { type: "set_bus_role"; id: BusId; role: BusRole | null }
   | { type: "set_input_gain"; id: string; gain: number }
   | { type: "set_input_muted"; id: string; muted: boolean }
   | { type: "remove_input"; id: string }
@@ -99,7 +150,14 @@ type Action =
   | { type: "set_selection"; selection: DetailSelection }
   | { type: "open_stream_setup" }
   | { type: "close_stream_setup" }
-  | { type: "tick_meters"; busLevels: Record<BusId, number>; inputLevels: Record<string, number> };
+  | { type: "tick_meters"; busLevels: Record<BusId, number>; inputLevels: Record<string, number> }
+  | { type: "restore_snapshot"; snap: Snapshot }
+  | { type: "set_undo_redo_flags"; canUndo: boolean; canRedo: boolean }
+  | { type: "set_recordings"; recordings: ActiveRecording[] }
+  | { type: "set_recording_files"; files: RecordingFile[] }
+  | { type: "set_recordings_dir"; dir: string | null }
+  | { type: "open_recordings_panel" }
+  | { type: "close_recordings_panel" };
 
 function reducer(state: AudioManagerState, action: Action): AudioManagerState {
   switch (action.type) {
@@ -113,9 +171,17 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
       ) {
         selection = { kind: "none" };
       }
+      // Apply persisted role overrides so the user's chosen icon /
+      // accent for each bus survives every backend hydrate. Adapter
+      // can't know about localStorage; merge here.
+      const overrides = readBusRoleOverridesFromStorage();
+      const busesWithOverrides = action.buses.map((b) => {
+        const ov = overrides[b.id];
+        return ov ? { ...b, role: ov } : b;
+      });
       return {
         ...state,
-        buses: action.buses,
+        buses: busesWithOverrides,
         inputs: action.inputs,
         sends: action.sends,
         presets: action.presets,
@@ -144,6 +210,18 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
         const next = { ...b, device: action.device };
         return { ...next, state: deriveBusState(next, hasAnySend(state.sends, b.id)) };
       });
+
+    case "rename_bus":
+      return updateBus(state, action.id, (b) => ({ ...b, label: action.name }));
+
+    case "set_bus_role":
+      // Apply the override (or fall back to the default role for the id)
+      // and persist via the wrapper above. Reducer is pure — storage
+      // write happens in the setBusRoleOverride action wrapper.
+      return updateBus(state, action.id, (b) => ({
+        ...b,
+        role: action.role ?? defaultBusRoleFor(b.id),
+      }));
 
     case "set_input_gain":
       return updateInput(state, action.id, (i) => ({ ...i, gain: clamp01(action.gain) }));
@@ -269,6 +347,83 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
     case "close_stream_setup":
       return { ...state, streamSetupOpen: false };
 
+    case "restore_snapshot": {
+      const { snap } = action;
+      const currentBusMap = new Map(state.buses.map((b) => [b.id, b]));
+      const currentInputMap = new Map(state.inputs.map((i) => [i.id, i]));
+      const nextSends = snap.sends.map((s) => ({ ...s }));
+      const nextBuses: Bus[] = snap.buses.map((bs) => {
+        const cur = currentBusMap.get(bs.id);
+        const merged: Bus = cur
+          ? {
+              ...cur,
+              device: bs.device,
+              enabled: bs.enabled,
+              muted: bs.muted,
+              volume: bs.volume,
+            }
+          : {
+              id: bs.id,
+              role: "monitor",
+              label: bs.id,
+              device: bs.device,
+              state: "idle",
+              enabled: bs.enabled,
+              muted: bs.muted,
+              volume: bs.volume,
+              level: 0,
+              clipUntil: null,
+              error: null,
+            };
+        return {
+          ...merged,
+          state: deriveBusState(merged, hasAnySend(nextSends, merged.id)),
+        };
+      });
+      const nextInputs: AudioInput[] = snap.inputs.map((is) => {
+        const cur = currentInputMap.get(is.id);
+        return cur
+          ? { ...cur, name: is.name, kind: is.kind, device: is.device, gain: is.gain, muted: is.muted }
+          : {
+              id: is.id,
+              name: is.name,
+              kind: is.kind,
+              device: is.device,
+              gain: is.gain,
+              muted: is.muted,
+              level: 0,
+            };
+      });
+      const inputIds = new Set(nextInputs.map((i) => i.id));
+      const busIds = new Set(nextBuses.map((b) => b.id));
+      let selection = state.selection;
+      if (
+        (selection.kind === "input" && !inputIds.has(selection.inputId)) ||
+        (selection.kind === "bus" && !busIds.has(selection.busId))
+      ) {
+        selection = { kind: "none" };
+      }
+      return { ...state, buses: nextBuses, inputs: nextInputs, sends: nextSends, selection };
+    }
+
+    case "set_undo_redo_flags":
+      return { ...state, canUndo: action.canUndo, canRedo: action.canRedo };
+
+    case "set_recordings":
+      return { ...state, activeRecordings: action.recordings };
+
+    case "set_recording_files":
+      return { ...state, recordingFiles: action.files };
+
+    case "set_recordings_dir":
+      return { ...state, recordingsDir: action.dir };
+
+    case "open_recordings_panel":
+      return { ...state, recordingsPanelOpen: true };
+
+    case "close_recordings_panel":
+      return { ...state, recordingsPanelOpen: false };
+
     case "tick_meters":
       return {
         ...state,
@@ -334,6 +489,25 @@ export function useAudioManager(): UseAudioManager {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // Undo/redo history. push() is called before each undoable mutation.
+  // undo()/redo() return the snapshot to restore; we dispatch
+  // restore_snapshot then reconcile the backend by walking the diff.
+  const history = useHistory();
+  const recordHistory = useCallback((coalesceKey?: string) => {
+    const s = stateRef.current;
+    history.push(takeSnapshot(s.buses, s.inputs, s.sends), coalesceKey);
+  }, [history]);
+
+  // Mirror history availability into the reducer state so UI components
+  // can read it via state.canUndo / state.canRedo.
+  useEffect(() => {
+    dispatch({
+      type: "set_undo_redo_flags",
+      canUndo: history.canUndo,
+      canRedo: history.canRedo,
+    });
+  }, [history.canUndo, history.canRedo]);
+
   // Phase C: hydrate buses/inputs/sends/presets from the Rust backend on
   // mount. Phase D will replace per-action dispatches with optimistic
   // dispatch + invoke; Phase E will replace the RAF meter loop below
@@ -355,6 +529,7 @@ export function useAudioManager(): UseAudioManager {
           sends: result.sends,
           presets: result.presets,
         });
+        history.reset();
 
         if (didAutoLoadDefault.current) return;
         const pinned = readDefaultPresetIdFromStorage();
@@ -443,7 +618,10 @@ export function useAudioManager(): UseAudioManager {
       if (cancelled || stateInflight || document.hidden) return;
       stateInflight = true;
       try {
-        const r = await fetchHydrate();
+        const [r, recs] = await Promise.all([
+          fetchHydrate(),
+          ipc.listActiveRecordings().catch(() => [] as ActiveRecording[]),
+        ]);
         if (cancelled) return;
         dispatch({
           type: "hydrate",
@@ -452,6 +630,7 @@ export function useAudioManager(): UseAudioManager {
           sends: r.sends,
           presets: r.presets,
         });
+        dispatch({ type: "set_recordings", recordings: recs });
       } catch (e) {
         if (!cancelled) console.warn("state refresh failed:", e);
       } finally {
@@ -539,6 +718,7 @@ export function useAudioManager(): UseAudioManager {
   const setBusEnabled = useCallback(
     (id: BusId, enabled: boolean) => {
       const prev = getBus(id)?.enabled ?? !enabled;
+      recordHistory();
       dispatch({ type: "set_bus_enabled", id, enabled });
       ipc
         .setBusEnabled(id, enabled)
@@ -556,6 +736,7 @@ export function useAudioManager(): UseAudioManager {
       const bus = getBus(id);
       if (!bus) return;
       const prev = bus.muted;
+      recordHistory();
       dispatch({ type: "set_bus_muted", id, muted });
       ipc
         .setBusVolume(id, uiVolumeToBackend(bus.volume), muted)
@@ -569,6 +750,7 @@ export function useAudioManager(): UseAudioManager {
 
   const setBusVolume = useCallback(
     (id: BusId, volume: number) => {
+      recordHistory(`bus_volume:${id}`);
       dispatch({ type: "set_bus_volume", id, volume });
       scheduleWrite(`bus-volume:${id}`, () => {
         const bus = getBus(id);
@@ -582,6 +764,7 @@ export function useAudioManager(): UseAudioManager {
   const setBusDevice = useCallback(
     (id: BusId, device: string | null) => {
       const prev = getBus(id)?.device ?? null;
+      recordHistory();
       dispatch({ type: "set_bus_device", id, device });
       ipc
         .setBusDevice(id, device)
@@ -594,8 +777,37 @@ export function useAudioManager(): UseAudioManager {
     [getBus, refresh],
   );
 
+  const renameBus = useCallback(
+    (id: BusId, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const prev = getBus(id)?.label ?? "";
+      dispatch({ type: "rename_bus", id, name: trimmed });
+      tcRenameBus(id, trimmed)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("renameBus failed:", e);
+          dispatch({ type: "rename_bus", id, name: prev });
+        });
+    },
+    [getBus, refresh],
+  );
+
+  const setBusRoleOverride = useCallback(
+    (id: BusId, role: BusRole | null) => {
+      const cur = readBusRoleOverridesFromStorage();
+      const next: Record<string, BusRole> = { ...cur };
+      if (role === null) delete next[id];
+      else next[id] = role;
+      writeBusRoleOverridesToStorage(next);
+      dispatch({ type: "set_bus_role", id, role });
+    },
+    [],
+  );
+
   const setInputGain = useCallback(
     (id: string, gain: number) => {
+      recordHistory(`input_gain:${id}`);
       dispatch({ type: "set_input_gain", id, gain });
       scheduleWrite(`input-gain:${id}`, () => {
         const input = getInput(id);
@@ -615,6 +827,7 @@ export function useAudioManager(): UseAudioManager {
       const input = getInput(id);
       if (!input) return;
       const prev = input.muted;
+      recordHistory();
       dispatch({ type: "set_input_muted", id, muted });
       ipc
         .setInputGain(id, uiVolumeToBackend(input.gain), muted)
@@ -628,6 +841,7 @@ export function useAudioManager(): UseAudioManager {
 
   const removeInput = useCallback(
     (id: string) => {
+      recordHistory();
       dispatch({ type: "remove_input", id });
       ipc
         .removeInput(id)
@@ -642,6 +856,7 @@ export function useAudioManager(): UseAudioManager {
 
   const addInput = useCallback(
     (deviceId: string) => {
+      recordHistory();
       ipc
         .addInput(deviceId)
         .then(() => refresh())
@@ -656,6 +871,7 @@ export function useAudioManager(): UseAudioManager {
     (inputId: string, busId: BusId) => {
       const before = !!getSend(inputId, busId);
       const enabled = !before;
+      recordHistory();
       dispatch({ type: "toggle_send", inputId, busId });
       ipc
         .setSend(inputId, busId, enabled)
@@ -671,6 +887,7 @@ export function useAudioManager(): UseAudioManager {
 
   const setSendGain = useCallback(
     (inputId: string, busId: BusId, gain: number) => {
+      recordHistory(`send_gain:${inputId}|${busId}`);
       dispatch({ type: "set_send_gain", inputId, busId, gain });
       scheduleWrite(`send-gain:${inputId}|${busId}`, () => {
         const send = getSend(inputId, busId);
@@ -691,6 +908,7 @@ export function useAudioManager(): UseAudioManager {
       const send = getSend(inputId, busId);
       if (!send) return;
       const prev = send.muted;
+      recordHistory();
       dispatch({ type: "set_send_muted", inputId, busId, muted });
       ipc
         .setSendGain(
@@ -717,13 +935,14 @@ export function useAudioManager(): UseAudioManager {
           // auto-starting buses. Hydrate refreshes UI; load_preset
           // reducer action sets loadedPresetId + presetBannerVisible.
           dispatch({ type: "load_preset", id });
+          history.reset();
           refresh();
         })
         .catch((e) => {
           console.error("loadPreset failed:", e);
         });
     },
-    [refresh],
+    [history, refresh],
   );
 
   const savePreset = useCallback(
@@ -803,12 +1022,229 @@ export function useAudioManager(): UseAudioManager {
   const openStreamSetup = useCallback(() => dispatch({ type: "open_stream_setup" }), []);
   const closeStreamSetup = useCallback(() => dispatch({ type: "close_stream_setup" }), []);
 
+  // Undo / redo: restore the previous (or next) snapshot and reconcile
+  // the backend by walking the diff and invoking the matching IPC.
+  const reconcileToSnapshot = useCallback(async (target: Snapshot) => {
+    const cur = stateRef.current;
+    // Buses: enabled, muted/volume, device.
+    for (const bs of target.buses) {
+      const cb = cur.buses.find((b) => b.id === bs.id);
+      if (!cb) continue;
+      if (cb.enabled !== bs.enabled) {
+        try { await ipc.setBusEnabled(bs.id, bs.enabled); }
+        catch (e) { console.error("undo:setBusEnabled failed", e); }
+      }
+      if (cb.volume !== bs.volume || cb.muted !== bs.muted) {
+        try { await ipc.setBusVolume(bs.id, uiVolumeToBackend(bs.volume), bs.muted); }
+        catch (e) { console.error("undo:setBusVolume failed", e); }
+      }
+      if (cb.device !== bs.device) {
+        try { await ipc.setBusDevice(bs.id, bs.device); }
+        catch (e) { console.error("undo:setBusDevice failed", e); }
+      }
+    }
+    // Inputs: removed first, then added, then gain/muted on present.
+    const tgtInputIds = new Set(target.inputs.map((i) => i.id));
+    const curInputIds = new Set(cur.inputs.map((i) => i.id));
+    for (const ci of cur.inputs) {
+      if (!tgtInputIds.has(ci.id)) {
+        try { await ipc.removeInput(ci.id); }
+        catch (e) { console.error("undo:removeInput failed", e); }
+      }
+    }
+    for (const ti of target.inputs) {
+      if (!curInputIds.has(ti.id)) {
+        try { await ipc.addInput(ti.device); }
+        catch (e) { console.error("undo:addInput failed", e); }
+      }
+    }
+    for (const ti of target.inputs) {
+      const ci = cur.inputs.find((i) => i.id === ti.id);
+      if (!ci) continue;
+      if (ci.gain !== ti.gain || ci.muted !== ti.muted) {
+        try { await ipc.setInputGain(ti.id, uiVolumeToBackend(ti.gain), ti.muted); }
+        catch (e) { console.error("undo:setInputGain failed", e); }
+      }
+    }
+    // Sends: disable removed, enable added, then gain/muted on present.
+    const sendKey = (s: Send) => `${s.inputId}|${s.busId}`;
+    const curSendMap = new Map(cur.sends.map((s) => [sendKey(s), s]));
+    const tgtSendMap = new Map(target.sends.map((s) => [sendKey(s), s]));
+    for (const [k, cs] of curSendMap) {
+      if (!tgtSendMap.has(k)) {
+        try { await ipc.setSend(cs.inputId, cs.busId, false); }
+        catch (e) { console.error("undo:setSend(off) failed", e); }
+      }
+    }
+    for (const [k, ts] of tgtSendMap) {
+      const cs = curSendMap.get(k);
+      if (!cs) {
+        try { await ipc.setSend(ts.inputId, ts.busId, true); }
+        catch (e) { console.error("undo:setSend(on) failed", e); }
+      }
+      if (!cs || cs.gain !== ts.gain || cs.muted !== ts.muted) {
+        try { await ipc.setSendGain(ts.inputId, ts.busId, uiVolumeToBackend(ts.gain), ts.muted); }
+        catch (e) { console.error("undo:setSendGain failed", e); }
+      }
+    }
+  }, []);
+
+  const undo = useCallback(() => {
+    const cur = takeSnapshot(stateRef.current.buses, stateRef.current.inputs, stateRef.current.sends);
+    const target = history.undo(cur);
+    if (!target) return;
+    dispatch({ type: "restore_snapshot", snap: target });
+    reconcileToSnapshot(target).then(() => refresh()).catch(() => {});
+  }, [history, refresh, reconcileToSnapshot]);
+
+  const redo = useCallback(() => {
+    const cur = takeSnapshot(stateRef.current.buses, stateRef.current.inputs, stateRef.current.sends);
+    const target = history.redo(cur);
+    if (!target) return;
+    dispatch({ type: "restore_snapshot", snap: target });
+    reconcileToSnapshot(target).then(() => refresh()).catch(() => {});
+  }, [history, refresh, reconcileToSnapshot]);
+
+  /* ── Recording ────────────────────────────────────────────────────────── */
+
+  const refreshActiveRecordings = useCallback(async () => {
+    try {
+      const recs = await ipc.listActiveRecordings();
+      dispatch({ type: "set_recordings", recordings: recs });
+    } catch (e) {
+      console.error("listActiveRecordings failed:", e);
+    }
+  }, []);
+
+  const refreshRecordingFiles = useCallback(async () => {
+    try {
+      const [files, dir] = await Promise.all([
+        ipc.listRecordingFiles(),
+        ipc.getRecordingsDir().catch(() => null),
+      ]);
+      dispatch({ type: "set_recording_files", files });
+      if (dir !== null) dispatch({ type: "set_recordings_dir", dir });
+    } catch (e) {
+      console.error("listRecordingFiles failed:", e);
+    }
+  }, []);
+
+  // Initial fetch of recordings dir + file list (runs once after mount).
+  useEffect(() => {
+    refreshRecordingFiles().catch(() => {});
+  }, [refreshRecordingFiles]);
+
+  const startRecording = useCallback(
+    async (spec: TapSpec): Promise<ActiveRecording | null> => {
+      try {
+        const info = await ipc.startRecording(spec);
+        await refreshActiveRecordings();
+        return info;
+      } catch (e) {
+        console.error("startRecording failed:", e);
+        return null;
+      }
+    },
+    [refreshActiveRecordings],
+  );
+
+  const startMasterRecording = useCallback(
+    async (): Promise<ActiveRecording[]> => {
+      try {
+        const infos = await ipc.startMasterRecording();
+        await refreshActiveRecordings();
+        return infos;
+      } catch (e) {
+        console.error("startMasterRecording failed:", e);
+        return [];
+      }
+    },
+    [refreshActiveRecordings],
+  );
+
+  const stopRecording = useCallback(
+    async (id: string): Promise<void> => {
+      try {
+        await ipc.stopRecording(id);
+      } catch (e) {
+        console.error("stopRecording failed:", e);
+      }
+      await Promise.all([refreshActiveRecordings(), refreshRecordingFiles()]);
+    },
+    [refreshActiveRecordings, refreshRecordingFiles],
+  );
+
+  const stopAllRecordings = useCallback(async (): Promise<void> => {
+    try {
+      await ipc.stopAllRecordings();
+    } catch (e) {
+      console.error("stopAllRecordings failed:", e);
+    }
+    await Promise.all([refreshActiveRecordings(), refreshRecordingFiles()]);
+  }, [refreshActiveRecordings, refreshRecordingFiles]);
+
+  const setRecordingsDir = useCallback(
+    async (path: string): Promise<void> => {
+      try {
+        const newDir = await ipc.setRecordingsDir(path);
+        dispatch({ type: "set_recordings_dir", dir: newDir });
+        await refreshRecordingFiles();
+      } catch (e) {
+        console.error("setRecordingsDir failed:", e);
+      }
+    },
+    [refreshRecordingFiles],
+  );
+
+  const openRecordingsFolder = useCallback(async (): Promise<void> => {
+    try {
+      await ipc.openRecordingsFolder();
+    } catch (e) {
+      console.error("openRecordingsFolder failed:", e);
+    }
+  }, []);
+
+  const deleteRecordingFile = useCallback(
+    async (path: string): Promise<void> => {
+      try {
+        await ipc.deleteRecordingFile(path);
+      } catch (e) {
+        console.error("deleteRecordingFile failed:", e);
+      }
+      await refreshRecordingFiles();
+    },
+    [refreshRecordingFiles],
+  );
+
+  const openRecordingsPanel = useCallback(() => {
+    refreshRecordingFiles().catch(() => {});
+    dispatch({ type: "open_recordings_panel" });
+  }, [refreshRecordingFiles]);
+
+  const closeRecordingsPanel = useCallback(() => {
+    dispatch({ type: "close_recordings_panel" });
+  }, []);
+
   return {
     state,
+    undo,
+    redo,
     setBusEnabled,
     setBusMuted,
     setBusVolume,
     setBusDevice,
+    renameBus,
+    setBusRoleOverride,
+    startRecording,
+    startMasterRecording,
+    stopRecording,
+    stopAllRecordings,
+    refreshRecordingFiles,
+    setRecordingsDir,
+    openRecordingsFolder,
+    deleteRecordingFile,
+    openRecordingsPanel,
+    closeRecordingsPanel,
     setInputGain,
     setInputMuted,
     removeInput,

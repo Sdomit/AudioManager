@@ -236,6 +236,93 @@
   color: var(--am-text-primary);
 }
 
+/* ── Undo / Redo group ─────────────────────────────────────────────── */
+.undoGroup {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 12px;
+  gap: 2px;
+  padding: 2px;
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+}
+.undoBtn {
+  width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--am-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--am-radius-sm);
+  cursor: pointer;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast);
+}
+.undoBtn:hover:not(:disabled) {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
+}
+.undoBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── Master REC button ──────────────────────────────────────────────── */
+.recordBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--am-text-12);
+  font-family: var(--am-font-mono);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  cursor: pointer;
+  letter-spacing: var(--am-tracking-tight);
+  transition: background var(--am-dur-fast), color var(--am-dur-fast),
+    border-color var(--am-dur-fast);
+}
+.recordBtn:hover {
+  color: var(--am-meter-clip, #EF4444);
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.06);
+}
+.recordBtnActive {
+  color: white;
+  background: var(--am-meter-clip, #EF4444);
+  border-color: var(--am-meter-clip, #EF4444);
+  animation: am-topbar-rec-pulse 1.6s ease-in-out infinite;
+}
+.recordBtnActive:hover {
+  background: #DC2626;
+  border-color: #DC2626;
+  color: white;
+}
+.recordBtnLabel {
+  font-variant-numeric: tabular-nums;
+}
+.recordBtnCount {
+  font-family: var(--am-font-mono);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: var(--am-radius-pill);
+  background: rgba(255, 255, 255, 0.18);
+  color: white;
+}
+@keyframes am-topbar-rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .recordBtnActive { animation: none; }
+}
+
 /* ── Icon button ────────────────────────────────────────────────────── */
 .iconBtn {
   width: 28px;

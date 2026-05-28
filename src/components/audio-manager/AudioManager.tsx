@@ -1,20 +1,54 @@
 import { useEffect, useRef, useState } from "react";
+import { BusContextMenu } from "./BusContextMenu";
 import { BusRail } from "./BusRail";
+import { busRoleFor } from "./adapters";
 import { DetailPanel } from "./DetailPanel";
 import { DevicePicker } from "./DevicePicker";
 import { HotkeyOverlay } from "./HotkeyOverlay";
 import { InputList } from "./InputList";
 import { PresetBanner } from "./PresetBanner";
 import { PresetSaveDialog } from "./PresetSaveDialog";
+import { RecordingsPanel } from "./RecordingsPanel";
 import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
 import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
-import type { BusId } from "./types";
+import type { BusId, TapSpec } from "./types";
 
 import "./tokens.css";
 import "./base.css";
 import styles from "./AudioManager.module.css";
+
+/**
+ * Push a short status string to a visually-hidden `aria-live="polite"`
+ * region so screen readers announce transient actions (record start/stop,
+ * etc.) without taking focus. The region is created lazily on first use
+ * and reused for the rest of the session.
+ */
+function announce(message: string) {
+  if (typeof document === "undefined") return;
+  let region = document.getElementById("am-aria-live");
+  if (!region) {
+    region = document.createElement("div");
+    region.id = "am-aria-live";
+    region.setAttribute("role", "status");
+    region.setAttribute("aria-live", "polite");
+    region.setAttribute("aria-atomic", "true");
+    region.style.position = "absolute";
+    region.style.width = "1px";
+    region.style.height = "1px";
+    region.style.overflow = "hidden";
+    region.style.clip = "rect(0 0 0 0)";
+    region.style.clipPath = "inset(50%)";
+    region.style.whiteSpace = "nowrap";
+    document.body.appendChild(region);
+  }
+  // Clear first so identical sequential messages re-announce.
+  region.textContent = "";
+  window.setTimeout(() => {
+    if (region) region.textContent = message;
+  }, 20);
+}
 
 /**
  * Top-level AudioManager component.
@@ -50,6 +84,17 @@ export function AudioManager() {
     | { kind: "rename"; oldId: string; oldName: string }
   >({ kind: "closed" });
 
+  // Bus right-click context menu (position + target id).
+  const [busCtx, setBusCtx] = useState<{ id: BusId; x: number; y: number } | null>(null);
+  const busCtxTarget = busCtx ? state.buses.find((b) => b.id === busCtx.id) ?? null : null;
+
+  // Bus rename dialog. Distinct from preset rename; same dialog
+  // component, different action on confirm.
+  const [busRenameFor, setBusRenameFor] = useState<BusId | null>(null);
+  const busRenameTarget = busRenameFor
+    ? state.buses.find((b) => b.id === busRenameFor) ?? null
+    : null;
+
   const presetNames = state.presets.map((p) => p.name);
 
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
@@ -69,6 +114,9 @@ export function AudioManager() {
     inputPickerOpen ||
     presetDialog.kind !== "closed" ||
     state.streamSetupOpen ||
+    state.recordingsPanelOpen ||
+    busRenameFor !== null ||
+    busCtx !== null ||
     hotkeyOverlayOpen;
   const dialogOpenRef = useRef(dialogOpen);
   dialogOpenRef.current = dialogOpen;
@@ -95,6 +143,21 @@ export function AudioManager() {
         if (!dialogOpenRef.current) {
           setPresetDialog({ kind: "save" });
         }
+        return;
+      }
+
+      // Ctrl/Cmd+Z → undo. Ctrl/Cmd+Shift+Z (or Ctrl+Y) → redo.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (dialogOpenRef.current) return;
+        if (e.shiftKey) amRef.current.redo();
+        else amRef.current.undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        if (dialogOpenRef.current) return;
+        amRef.current.redo();
         return;
       }
 
@@ -149,6 +212,25 @@ export function AudioManager() {
         return;
       }
 
+      // R → toggle master recording. Records every running bus.
+      if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const cur2 = amRef.current;
+        if (cur2.state.activeRecordings.length > 0) {
+          void cur2.stopAllRecordings();
+          announce("Stopped all recordings.");
+        } else {
+          void cur2.startMasterRecording().then((started) => {
+            if (started.length > 0) {
+              announce(`Master recording started on ${started.length} bus${started.length === 1 ? "" : "es"}.`);
+            } else {
+              announce("Master recording: no buses running.");
+            }
+          });
+        }
+        return;
+      }
+
       // Up/Down → move selection in the input list.
       if (sel.kind === "input" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const inputs = cur.state.inputs;
@@ -181,6 +263,14 @@ export function AudioManager() {
         defaultPresetId={state.defaultPresetId}
         density={state.density}
         streamSetupSteps={state.streamSetupSteps}
+        canUndo={state.canUndo}
+        canRedo={state.canRedo}
+        onUndo={am.undo}
+        onRedo={am.redo}
+        activeRecordings={state.activeRecordings}
+        onStartMasterRecording={() => void am.startMasterRecording()}
+        onStopAllRecordings={() => void am.stopAllRecordings()}
+        onOpenRecordings={am.openRecordingsPanel}
         onLoadPreset={am.loadPreset}
         onOpenSaveDialog={() => setPresetDialog({ kind: "save" })}
         onRenamePreset={(id) => {
@@ -214,6 +304,7 @@ export function AudioManager() {
         }}
         onVolumeChange={am.setBusVolume}
         onPickDevice={(id) => setBusPickerFor(id)}
+        onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
       />
 
       <main className={styles.main}>
@@ -238,12 +329,17 @@ export function AudioManager() {
           sends={state.sends}
           view={state.routingView}
           selection={state.selection}
+          activeRecordings={state.activeRecordings}
           onViewChange={am.setRoutingView}
           onToggleSend={am.toggleSend}
           onSendGainChange={am.setSendGain}
           onSendMuted={am.setSendMuted}
           onSelectInput={(id) => am.setSelection({ kind: "input", inputId: id })}
           onSelectBus={(id) => am.setSelection({ kind: "bus", busId: id })}
+          onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
+          onStopRecording={(id: string) => void am.stopRecording(id)}
+          onAddInput={() => setInputPickerOpen(true)}
+          onRemoveInput={am.removeInput}
         />
 
         {state.routingView !== "nodes" && (
@@ -252,6 +348,7 @@ export function AudioManager() {
             buses={state.buses}
             inputs={state.inputs}
             sends={state.sends}
+            activeRecordings={state.activeRecordings}
             onInputGainChange={am.setInputGain}
             onInputMuted={(id) => {
               const input = state.inputs.find((i) => i.id === id);
@@ -277,9 +374,25 @@ export function AudioManager() {
             onSelectInputContext={(id) =>
               am.setSelection({ kind: "input", inputId: id })
             }
+            onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
+            onStopRecording={(id: string) => void am.stopRecording(id)}
           />
         )}
       </main>
+
+      <RecordingsPanel
+        open={state.recordingsPanelOpen}
+        active={state.activeRecordings}
+        files={state.recordingFiles}
+        recordingsDir={state.recordingsDir}
+        onClose={am.closeRecordingsPanel}
+        onStopRecording={(id) => void am.stopRecording(id)}
+        onStopAll={() => void am.stopAllRecordings()}
+        onOpenFolder={() => void am.openRecordingsFolder()}
+        onSetDir={(p) => void am.setRecordingsDir(p)}
+        onDelete={(p) => void am.deleteRecordingFile(p)}
+        onRefresh={() => void am.refreshRecordingFiles()}
+      />
 
       <StreamSetupSheet
         open={state.streamSetupOpen}
@@ -356,6 +469,49 @@ export function AudioManager() {
           setPresetDialog({ kind: "closed" });
         }}
         onClose={() => setPresetDialog({ kind: "closed" })}
+      />
+
+      {busCtx && busCtxTarget && (
+        <BusContextMenu
+          target={busCtxTarget}
+          defaultRole={busRoleFor(busCtxTarget.id)}
+          x={busCtx.x}
+          y={busCtx.y}
+          onRename={() => {
+            setBusRenameFor(busCtxTarget.id);
+            setBusCtx(null);
+          }}
+          onPickDevice={() => {
+            setBusPickerFor(busCtxTarget.id);
+            setBusCtx(null);
+          }}
+          onSetRole={(role) => {
+            am.setBusRoleOverride(busCtxTarget.id, role);
+            setBusCtx(null);
+          }}
+          onClose={() => setBusCtx(null)}
+        />
+      )}
+
+      <PresetSaveDialog
+        open={busRenameFor !== null}
+        initialName={busRenameTarget?.label ?? ""}
+        existingNames={
+          busRenameFor === null
+            ? []
+            : state.buses
+                .filter((b) => b.id !== busRenameFor)
+                .map((b) => b.label)
+        }
+        title="Rename bus"
+        confirmLabel="Rename"
+        onConfirm={(name) => {
+          if (busRenameFor !== null) {
+            am.renameBus(busRenameFor, name);
+          }
+          setBusRenameFor(null);
+        }}
+        onClose={() => setBusRenameFor(null)}
       />
     </div>
   );

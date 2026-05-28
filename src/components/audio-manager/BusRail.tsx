@@ -10,6 +10,8 @@ interface BusRailProps {
   onToggleMuted: (id: BusId) => void;
   onVolumeChange: (id: BusId, v: number) => void;
   onPickDevice: (id: BusId) => void;
+  /** Open the right-click context menu for a bus card. */
+  onContextMenu?: (id: BusId, x: number, y: number) => void;
 }
 
 /**
@@ -25,6 +27,7 @@ export function BusRail({
   onToggleMuted,
   onVolumeChange,
   onPickDevice,
+  onContextMenu,
 }: BusRailProps) {
   const a = buses.filter((b) => b.id.startsWith("A"));
   const b = buses.filter((b) => b.id.startsWith("B"));
@@ -42,6 +45,14 @@ export function BusRail({
             onToggleMuted={() => onToggleMuted(bus.id)}
             onVolumeChange={(v) => onVolumeChange(bus.id, v)}
             onPickDevice={() => onPickDevice(bus.id)}
+            onContextMenu={
+              onContextMenu
+                ? (e) => {
+                    e.preventDefault();
+                    onContextMenu(bus.id, e.clientX, e.clientY);
+                  }
+                : undefined
+            }
           />
         ))}
       </BusGroup>
@@ -57,6 +68,14 @@ export function BusRail({
             onToggleMuted={() => onToggleMuted(bus.id)}
             onVolumeChange={(v) => onVolumeChange(bus.id, v)}
             onPickDevice={() => onPickDevice(bus.id)}
+            onContextMenu={
+              onContextMenu
+                ? (e) => {
+                    e.preventDefault();
+                    onContextMenu(bus.id, e.clientX, e.clientY);
+                  }
+                : undefined
+            }
           />
         ))}
       </BusGroup>

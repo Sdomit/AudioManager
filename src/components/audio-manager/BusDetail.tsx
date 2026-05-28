@@ -8,17 +8,22 @@ import {
 } from "./Icon";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
-import type { AudioInput, Bus, Send } from "./types";
+import { RecordButton } from "./RecordButton";
+import type { ActiveRecording, AudioInput, Bus, Send, TapSpec } from "./types";
+import { gainToDb, levelToDb, volumeToDb } from "./units";
 import styles from "./BusDetail.module.css";
 
 interface BusDetailProps {
   bus: Bus;
   routedInputs: { input: AudioInput; send: Send }[];
+  activeRecordings: ActiveRecording[];
   onVolumeChange: (v: number) => void;
   onToggleEnabled: () => void;
   onToggleMuted: () => void;
   onPickDevice: () => void;
   onSelectInput: (id: string) => void;
+  onStartRecording: (spec: TapSpec) => void;
+  onStopRecording: (id: string) => void;
 }
 
 /**
@@ -34,14 +39,19 @@ interface BusDetailProps {
 export function BusDetail({
   bus,
   routedInputs,
+  activeRecordings,
   onVolumeChange,
   onToggleEnabled,
   onToggleMuted,
   onPickDevice,
   onSelectInput,
+  onStartRecording,
+  onStopRecording,
 }: BusDetailProps) {
   const accent = `var(--am-bus-${bus.id.toLowerCase()})`;
   const accentMuted = `var(--am-bus-${bus.id.toLowerCase()}-muted)`;
+  const busOutSpec: TapSpec = { kind: "bus_out", bus_id: bus.id };
+  const engineRunning = bus.state === "running" || bus.state === "clipping";
 
   return (
     <div
@@ -131,6 +141,15 @@ export function BusDetail({
             <MuteIcon size={14} />
             <span>{bus.muted ? "Muted" : "Mute"}</span>
           </button>
+          <RecordButton
+            spec={busOutSpec}
+            active={activeRecordings}
+            onStart={onStartRecording}
+            onStop={onStopRecording}
+            disabled={!engineRunning}
+            title={`Record ${bus.label} output`}
+            size={14}
+          />
         </div>
       </section>
 
@@ -185,21 +204,4 @@ function StatePill({ state }: { state: Bus["state"] }) {
     case "idle":
     default:             return <Pill tone="neutral">Idle</Pill>;
   }
-}
-
-function levelToDb(level: number): string {
-  if (level < 0.001) return "-∞ dB";
-  const db = 20 * Math.log10(level);
-  if (db < -60) return "-∞ dB";
-  return `${db.toFixed(0)} dB`;
-}
-function volumeToDb(vol: number): string {
-  if (vol < 0.001) return "-∞ dB";
-  const db = (vol - 0.75) * 80;
-  return `${db > 0 ? "+" : ""}${db.toFixed(0)} dB`;
-}
-function gainToDb(g: number): string {
-  if (g < 0.001) return "-∞ dB";
-  const db = (g - 0.75) * 80;
-  return `${db > 0 ? "+" : ""}${db.toFixed(0)} dB`;
 }

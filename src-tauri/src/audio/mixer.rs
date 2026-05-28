@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
+use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
+
 // ~85 ms at 48 kHz stereo.
 const RING_SIZE: usize = 16384;
 
@@ -35,6 +37,8 @@ pub struct InputSlotShared {
 
 pub struct MixerInputInfo {
     pub device_name: String,
+    /// Channel count (1 or 2) as configured for the input stream.
+    pub channels: u16,
 }
 
 /// Descriptor passed to `mixer::start` for each input.
@@ -66,8 +70,25 @@ pub struct MixerEngine {
     /// Shared atomics; index i corresponds to `inputs[i]`.
     pub shared: Arc<Vec<InputSlotShared>>,
     meters: Arc<MixerSharedMeters>,
+    /// Channel into the output callback. IPC sends `Add`/`Remove` to wire
+    /// recording taps in/out without restarting the engine.
+    pub tap_command_tx: mpsc::Sender<TapCommand>,
+    /// Output channel count (1 or 2) — needed by the recorder so it can
+    /// open a WAV file with a matching header.
+    pub out_channels: u16,
+    /// Engine sample rate. Inputs share this rate (validated at start).
+    pub sample_rate: u32,
     stop_tx: mpsc::SyncSender<()>,
     thread: Option<thread::JoinHandle<()>>,
+}
+
+/// Info bubbled out of the audio thread on a successful start, so the
+/// `MixerEngine` struct can carry stream-derived fields (sample rate,
+/// channel counts) without re-querying the device.
+struct StartInfo {
+    out_channels: u16,
+    sample_rate: u32,
+    input_channels: Vec<u16>,
 }
 
 impl MixerEngine {
@@ -75,6 +96,15 @@ impl MixerEngine {
     /// Used by set_route_gain to guard live atomic updates to the correct output bus.
     pub fn is_output_device(&self, output_id: &str) -> bool {
         self.output_device_name == output_id
+    }
+
+    /// Find an input by device name; returns (index, channels) or None.
+    pub fn input_index(&self, device_name: &str) -> Option<(usize, u16)> {
+        self.inputs
+            .iter()
+            .enumerate()
+            .find(|(_, info)| info.device_name == device_name)
+            .map(|(idx, info)| (idx, info.channels))
     }
 
     /// Update gain/mute for one input without restarting the engine.
@@ -190,8 +220,9 @@ pub fn start(
         bus_muted: AtomicBool::new(bus_muted),
     });
 
-    let (result_tx, result_rx) = mpsc::channel::<Result<(), EngineError>>();
+    let (result_tx, result_rx) = mpsc::channel::<Result<StartInfo, EngineError>>();
     let (stop_tx, stop_rx) = mpsc::sync_channel::<()>(1);
+    let (tap_command_tx, tap_command_rx) = mpsc::channel::<TapCommand>();
 
     let shared_for_thread = Arc::clone(&shared);
     let meters_for_thread = Arc::clone(&meters);
@@ -228,6 +259,7 @@ pub fn start(
             let mut input_streams = Vec::new();
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
+            let mut input_channels_meta: Vec<u16> = Vec::new();
 
             for (i, (in_name, _, _)) in in_specs.iter().enumerate() {
                 let input_device = host
@@ -268,6 +300,7 @@ pub fn start(
                 let ring = RingBuffer::<f32>::new(RING_SIZE);
                 let (mut producer, consumer) = ring.split();
                 consumers.push((consumer, in_channels));
+                input_channels_meta.push(in_channels as u16);
 
                 let in_stream_cfg: StreamConfig = in_cfg.into();
                 let input_peak_slots = Arc::clone(&shared_for_thread);
@@ -296,10 +329,32 @@ pub fn start(
             let slots = Arc::clone(&shared_for_thread);
             let shared_meters = Arc::clone(&meters_for_thread);
 
+            // Pre-allocate the active-tap vec so the audio thread never
+            // grows it during steady state. The capacity ceiling is
+            // enforced when applying TapCommand::Add.
+            let mut active_taps: Vec<ActiveTap> = Vec::with_capacity(MAX_ACTIVE_TAPS);
+            let tap_rx = tap_command_rx;
+
             let output_stream = output_device
                 .build_output_stream(
                     &out_stream_cfg,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        // Drain newly-added/removed taps. Bounded by MAX_ACTIVE_TAPS.
+                        while let Ok(cmd) = tap_rx.try_recv() {
+                            match cmd {
+                                TapCommand::Add(t) => {
+                                    if active_taps.len() < MAX_ACTIVE_TAPS {
+                                        active_taps.push(t);
+                                    }
+                                    // Silent drop above the cap is acceptable —
+                                    // IPC layer should refuse far earlier.
+                                }
+                                TapCommand::Remove(id) => {
+                                    active_taps.retain(|t| t.id != id);
+                                }
+                            }
+                        }
+
                         // Load atomics once per block, not per sample.
                         // n == slots.len() <= MAX_INPUTS (enforced at start).
                         let n = slots.len();
@@ -341,6 +396,31 @@ pub fn start(
                                 let s1 =
                                     if in_ch == 2 { consumers[i].0.pop().unwrap_or(0.0) } else { s0 };
 
+                                // Fan-out: InputPre / InputPost taps for input i.
+                                if !active_taps.is_empty() {
+                                    for tap in active_taps.iter_mut() {
+                                        match tap.kind {
+                                            CallbackTapKind::InputPre { input_index, channels }
+                                                if input_index == i =>
+                                            {
+                                                tap.push(s0);
+                                                if channels == 2 {
+                                                    tap.push(s1);
+                                                }
+                                            }
+                                            CallbackTapKind::InputPost { input_index, channels }
+                                                if input_index == i =>
+                                            {
+                                                tap.push(s0 * g);
+                                                if channels == 2 {
+                                                    tap.push(s1 * g);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+
                                 match (in_ch, out_channels) {
                                     (1, 1) => mix[0] += s0 * g,
                                     (1, 2) => { mix[0] += s0 * g; mix[1] += s0 * g; }
@@ -350,9 +430,9 @@ pub fn start(
                                 }
                             }
 
+                            // Apply bus gain post-sum, pre-clip, fan-out BusOut taps.
+                            let mut clamped_frame = [0.0f32; 2];
                             for ch in 0..out_channels {
-                                // Apply bus gain post-sum, pre-clip. A hot bus
-                                // gain registers correctly on the clip indicator.
                                 let raw = mix[ch] * bus_vol;
                                 if raw < -1.0 || raw > 1.0 {
                                     block_clipped = true;
@@ -363,6 +443,17 @@ pub fn start(
                                     block_output_peak = abs;
                                 }
                                 data[f * out_channels + ch] = clamped;
+                                clamped_frame[ch] = clamped;
+                            }
+
+                            if !active_taps.is_empty() {
+                                for tap in active_taps.iter_mut() {
+                                    if matches!(tap.kind, CallbackTapKind::BusOut) {
+                                        for ch in 0..out_channels {
+                                            tap.push(clamped_frame[ch]);
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -381,12 +472,20 @@ pub fn start(
             }
             output_stream.play().map_err(|e| EngineError { message: e.to_string() })?;
 
-            Ok((input_streams, output_stream))
+            Ok((
+                input_streams,
+                output_stream,
+                StartInfo {
+                    out_channels: out_channels as u16,
+                    sample_rate: out_sample_rate.0,
+                    input_channels: input_channels_meta,
+                },
+            ))
         })();
 
         match outcome {
-            Ok((input_streams, output_stream)) => {
-                let _ = result_tx.send(Ok(()));
+            Ok((input_streams, output_stream, info)) => {
+                let _ = result_tx.send(Ok(info));
                 drop(result_tx);
                 let _ = stop_rx.recv();
                 // Streams dropped on this thread — WASAPI handles released here.
@@ -400,14 +499,21 @@ pub fn start(
     });
 
     match result_rx.recv() {
-        Ok(Ok(())) => Ok(MixerEngine {
+        Ok(Ok(info)) => Ok(MixerEngine {
             output_device_name: output_name,
             inputs: input_specs
                 .into_iter()
-                .map(|(name, _, _)| MixerInputInfo { device_name: name })
+                .zip(info.input_channels.iter().copied())
+                .map(|((name, _, _), channels)| MixerInputInfo {
+                    device_name: name,
+                    channels,
+                })
                 .collect(),
             shared,
             meters,
+            tap_command_tx,
+            out_channels: info.out_channels,
+            sample_rate: info.sample_rate,
             stop_tx,
             thread: Some(thread_handle),
         }),
@@ -436,6 +542,7 @@ mod tests {
 
     fn test_engine(input_peaks: &[f32], output_peak: f32, clipped: bool) -> MixerEngine {
         let (stop_tx, _stop_rx) = mpsc::sync_channel::<()>(1);
+        let (tap_tx, _tap_rx) = mpsc::channel::<TapCommand>();
         let shared = input_peaks
             .iter()
             .map(|peak| InputSlotShared {
@@ -451,6 +558,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, _)| MixerInputInfo {
                     device_name: format!("fake_device_{i}"),
+                    channels: 2,
                 })
                 .collect(),
             shared: Arc::new(shared),
@@ -460,6 +568,9 @@ mod tests {
                 bus_volume: AtomicU32::new(1.0f32.to_bits()),
                 bus_muted: AtomicBool::new(false),
             }),
+            tap_command_tx: tap_tx,
+            out_channels: 2,
+            sample_rate: 48000,
             stop_tx,
             thread: None,
         }
@@ -516,6 +627,15 @@ mod tests {
         let engine = test_engine(&[], 0.0, false);
         assert!(engine.is_output_device("Speakers (Realtek)"));
         assert!(!engine.is_output_device("Headphones (USB)"));
+    }
+
+    #[test]
+    fn input_index_finds_by_name() {
+        let engine = test_engine(&[0.1, 0.2], 0.0, false);
+        let (idx, channels) = engine.input_index("fake_device_1").unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(channels, 2);
+        assert!(engine.input_index("missing").is_none());
     }
 
     #[test]

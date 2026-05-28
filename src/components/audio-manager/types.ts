@@ -73,6 +73,39 @@ export interface Preset {
   updatedAt: number;
 }
 
+/* ── Recording ──────────────────────────────────────────────────────────── */
+
+export type TapSpec =
+  | { kind: "input_pre"; device_id: string }
+  | { kind: "input_post"; device_id: string; bus_id: BusId }
+  | { kind: "bus_out"; bus_id: BusId };
+
+/**
+ * Live recording — mirrors backend `RecordingInfo` 1:1 (snake_case).
+ * Polled at ~1 Hz to update size/dropped counters in the panel.
+ */
+export interface ActiveRecording {
+  id: string;
+  spec: TapSpec;
+  file_path: string;
+  channels: number;
+  sample_rate: number;
+  started_at_unix_ms: number;
+  samples_written: number;
+  bytes_written: number;
+  dropped_samples: number;
+  engine_bus: BusId;
+  error: string | null;
+}
+
+/** WAV file in the recordings dir. */
+export interface RecordingFile {
+  name: string;
+  file_path: string;
+  size_bytes: number;
+  modified_unix_ms: number;
+}
+
 export type RoutingView = "matrix" | "flow" | "nodes";
 export type Density = "comfortable" | "compact";
 
@@ -98,6 +131,14 @@ export interface AudioManagerActions {
   setBusMuted: (id: BusId, muted: boolean) => void;
   setBusVolume: (id: BusId, volume: number) => void;
   setBusDevice: (id: BusId, device: string | null) => void;
+  /** Rename a bus (label only — id stays A1/A2/B1/B2). */
+  renameBus: (id: BusId, name: string) => void;
+  /**
+   * Override the bus visual role (icon + accent color). Stored
+   * client-side in localStorage, not in the backend or preset.
+   * Pass null to revert to the default role for the bus id.
+   */
+  setBusRoleOverride: (id: BusId, role: BusRole | null) => void;
 
   setInputGain: (id: string, gain: number) => void;
   setInputMuted: (id: string, muted: boolean) => void;
@@ -136,6 +177,23 @@ export interface AudioManagerActions {
 
   openStreamSetup: () => void;
   closeStreamSetup: () => void;
+
+  /** Undo the last undoable mutation (state + IPC reconciliation). */
+  undo: () => void;
+  /** Redo the last undone mutation. */
+  redo: () => void;
+
+  /* Recording */
+  startRecording: (spec: TapSpec) => Promise<ActiveRecording | null>;
+  startMasterRecording: () => Promise<ActiveRecording[]>;
+  stopRecording: (id: string) => Promise<void>;
+  stopAllRecordings: () => Promise<void>;
+  refreshRecordingFiles: () => Promise<void>;
+  setRecordingsDir: (path: string) => Promise<void>;
+  openRecordingsFolder: () => Promise<void>;
+  deleteRecordingFile: (path: string) => Promise<void>;
+  openRecordingsPanel: () => void;
+  closeRecordingsPanel: () => void;
 }
 
 export interface AudioManagerState {
@@ -152,6 +210,15 @@ export interface AudioManagerState {
   routingView: RoutingView;
   density: Density;
   selection: DetailSelection;
+  /** Whether an undo / redo step is available right now. */
+  canUndo: boolean;
+  canRedo: boolean;
+
+  /* Recording */
+  activeRecordings: ActiveRecording[];
+  recordingFiles: RecordingFile[];
+  recordingsDir: string | null;
+  recordingsPanelOpen: boolean;
 }
 
 export interface UseAudioManager extends AudioManagerActions {

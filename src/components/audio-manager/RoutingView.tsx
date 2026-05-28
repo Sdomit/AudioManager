@@ -3,12 +3,14 @@ import { MatrixView } from "./MatrixView";
 import { FlowView } from "./FlowView";
 import { NodeView } from "./NodeView";
 import type {
+  ActiveRecording,
   AudioInput,
   Bus,
   BusId,
   DetailSelection,
   RoutingView as RoutingViewKind,
   Send,
+  TapSpec,
 } from "./types";
 import styles from "./RoutingView.module.css";
 
@@ -18,12 +20,22 @@ interface RoutingViewProps {
   sends: Send[];
   view: RoutingViewKind;
   selection: DetailSelection;
+  activeRecordings: ActiveRecording[];
   onViewChange: (v: RoutingViewKind) => void;
   onToggleSend: (inputId: string, busId: BusId) => void;
   onSendGainChange: (inputId: string, busId: BusId, v: number) => void;
   onSendMuted: (inputId: string, busId: BusId, muted: boolean) => void;
   onSelectInput: (id: string) => void;
   onSelectBus: (id: BusId) => void;
+  onStartRecording: (spec: TapSpec) => void;
+  onStopRecording: (id: string) => void;
+  /**
+   * Open the add-input device picker. Used by NodeView (which hides
+   * the side InputList) so users can still add inputs in node view.
+   */
+  onAddInput: () => void;
+  /** Remove an input. Used by NodeView's Del shortcut for multi-select. */
+  onRemoveInput: (id: string) => void;
 }
 
 /**
@@ -38,12 +50,17 @@ export function RoutingView({
   sends,
   view,
   selection,
+  activeRecordings,
   onViewChange,
   onToggleSend,
   onSendGainChange,
   onSendMuted,
   onSelectInput,
   onSelectBus,
+  onStartRecording,
+  onStopRecording,
+  onAddInput,
+  onRemoveInput,
 }: RoutingViewProps) {
   return (
     <section className={styles.routing} aria-label="Routing">
@@ -87,11 +104,16 @@ export function RoutingView({
             inputs={inputs}
             sends={sends}
             selection={selection}
+            activeRecordings={activeRecordings}
             onToggleSend={onToggleSend}
             onSendGainChange={onSendGainChange}
             onSendMuted={onSendMuted}
             onSelectInput={onSelectInput}
             onSelectBus={onSelectBus}
+            onStartRecording={onStartRecording}
+            onStopRecording={onStopRecording}
+            onAddInput={onAddInput}
+            onRemoveInput={onRemoveInput}
           />
         )}
       </div>
