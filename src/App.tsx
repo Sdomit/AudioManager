@@ -55,6 +55,46 @@ function sendFor(input: InputChannel, busId: BusId): InputSend {
   );
 }
 
+function isLikelyVirtualAudioDevice(deviceName: string): boolean {
+  const name = deviceName.toLowerCase();
+  const patterns = [
+    "vb-audio",
+    "vb-cable",
+    "cable input",
+    "cable output",
+    "virtual cable",
+    "virtual audio cable",
+    "vac",
+    "voicemeeter",
+    "obs",
+    "loopback",
+  ];
+  return patterns.some((pattern) => name.includes(pattern));
+}
+
+function getVirtualDeviceHint(deviceName: string): string | null {
+  const name = deviceName.toLowerCase();
+  if (name.includes("cable input")) {
+    return "Virtual (playback for OBS/Discord)";
+  }
+  if (name.includes("cable output")) {
+    return "Virtual (capture side)";
+  }
+  if (name.includes("vb-cable") || name.includes("vb-audio")) {
+    return "Virtual audio cable";
+  }
+  if (name.includes("voicemeeter")) {
+    return "Virtual mixer";
+  }
+  if (name.includes("obs")) {
+    return "OBS virtual output";
+  }
+  if (name.includes("loopback")) {
+    return "Loopback device";
+  }
+  return null;
+}
+
 interface MeterBarProps {
   value: number;
   width?: number;
@@ -97,6 +137,11 @@ export default function App() {
   const availableNewInputs = useMemo(
     () => inputDevices.filter((device) => !inputs.some((input) => input.device_id === device.id)),
     [inputDevices, inputs],
+  );
+
+  const hasVirtualOutputs = useMemo(
+    () => outputDevices.some((device) => isLikelyVirtualAudioDevice(device.name)),
+    [outputDevices],
   );
 
   const applyInputPeaks = useCallback((peaks: Array<{ device_id: string; peak: number }>) => {
@@ -337,7 +382,9 @@ export default function App() {
                 <div key={bus.id} className="bus-card">
                   <div className="bus-head">
                     <div>
-                      <div className="bus-title">{bus.id}</div>
+                      <div className="bus-title">
+                        {bus.id === "B1" ? "Stream Output" : bus.id}
+                      </div>
                       {bus.output_device && (
                         <div className="text-dim">{shortName(bus.output_device)}</div>
                       )}
@@ -357,13 +404,30 @@ export default function App() {
                       }
                     >
                       <option value="">Unassigned</option>
-                      {outputDevices.map((device) => (
-                        <option key={device.id} value={device.id}>
-                          {device.name}
-                        </option>
-                      ))}
+                      {outputDevices.map((device) => {
+                        const hint = getVirtualDeviceHint(device.name);
+                        const isVirtual = isLikelyVirtualAudioDevice(device.name);
+                        return (
+                          <option key={device.id} value={device.id}>
+                            {device.name}
+                            {isVirtual && hint ? ` (${hint})` : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                   </label>
+
+                  {bus.id === "B1" && !bus.output_device && hasVirtualOutputs && (
+                    <div className="msg msg-info">
+                      Suggested: assign to a virtual cable device to stream to OBS/Discord/Zoom.
+                    </div>
+                  )}
+
+                  {bus.id === "B1" && !hasVirtualOutputs && (
+                    <div className="msg msg-warn">
+                      No virtual audio cable detected. Install VB-Cable or another virtual cable to stream.
+                    </div>
+                  )}
 
                   <div className="row-tight">
                     <button
@@ -631,6 +695,29 @@ export default function App() {
             Presets save bus routing safely. Loading does not start audio.
           </p>
         </section>
+
+        {hasVirtualOutputs && (
+          <section className="section">
+            <div className="section-header">
+              <h2 className="section-title">Stream Output Setup</h2>
+            </div>
+            <div className="stack">
+              <p className="section-hint">
+                Use Stream Output (B1) with a virtual audio cable to stream your audio to OBS, Discord, Zoom, or other applications.
+              </p>
+              <ol className="setup-steps">
+                <li>Install a virtual audio cable (e.g., VB-Cable, Virtual Audio Cable) if not already installed.</li>
+                <li>In AudioManager, assign Stream Output (B1) to the virtual cable <strong>playback/output</strong> device (usually <code>CABLE Input</code> or similar).</li>
+                <li>In your streaming or recording application (OBS, Discord, Zoom), select the matching <strong>recording/input</strong> device (usually <code>CABLE Output</code> or similar).</li>
+                <li>Send microphone, music, or browser audio to Stream Output in the input matrix below.</li>
+                <li>Start your stream or recording.</li>
+              </ol>
+              <p className="section-hint">
+                <strong>Note:</strong> Naming can be confusing. The AudioManager playback side (CABLE Input) is the recording side in OBS/Discord.
+              </p>
+            </div>
+          </section>
+        )}
       </div>
 
       {(error || systemError || presetWarnings.length > 0 || presetInfo) && (
