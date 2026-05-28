@@ -50,6 +50,15 @@ function defaultBusRoleFor(id: BusId): BusRole {
 
 /* ── State + reducer ────────────────────────────────────────────────────── */
 
+function extractErrorMessage(e: unknown, fallback: string): string {
+  if (typeof e === "object" && e !== null && "message" in e) {
+    const m = (e as { message: unknown }).message;
+    if (typeof m === "string" && m.length > 0) return m;
+  }
+  if (typeof e === "string" && e.length > 0) return e;
+  return fallback;
+}
+
 const DEFAULT_PRESET_STORAGE_KEY = "audioManager.defaultPresetId";
 
 function readDefaultPresetIdFromStorage(): string | null {
@@ -123,6 +132,7 @@ const initialState: AudioManagerState = {
   recordingFiles: [],
   recordingsDir: null,
   recordingsPanelOpen: false,
+  recordingError: null,
 };
 
 type Action =
@@ -157,7 +167,8 @@ type Action =
   | { type: "set_recording_files"; files: RecordingFile[] }
   | { type: "set_recordings_dir"; dir: string | null }
   | { type: "open_recordings_panel" }
-  | { type: "close_recordings_panel" };
+  | { type: "close_recordings_panel" }
+  | { type: "set_recording_error"; message: string | null };
 
 function reducer(state: AudioManagerState, action: Action): AudioManagerState {
   switch (action.type) {
@@ -423,6 +434,9 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
 
     case "close_recordings_panel":
       return { ...state, recordingsPanelOpen: false };
+
+    case "set_recording_error":
+      return { ...state, recordingError: action.message };
 
     case "tick_meters":
       return {
@@ -1138,10 +1152,15 @@ export function useAudioManager(): UseAudioManager {
     async (spec: TapSpec): Promise<ActiveRecording | null> => {
       try {
         const info = await ipc.startRecording(spec);
+        dispatch({ type: "set_recording_error", message: null });
         await refreshActiveRecordings();
         return info;
       } catch (e) {
         console.error("startRecording failed:", e);
+        dispatch({
+          type: "set_recording_error",
+          message: extractErrorMessage(e, "Start recording failed"),
+        });
         return null;
       }
     },
@@ -1152,10 +1171,15 @@ export function useAudioManager(): UseAudioManager {
     async (): Promise<ActiveRecording[]> => {
       try {
         const infos = await ipc.startMasterRecording();
+        dispatch({ type: "set_recording_error", message: null });
         await refreshActiveRecordings();
         return infos;
       } catch (e) {
         console.error("startMasterRecording failed:", e);
+        dispatch({
+          type: "set_recording_error",
+          message: extractErrorMessage(e, "Master recording failed"),
+        });
         return [];
       }
     },
@@ -1166,8 +1190,13 @@ export function useAudioManager(): UseAudioManager {
     async (id: string): Promise<void> => {
       try {
         await ipc.stopRecording(id);
+        dispatch({ type: "set_recording_error", message: null });
       } catch (e) {
         console.error("stopRecording failed:", e);
+        dispatch({
+          type: "set_recording_error",
+          message: extractErrorMessage(e, "Stop recording failed"),
+        });
       }
       await Promise.all([refreshActiveRecordings(), refreshRecordingFiles()]);
     },
@@ -1177,8 +1206,13 @@ export function useAudioManager(): UseAudioManager {
   const stopAllRecordings = useCallback(async (): Promise<void> => {
     try {
       await ipc.stopAllRecordings();
+      dispatch({ type: "set_recording_error", message: null });
     } catch (e) {
       console.error("stopAllRecordings failed:", e);
+      dispatch({
+        type: "set_recording_error",
+        message: extractErrorMessage(e, "Stop all recordings failed"),
+      });
     }
     await Promise.all([refreshActiveRecordings(), refreshRecordingFiles()]);
   }, [refreshActiveRecordings, refreshRecordingFiles]);
@@ -1188,9 +1222,14 @@ export function useAudioManager(): UseAudioManager {
       try {
         const newDir = await ipc.setRecordingsDir(path);
         dispatch({ type: "set_recordings_dir", dir: newDir });
+        dispatch({ type: "set_recording_error", message: null });
         await refreshRecordingFiles();
       } catch (e) {
         console.error("setRecordingsDir failed:", e);
+        dispatch({
+          type: "set_recording_error",
+          message: extractErrorMessage(e, "Set recordings directory failed"),
+        });
       }
     },
     [refreshRecordingFiles],
@@ -1201,6 +1240,10 @@ export function useAudioManager(): UseAudioManager {
       await ipc.openRecordingsFolder();
     } catch (e) {
       console.error("openRecordingsFolder failed:", e);
+      dispatch({
+        type: "set_recording_error",
+        message: extractErrorMessage(e, "Open recordings folder failed"),
+      });
     }
   }, []);
 
@@ -1208,8 +1251,13 @@ export function useAudioManager(): UseAudioManager {
     async (path: string): Promise<void> => {
       try {
         await ipc.deleteRecordingFile(path);
+        dispatch({ type: "set_recording_error", message: null });
       } catch (e) {
         console.error("deleteRecordingFile failed:", e);
+        dispatch({
+          type: "set_recording_error",
+          message: extractErrorMessage(e, "Delete recording failed"),
+        });
       }
       await refreshRecordingFiles();
     },
@@ -1223,6 +1271,10 @@ export function useAudioManager(): UseAudioManager {
 
   const closeRecordingsPanel = useCallback(() => {
     dispatch({ type: "close_recordings_panel" });
+  }, []);
+
+  const dismissRecordingError = useCallback(() => {
+    dispatch({ type: "set_recording_error", message: null });
   }, []);
 
   return {
@@ -1245,6 +1297,7 @@ export function useAudioManager(): UseAudioManager {
     deleteRecordingFile,
     openRecordingsPanel,
     closeRecordingsPanel,
+    dismissRecordingError,
     setInputGain,
     setInputMuted,
     removeInput,

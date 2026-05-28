@@ -385,6 +385,8 @@ export function AudioManager() {
         active={state.activeRecordings}
         files={state.recordingFiles}
         recordingsDir={state.recordingsDir}
+        errorMessage={state.recordingError}
+        onDismissError={am.dismissRecordingError}
         onClose={am.closeRecordingsPanel}
         onStopRecording={(id) => void am.stopRecording(id)}
         onStopAll={() => void am.stopAllRecordings()}

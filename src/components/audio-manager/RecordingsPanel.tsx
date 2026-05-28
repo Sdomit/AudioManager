@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertIcon, RecordIcon, XIcon } from "./Icon";
 import { ElapsedTime } from "./RecordButton";
 import type { ActiveRecording, RecordingFile, TapSpec } from "./types";
@@ -9,6 +9,9 @@ interface RecordingsPanelProps {
   active: ActiveRecording[];
   files: RecordingFile[];
   recordingsDir: string | null;
+  /** Surfaced recording-action error to display inline as a dismissible banner. */
+  errorMessage: string | null;
+  onDismissError: () => void;
   onClose: () => void;
   onStopRecording: (id: string) => void;
   onStopAll: () => void;
@@ -33,6 +36,8 @@ export function RecordingsPanel({
   active,
   files,
   recordingsDir,
+  errorMessage,
+  onDismissError,
   onClose,
   onStopRecording,
   onStopAll,
@@ -43,6 +48,17 @@ export function RecordingsPanel({
 }: RecordingsPanelProps) {
   const [editingDir, setEditingDir] = useState(false);
   const [dirDraft, setDirDraft] = useState("");
+
+  // Auto-refresh file list every 5 s while the panel is open so a file
+  // dropped to disk by an external process (or a recording that just
+  // stopped) shows up without the user clicking Refresh manually.
+  // Backend list_recording_files is a cheap fs read; 5 s is well under
+  // any meter-rate cost.
+  useEffect(() => {
+    if (!open) return;
+    const interval = window.setInterval(onRefresh, 5000);
+    return () => window.clearInterval(interval);
+  }, [open, onRefresh]);
 
   if (!open) return null;
 
@@ -55,6 +71,20 @@ export function RecordingsPanel({
         aria-modal="true"
         aria-labelledby="rec-panel-title"
       >
+        {errorMessage && (
+          <div className={styles.errorBanner} role="alert">
+            <AlertIcon size={14} />
+            <span className={styles.errorBannerMsg}>{errorMessage}</span>
+            <button
+              type="button"
+              className={styles.errorBannerClose}
+              onClick={onDismissError}
+              aria-label="Dismiss"
+            >
+              <XIcon size={12} />
+            </button>
+          </div>
+        )}
         <header className={styles.header}>
           <h2 id="rec-panel-title" className={styles.title}>
             <RecordIcon size={16} />
@@ -114,6 +144,11 @@ export function RecordingsPanel({
                         </span>
                       )}
                     </div>
+                    {r.error && (
+                      <div className={styles.activeError} role="alert">
+                        <AlertIcon size={10} /> {r.error}
+                      </div>
+                    )}
                   </div>
                   <button
                     className={styles.stopBtn}

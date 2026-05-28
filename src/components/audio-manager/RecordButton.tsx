@@ -60,6 +60,10 @@ export function RecordButton({
 }: RecordButtonProps) {
   const rec = findRecording(active, spec);
   const armed = !!rec;
+  // Local "click in flight" flag prevents a fast double-click from
+  // issuing two start_recording (or stop) IPC calls before the active
+  // list refresh comes back. Resets after a short window.
+  const [busy, setBusy] = useState(false);
 
   if (disabled && !armed) {
     return (
@@ -79,8 +83,14 @@ export function RecordButton({
     <button
       type="button"
       className={`${styles.btn} ${armed ? styles.btnArmed : ""} ${compact ? styles.btnCompact : ""}`}
+      disabled={busy}
       onClick={(e) => {
         e.stopPropagation();
+        if (busy) return;
+        setBusy(true);
+        // 600ms: long enough for slow IPC + active-list refresh, short
+        // enough that a deliberate re-press doesn't feel sticky.
+        window.setTimeout(() => setBusy(false), 600);
         if (rec) onStop(rec.id);
         else onStart(spec);
       }}

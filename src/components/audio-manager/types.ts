@@ -194,6 +194,8 @@ export interface AudioManagerActions {
   deleteRecordingFile: (path: string) => Promise<void>;
   openRecordingsPanel: () => void;
   closeRecordingsPanel: () => void;
+  /** Dismiss the user-visible recording error banner. */
+  dismissRecordingError: () => void;
 }
 
 export interface AudioManagerState {
@@ -219,6 +221,13 @@ export interface AudioManagerState {
   recordingFiles: RecordingFile[];
   recordingsDir: string | null;
   recordingsPanelOpen: boolean;
+  /**
+   * Surfaced error from the most recent recording action (start, stop,
+   * dir change, delete, open folder). Cleared automatically when the
+   * next recording action succeeds, or explicitly via
+   * `dismissRecordingError`.
+   */
+  recordingError: string | null;
 }
 
 export interface UseAudioManager extends AudioManagerActions {
