@@ -168,6 +168,8 @@ impl RecorderHandle {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let dropped_samples = self.dropped.load(Ordering::Relaxed);
+        let write_error = self.error.lock().ok().and_then(|g| g.clone());
         RecordingInfo {
             id: self.id.clone(),
             spec: self.spec.clone(),
@@ -177,9 +179,9 @@ impl RecorderHandle {
             started_at_unix_ms,
             samples_written: self.samples_written.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
-            dropped_samples: self.dropped.load(Ordering::Relaxed),
+            dropped_samples,
             engine_bus: self.engine_bus,
-            error: self.error.lock().ok().and_then(|g| g.clone()),
+            error: recording_status_error(write_error, dropped_samples),
         }
     }
 
@@ -391,9 +393,9 @@ fn run_writer(
             match consumer.pop() {
                 Some(sample) => {
                     if let Err(e) = writer.write_sample(sample) {
-                        let _ = error.lock().map(|mut g| {
-                            *g = Some(format!("WAV write failed: {e}"));
-                        });
+                        set_first_error(&error, format!("WAV write failed: {e}"));
+                        // Preserve successful writes in this partial batch.
+                        bytes_written.fetch_add((drained as u64) * 4, Ordering::Relaxed);
                         finalize_writer(writer, &path, &bytes_written, &error);
                         return;
                     }
@@ -418,9 +420,7 @@ fn run_writer(
     let mut tail = 0;
     while let Some(sample) = consumer.pop() {
         if let Err(e) = writer.write_sample(sample) {
-            let _ = error.lock().map(|mut g| {
-                *g = Some(format!("WAV write failed during drain: {e}"));
-            });
+            set_first_error(&error, format!("WAV write failed during drain: {e}"));
             break;
         }
         tail += 1;
@@ -437,9 +437,8 @@ fn finalize_writer(
     error: &Arc<Mutex<Option<String>>>,
 ) {
     if let Err(e) = writer.finalize() {
-        let _ = error.lock().map(|mut g| {
-            *g = Some(format!("WAV finalize failed: {e}"));
-        });
+        // Preserve root cause if a write error already happened.
+        set_first_error(error, format!("WAV finalize failed: {e}"));
         return;
     }
     // Replace the running-sum approximation with the actual file size.
@@ -489,6 +488,26 @@ fn safe_slug(input: &str) -> String {
     } else {
         trimmed
     }
+}
+
+fn set_first_error(error: &Arc<Mutex<Option<String>>>, message: String) {
+    if let Ok(mut guard) = error.lock() {
+        if guard.is_none() {
+            *guard = Some(message);
+        }
+    }
+}
+
+fn recording_status_error(error: Option<String>, dropped_samples: u64) -> Option<String> {
+    if error.is_some() {
+        return error;
+    }
+    if dropped_samples > 0 {
+        return Some(format!(
+            "Recording is lossy: dropped {dropped_samples} samples because the writer could not keep up."
+        ));
+    }
+    None
 }
 
 fn bus_short(id: BusId) -> &'static str {
@@ -711,6 +730,41 @@ mod tests {
         for s in [0.0_f32, 0.1, -0.1, 0.999, -0.999] {
             assert_eq!(consumer.pop(), Some(s));
         }
+    }
+
+    #[test]
+    fn active_tap_push_increments_dropped_counter_when_ring_is_full() {
+        let (mut tap, _consumer) = make_tap(1);
+        tap.push(0.25);
+        tap.push(0.5);
+        assert_eq!(tap.samples_written.load(Ordering::Relaxed), 1);
+        assert_eq!(tap.dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn recording_status_error_prefers_existing_error() {
+        let msg = recording_status_error(Some("WAV write failed: boom".to_string()), 42);
+        assert_eq!(msg, Some("WAV write failed: boom".to_string()));
+    }
+
+    #[test]
+    fn recording_status_error_reports_lossy_when_dropped() {
+        let msg = recording_status_error(None, 7);
+        assert_eq!(
+            msg,
+            Some(
+                "Recording is lossy: dropped 7 samples because the writer could not keep up."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn set_first_error_preserves_root_error_message() {
+        let err = Arc::new(Mutex::new(None));
+        set_first_error(&err, "first".to_string());
+        set_first_error(&err, "second".to_string());
+        assert_eq!(err.lock().unwrap().clone(), Some("first".to_string()));
     }
 
     #[test]
