@@ -40,7 +40,8 @@
 .zoomBtn,
 .zoomReadout,
 .resetBtn,
-.addInputBtn {
+.addInputBtn,
+.addGroupBtn {
   padding: 4px 10px;
   font-size: var(--am-text-11);
   font-weight: 500;
@@ -70,10 +71,18 @@
   color: var(--am-accent, #EF4444);
   font-weight: 600;
 }
+.addGroupBtn {
+  margin-left: 4px;
+  border-left: 1px solid var(--am-border-default);
+  padding-left: 10px;
+  color: rgba(170, 180, 200, 0.95);
+  font-weight: 600;
+}
 .zoomBtn:hover,
 .zoomReadout:hover,
 .resetBtn:hover,
-.addInputBtn:hover {
+.addInputBtn:hover,
+.addGroupBtn:hover {
   background: var(--am-surface-3);
   color: var(--am-text-primary);
 }
@@ -110,6 +119,32 @@
 @keyframes am-wire-flow {
   from { stroke-dashoffset: 0; }
   to   { stroke-dashoffset: -36; }
+}
+
+/* Ghost wire on an invalid drop target — pulse to grab attention. */
+@keyframes am-wire-invalid-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+.wireInvalid {
+  animation: am-wire-invalid-pulse 0.7s ease-in-out infinite;
+}
+
+/* Drop-rejection tooltip. Anchored to cursor by inline left/top from JS;
+   pointer-events: none so it never blocks the underlying drag. */
+.dropTooltip {
+  position: absolute;
+  z-index: 40;
+  padding: 4px 8px;
+  font-size: var(--am-text-11);
+  font-weight: 500;
+  color: var(--am-text-primary);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-drop-invalid, #EF4444);
+  border-radius: var(--am-radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 /* ── Common node styles ───────────────────────────────────────────── */
@@ -578,4 +613,92 @@
 
 .bgCtxItem:hover {
   background: var(--am-surface-3, rgba(255, 255, 255, 0.05));
+}
+
+/* ── Group node (Phase G-1d, frontend-only DAG demo) ───────────────── */
+.groupNode {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2, 8px);
+  padding: var(--am-space-2, 8px) var(--am-space-3, 12px);
+  background: linear-gradient(
+    180deg,
+    rgba(120, 130, 155, 0.18),
+    rgba(80, 90, 110, 0.18)
+  );
+  border: 1px dashed rgba(170, 180, 200, 0.6);
+  border-radius: var(--am-radius-lg, 10px);
+  cursor: grab;
+  user-select: none;
+  transition: border-color var(--am-dur-fast, 120ms);
+}
+.groupNode:active {
+  cursor: grabbing;
+}
+.groupNodeText {
+  flex: 1;
+  min-width: 0;
+}
+.groupNodeLabel {
+  font-size: var(--am-text-13, 13px);
+  font-weight: 600;
+  color: var(--am-text-primary);
+  letter-spacing: var(--am-tracking-tight);
+}
+.groupNodeSub {
+  font-size: var(--am-text-11, 11px);
+  font-weight: 500;
+  color: var(--am-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Group ports — small dots like input/bus ports. */
+.groupInputPort,
+.groupOutputPort {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--am-surface-1, rgba(30, 30, 40, 0.85));
+  border: 1.5px solid rgba(170, 180, 200, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  padding: 0;
+}
+.groupInputPort  { left:  -7px; }
+.groupOutputPort { right: -7px; cursor: crosshair; border: none; background: transparent; }
+.groupOutputPort .portInner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(170, 180, 200, 0.85);
+}
+.groupOutputPort:hover .portInner {
+  background: var(--am-text-primary);
+}
+
+.groupRemoveBtn {
+  position: absolute;
+  top: 4px;
+  right: 14px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--am-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--am-radius-sm, 4px);
+}
+.groupRemoveBtn:hover {
+  background: var(--am-surface-3, rgba(255, 255, 255, 0.05));
+  color: var(--am-text-primary);
 }
