@@ -76,5 +76,26 @@ export interface BusStatus {
 
 export interface SystemStatus {
   buses: BusStatus[];
+  inputs: InputChannel[];
+  input_peaks: InputPeakStatus[];
   last_error: string | null;
+}
+
+export interface InputSend {
+  bus_id: BusId;
+  enabled: boolean;
+  volume: number;
+  muted: boolean;
+}
+
+export interface InputChannel {
+  device_id: string;
+  gain: number;
+  muted: boolean;
+  sends: InputSend[];
+}
+
+export interface InputPeakStatus {
+  device_id: string;
+  peak: number;
 }

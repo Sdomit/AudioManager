@@ -143,6 +143,10 @@ impl BusRuntime {
             None => (0.0, false),
         };
 
+        self.status_from_meters(output_peak, clipped_recently)
+    }
+
+    pub fn status_from_meters(&self, output_peak: f32, clipped_recently: bool) -> BusStatus {
         BusStatus {
             id: self.config.id,
             name: self.config.name.clone(),

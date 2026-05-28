@@ -4,6 +4,7 @@ import type {
   BusStatus,
   DeviceInfo,
   EngineStatus,
+  InputChannel,
   PresetLoadResult,
   PresetSummary,
   PassthroughStatus,
@@ -72,6 +73,39 @@ export const setRouteGain = (
   muted: boolean,
 ): Promise<Route[]> =>
   invoke<Route[]>("set_route_gain", { inputId, outputId, volume, muted });
+
+// ── Phase 8B matrix commands ──────────────────────────────────────────────────
+
+export const listInputs = (): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("list_inputs");
+
+export const addInput = (deviceId: string): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("add_input", { deviceId });
+
+export const removeInput = (deviceId: string): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("remove_input", { deviceId });
+
+export const setInputGain = (
+  deviceId: string,
+  gain: number,
+  muted: boolean,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("set_input_gain", { deviceId, gain, muted });
+
+export const setSend = (
+  deviceId: string,
+  busId: BusId,
+  enabled: boolean,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("set_send", { deviceId, busId, enabled });
+
+export const setSendGain = (
+  deviceId: string,
+  busId: BusId,
+  volume: number,
+  muted: boolean,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("set_send_gain", { deviceId, busId, volume, muted });
 
 // ── Phase 8A: output buses ────────────────────────────────────────────────────
 

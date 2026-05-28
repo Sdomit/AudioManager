@@ -2,9 +2,11 @@ mod audio;
 mod presets;
 mod state;
 
+use std::collections::BTreeMap;
+
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::devices::{DeviceInfo, DeviceListError};
-use audio::graph::RouteState;
+use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
 use audio::routing::Route;
 use presets::{PresetLoadResult, PresetLoadWarning, PresetRouteV1, PresetSummary};
@@ -24,23 +26,18 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Stop the engine for `bus_id` and restart it from current graph state.
+/// Stop the engine for `bus_id` and restart it from current matrix state.
 ///
-/// Phase 8A: a bus runs only when all of these are true:
+/// A bus runs only when all of these are true:
 ///   * `config.enabled`
 ///   * `config.output_device_id` is `Some(_)`
-///   * The graph has at least one Active route to that device.
-///
-/// Errors set `bus.last_error` on the failing bus and bubble up. Other buses
-/// are not touched.
+///   * The graph has at least one enabled send to `bus_id`
 fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
     let (enabled, output_id, bus_vol, bus_muted) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
         })?;
-        // Drop any prior engine before potentially starting a new one. Drop
-        // joins the audio thread synchronously so WASAPI handles are released
-        // before we attempt to reopen the same device below.
+        // Drop first so WASAPI handles are released before a restart attempt.
         bus.engine = None;
         (
             bus.config.enabled,
@@ -53,17 +50,16 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
     if !enabled {
         return Ok(());
     }
-    let output_id = match output_id {
-        Some(id) => id,
-        None => return Ok(()),
+    let Some(output_id) = output_id else {
+        return Ok(());
     };
 
-    let active = inner.graph.active_inputs_for_output(&output_id);
-    if active.is_empty() {
+    let active_inputs = inner.graph.effective_inputs_for_bus(bus_id);
+    if active_inputs.is_empty() {
         return Ok(());
     }
 
-    let mixer_inputs: Vec<MixerInput> = active
+    let mixer_inputs: Vec<MixerInput> = active_inputs
         .into_iter()
         .map(|(name, vol, muted)| MixerInput { device_name: name, gain: vol, muted })
         .collect();
@@ -94,17 +90,26 @@ fn new_last_error(inner: &mut AppInner, message: impl Into<String>) -> EngineErr
     EngineError { message }
 }
 
+fn ensure_input_name(device_id: &str) -> Result<(), EngineError> {
+    let inputs = audio::devices::list_input_devices().map_err(|err| EngineError {
+        message: format!("Failed to list input devices: {}", err.message),
+    })?;
+    if inputs.iter().any(|device| device.id == device_id) {
+        Ok(())
+    } else {
+        Err(EngineError { message: format!("Input device not found: {device_id}") })
+    }
+}
+
 /// True when bus A1's currently-assigned output device matches `output_id`.
-/// Used by the Phase 8A compatibility shim: legacy single-bus commands only
-/// operate on A1, and reject attempts to route to a different device while A1
-/// is already bound elsewhere.
+/// Legacy single-output commands still operate on A1 for compatibility.
 fn a1_accepts(inner: &AppInner, output_id: &str) -> bool {
     inner
         .buses
         .get(&BusId::A1)
         .and_then(|b| b.config.output_device_id.as_deref())
         .map(|dev| dev == output_id)
-        .unwrap_or(true) // unassigned → free to bind
+        .unwrap_or(true)
 }
 
 fn bind_a1_to(inner: &mut AppInner, output_id: &str) {
@@ -114,40 +119,65 @@ fn bind_a1_to(inner: &mut AppInner, output_id: &str) {
     }
 }
 
+fn legacy_routes(inner: &AppInner) -> Vec<Route> {
+    let a1 = inner.buses.get(&BusId::A1);
+    let output = a1.and_then(|bus| bus.config.output_device_id.as_deref());
+    let running = a1.and_then(|bus| bus.engine.as_ref()).is_some();
+    inner.graph.to_legacy_routes_a1(output, running)
+}
+
 fn apply_preset_routes(
     inner: &mut AppInner,
     routes: &[PresetRouteV1],
 ) -> Result<Vec<Route>, EngineError> {
-    // Safe load: never auto-start audio. Tear down every bus engine and clear
-    // the graph; user must enable routes manually after loading.
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
     }
     inner.graph.clear();
 
+    let mut a1_output: Option<String> = None;
     for route in routes {
-        let state = if route.enabled { RouteState::Enabled } else { RouteState::Disabled };
-        inner.graph.upsert_route(&route.input.id, &route.output.id, state);
-        if !inner.graph.set_route_gain(
+        if a1_output.is_none() {
+            a1_output = Some(route.output.id.clone());
+        }
+        if route.enabled && !a1_accepts(inner, &route.output.id) {
+            return Err(EngineError {
+                message: "Preset targets multiple outputs. Current legacy preset format only maps to A1."
+                    .to_string(),
+            });
+        }
+        if !inner.graph.has_input(&route.input.id) {
+            inner.graph.add_input(&route.input.id);
+        }
+        if !inner.graph.set_send(&route.input.id, BusId::A1, route.enabled) {
+            return Err(EngineError {
+                message: format!("Failed to apply preset route '{}'", route.input.id),
+            });
+        }
+        if !inner.graph.set_send_gain(
             &route.input.id,
-            &route.output.id,
+            BusId::A1,
             route.volume.clamp(0.0, 2.0),
             route.muted,
         ) {
             return Err(EngineError {
-                message: format!(
-                    "Failed to apply preset route '{} → {}'",
-                    route.input.id, route.output.id
-                ),
+                message: format!("Failed to apply preset gain '{}'", route.input.id),
             });
         }
     }
 
-    Ok(inner.graph.to_routes())
+    if let Some(output) = a1_output {
+        bind_a1_to(inner, &output);
+    }
+    if let Some(bus) = inner.buses.get_mut(&BusId::A1) {
+        bus.engine = None;
+    }
+
+    Ok(legacy_routes(inner))
 }
 
-// ── Phase 1 passthrough (compat: A1 only) ─────────────────────────────────────
+// ── IPC status payloads ───────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
 struct PassthroughStatus {
@@ -168,10 +198,20 @@ struct EngineStatus {
 }
 
 #[derive(serde::Serialize)]
+struct InputPeakStatus {
+    device_id: String,
+    peak: f32,
+}
+
+#[derive(serde::Serialize)]
 struct SystemStatus {
     buses: Vec<BusStatus>,
+    inputs: Vec<InputChannel>,
+    input_peaks: Vec<InputPeakStatus>,
     last_error: Option<String>,
 }
+
+// ── Phase 1 passthrough (compat: A1 only) ─────────────────────────────────────
 
 #[tauri::command]
 fn start_passthrough(
@@ -179,15 +219,17 @@ fn start_passthrough(
     input_id: String,
     output_id: String,
 ) -> Result<(), EngineError> {
+    ensure_input_name(&input_id)?;
+
     let mut inner = state.inner.lock().unwrap();
-    // Reset every bus and route — passthrough is exclusive single-bus mode.
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
     }
-    inner.graph.deactivate_all();
+    inner.graph.clear();
+    inner.graph.add_input(&input_id);
+    inner.graph.set_send(&input_id, BusId::A1, true);
     bind_a1_to(&mut inner, &output_id);
-    inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
 
     if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
         return Err(store_last_error(&mut inner, err));
@@ -203,7 +245,7 @@ fn stop_passthrough(state: tauri::State<AppState>) -> Result<(), EngineError> {
         bus.engine = None;
         bus.last_error = None;
     }
-    inner.graph.deactivate_all();
+    inner.graph.clear();
     inner.last_error = None;
     Ok(())
 }
@@ -213,18 +255,16 @@ fn get_passthrough_status(state: tauri::State<AppState>) -> PassthroughStatus {
     let inner = state.inner.lock().unwrap();
     let a1 = inner.buses.get(&BusId::A1);
     match a1.and_then(|b| b.engine.as_ref()) {
-        Some(e) => PassthroughStatus {
+        Some(engine) => PassthroughStatus {
             running: true,
-            input_device: e.inputs.first().map(|i| i.device_name.clone()),
-            output_device: Some(e.output_device_name.clone()),
+            input_device: engine.inputs.first().map(|i| i.device_name.clone()),
+            output_device: Some(engine.output_device_name.clone()),
         },
         None => PassthroughStatus { running: false, input_device: None, output_device: None },
     }
 }
 
 /// Legacy alias: returns bus A1's status in the old `EngineStatus` shape.
-/// Reads A1's engine meters with reset — calling this in the same polling
-/// cycle as `list_buses` will produce zero peaks on whichever call runs second.
 #[tauri::command]
 fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
     let inner = state.inner.lock().unwrap();
@@ -262,6 +302,8 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
     }
 }
 
+// ── Presets (Phase 6 V1 compatibility) ───────────────────────────────────────
+
 #[tauri::command]
 fn list_presets(app: tauri::AppHandle) -> Result<Vec<PresetSummary>, EngineError> {
     presets::list_preset_summaries(&app)
@@ -274,7 +316,7 @@ fn save_preset(
     name: String,
 ) -> Result<PresetSummary, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    let preset = presets::build_preset_from_routes(&name, &inner.graph.to_routes())?;
+    let preset = presets::build_preset_from_routes(&name, &legacy_routes(&inner))?;
     let path = presets::preset_file_path(&app, &preset.name)?;
     presets::write_preset_file(&path, &preset)?;
     inner.last_error = None;
@@ -317,16 +359,14 @@ fn delete_preset(
     Ok(())
 }
 
-// ── Phase 4 routing commands (compat: route through A1 only) ──────────────────
+// ── Legacy route commands (A1 compatibility) ─────────────────────────────────
 
 #[tauri::command]
 fn get_routes(state: tauri::State<AppState>) -> Vec<Route> {
-    state.inner.lock().unwrap().graph.to_routes()
+    let inner = state.inner.lock().unwrap();
+    legacy_routes(&inner)
 }
 
-/// Enable or disable a route. Phase 8A keeps the legacy single-bus contract:
-/// every route still funnels through bus A1, so a different output device
-/// must not be active on A1 when enabling.
 #[tauri::command]
 fn set_route(
     state: tauri::State<AppState>,
@@ -344,23 +384,26 @@ fn set_route(
                  Stop the current output before enabling another.",
             ));
         }
+        if !inner.graph.has_input(&input_id) {
+            inner.graph.add_input(&input_id);
+        }
         bind_a1_to(&mut inner, &output_id);
-        inner.graph.upsert_route(&input_id, &output_id, RouteState::Active);
-        if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
-            return Err(store_last_error(&mut inner, err));
-        }
+        inner.graph.set_send(&input_id, BusId::A1, true);
     } else {
-        inner.graph.upsert_route(&input_id, &output_id, RouteState::Disabled);
-        if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
-            return Err(store_last_error(&mut inner, err));
+        if !inner.graph.has_input(&input_id) {
+            inner.graph.add_input(&input_id);
         }
+        inner.graph.set_send(&input_id, BusId::A1, false);
+    }
+
+    if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
+        return Err(store_last_error(&mut inner, err));
     }
 
     inner.last_error = None;
-    Ok(inner.graph.to_routes())
+    Ok(legacy_routes(&inner))
 }
 
-/// Stop all routes on every bus and clear the graph.
 #[tauri::command]
 fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
@@ -373,7 +416,6 @@ fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     Ok(())
 }
 
-/// Update per-route gain and mute. Atomic when the route is active — no engine restart.
 #[tauri::command]
 fn set_route_gain(
     state: tauri::State<AppState>,
@@ -384,33 +426,186 @@ fn set_route_gain(
 ) -> Result<Vec<Route>, EngineError> {
     let volume = volume.clamp(0.0, 2.0);
     let mut inner = state.inner.lock().unwrap();
+    let a1_output = inner
+        .buses
+        .get(&BusId::A1)
+        .and_then(|bus| bus.config.output_device_id.as_ref())
+        .cloned();
 
-    if !inner.graph.set_route_gain(&input_id, &output_id, volume, muted) {
+    if a1_output.as_deref() != Some(output_id.as_str()) || !inner.graph.has_input(&input_id) {
         return Err(new_last_error(
             &mut inner,
             format!("Route not found: {input_id} → {output_id}"),
         ));
     }
 
-    // Atomic update — only when the running engine is on the same output bus.
-    if let Some(bus) = inner.buses.get(&BusId::A1) {
-        if let Some(engine) = bus.engine.as_ref() {
-            if engine.is_output_device(&output_id) {
-                engine.update_gain(&input_id, volume, muted);
+    if !inner.graph.set_send_gain(&input_id, BusId::A1, volume, muted) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Route not found: {input_id} → {output_id}"),
+        ));
+    }
+
+    if let Some((effective_gain, effective_muted, enabled)) =
+        inner.graph.effective_input_for_bus(&input_id, BusId::A1)
+    {
+        if enabled {
+            if let Some(bus) = inner.buses.get(&BusId::A1) {
+                if let Some(engine) = bus.engine.as_ref() {
+                    if engine.is_output_device(&output_id) {
+                        engine.update_gain(&input_id, effective_gain, effective_muted);
+                    }
+                }
             }
         }
     }
 
     inner.last_error = None;
-    Ok(inner.graph.to_routes())
+    Ok(legacy_routes(&inner))
 }
 
-// ── Phase 8A bus commands ─────────────────────────────────────────────────────
+// ── Phase 8B matrix commands ──────────────────────────────────────────────────
 
-/// Read the current status of every bus. Side effect: resets per-bus output
-/// peak and clip flag (matches the existing meter polling contract). Callers
-/// should pick either `list_buses` or `get_engine_status` per polling cycle,
-/// not both.
+#[tauri::command]
+fn list_inputs(state: tauri::State<AppState>) -> Vec<InputChannel> {
+    state.inner.lock().unwrap().graph.list_inputs()
+}
+
+#[tauri::command]
+fn add_input(
+    state: tauri::State<AppState>,
+    device_id: String,
+) -> Result<Vec<InputChannel>, EngineError> {
+    ensure_input_name(&device_id)?;
+    let mut inner = state.inner.lock().unwrap();
+    inner.graph.add_input(&device_id);
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+#[tauri::command]
+fn remove_input(
+    state: tauri::State<AppState>,
+    device_id: String,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    let affected: Vec<BusId> = BusId::ALL
+        .into_iter()
+        .filter(|bus_id| {
+            inner
+                .graph
+                .get_send(&device_id, *bus_id)
+                .map(|send| send.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if !inner.graph.remove_input(&device_id) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+
+    for bus_id in affected {
+        if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+            return Err(store_last_error(&mut inner, err));
+        }
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+#[tauri::command]
+fn set_input_gain(
+    state: tauri::State<AppState>,
+    device_id: String,
+    gain: f32,
+    muted: bool,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_input_gain(&device_id, gain, muted) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+
+    for bus_id in BusId::ALL {
+        if let Some((effective_gain, effective_muted, enabled)) =
+            inner.graph.effective_input_for_bus(&device_id, bus_id)
+        {
+            if enabled {
+                if let Some(bus) = inner.buses.get(&bus_id) {
+                    if let Some(engine) = bus.engine.as_ref() {
+                        engine.update_gain(&device_id, effective_gain, effective_muted);
+                    }
+                }
+            }
+        }
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+#[tauri::command]
+fn set_send(
+    state: tauri::State<AppState>,
+    device_id: String,
+    bus_id: BusId,
+    enabled: bool,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_send(&device_id, bus_id, enabled) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+        return Err(store_last_error(&mut inner, err));
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+#[tauri::command]
+fn set_send_gain(
+    state: tauri::State<AppState>,
+    device_id: String,
+    bus_id: BusId,
+    volume: f32,
+    muted: bool,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_send_gain(&device_id, bus_id, volume, muted) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+
+    if let Some((effective_gain, effective_muted, enabled)) =
+        inner.graph.effective_input_for_bus(&device_id, bus_id)
+    {
+        if enabled {
+            if let Some(bus) = inner.buses.get(&bus_id) {
+                if let Some(engine) = bus.engine.as_ref() {
+                    engine.update_gain(&device_id, effective_gain, effective_muted);
+                }
+            }
+        }
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+// ── Phase 8A/8B bus commands ──────────────────────────────────────────────────
+
 #[tauri::command]
 fn list_buses(state: tauri::State<AppState>) -> Vec<BusStatus> {
     let inner = state.inner.lock().unwrap();
@@ -420,14 +615,45 @@ fn list_buses(state: tauri::State<AppState>) -> Vec<BusStatus> {
 #[tauri::command]
 fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let inner = state.inner.lock().unwrap();
+
+    let mut input_peaks_by_device: BTreeMap<String, f32> = BTreeMap::new();
+    let mut buses = Vec::with_capacity(inner.buses.len());
+
+    for bus in inner.buses.values() {
+        let (output_peak, clipped_recently) = match bus.engine.as_ref() {
+            Some(engine) => {
+                let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
+                for (idx, info) in engine.inputs.iter().enumerate() {
+                    let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
+                    input_peaks_by_device
+                        .entry(info.device_name.clone())
+                        .and_modify(|current| {
+                            if peak > *current {
+                                *current = peak;
+                            }
+                        })
+                        .or_insert(peak);
+                }
+                (output_peak, clipped_recently)
+            }
+            None => (0.0, false),
+        };
+        buses.push(bus.status_from_meters(output_peak, clipped_recently));
+    }
+
+    let input_peaks = input_peaks_by_device
+        .into_iter()
+        .map(|(device_id, peak)| InputPeakStatus { device_id, peak })
+        .collect();
+
     SystemStatus {
-        buses: inner.buses.values().map(|b| b.read_status()).collect(),
+        buses,
+        inputs: inner.graph.list_inputs(),
+        input_peaks,
         last_error: inner.last_error.clone(),
     }
 }
 
-/// Assign or unassign the output device for a bus. Rebuilds the bus engine
-/// so the new device is picked up. Pass `None` to unassign and stop the bus.
 #[tauri::command]
 fn set_bus_device(
     state: tauri::State<AppState>,
@@ -443,7 +669,6 @@ fn set_bus_device(
     }
     if let Err(err) = rebuild_bus(&mut inner, bus_id) {
         let _ = store_last_error(&mut inner, err.clone());
-        // Status still returned so the UI sees the per-bus last_error.
         let bus = inner.buses.get(&bus_id).expect("bus exists");
         return Ok(bus.read_status());
     }
@@ -451,8 +676,6 @@ fn set_bus_device(
     Ok(bus.read_status())
 }
 
-/// Atomically update a bus's volume/mute. No engine restart when the bus is
-/// running. Volume clamped to [0.0, 2.0]; non-finite values fall back to 1.0.
 #[tauri::command]
 fn set_bus_volume(
     state: tauri::State<AppState>,
@@ -473,9 +696,6 @@ fn set_bus_volume(
     Ok(bus.read_status())
 }
 
-/// Enable or disable a bus. Disabling stops the bus engine immediately.
-/// Enabling rebuilds the bus, which only starts an engine when a device is
-/// assigned AND the graph has at least one active route to that device.
 #[tauri::command]
 fn set_bus_enabled(
     state: tauri::State<AppState>,
@@ -498,8 +718,6 @@ fn set_bus_enabled(
     Ok(bus.read_status())
 }
 
-/// Rename a bus. Trims whitespace; rejects empty names. Does not touch the
-/// engine.
 #[tauri::command]
 fn rename_bus(
     state: tauri::State<AppState>,
@@ -540,6 +758,12 @@ pub fn run() {
             set_route,
             clear_routes,
             set_route_gain,
+            list_inputs,
+            add_input,
+            remove_input,
+            set_input_gain,
+            set_send,
+            set_send_gain,
             list_buses,
             get_system_status,
             set_bus_device,

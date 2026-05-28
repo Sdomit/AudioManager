@@ -2,11 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// Flat route representation used at the IPC boundary.
 ///
-/// Constructed exclusively by `AudioGraph::to_routes()`.
-/// `enabled` and `active` are derived from `RouteState`:
-///   Disabled → enabled=false, active=false
-///   Enabled  → enabled=true,  active=false
-///   Active   → enabled=true,  active=true
+/// Constructed by legacy compatibility helpers that map A1 send state into
+/// the Phase 4/5 route shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Route {
     pub input_id: String,
