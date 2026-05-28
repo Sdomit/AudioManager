@@ -279,7 +279,7 @@ export default function App() {
     void withBusy(async () => {
       const result = await loadPreset(selectedPreset);
       setPresetWarnings(result.warnings);
-      setPresetInfo(`Loaded preset '${result.preset.name}' in safe mode.`);
+      setPresetInfo(`Loaded preset '${result.preset.name}'. Audio remains stopped until you manually enable buses.`);
       await syncSystemStatus();
     });
   };
@@ -306,7 +306,7 @@ export default function App() {
     <main className="app">
       <header className="app-header">
         <h1 className="app-title">Audio Manager</h1>
-        <span className="app-version">Phase 8B</span>
+        <span className="app-version">Phase 8C</span>
         <span className="header-spacer" />
         <span className={`badge ${runningBusCount > 0 ? "badge-ok" : "badge-stopped"}`}>
           {runningBusCount > 0 ? `${runningBusCount} running` : "stopped"}
@@ -570,7 +570,7 @@ export default function App() {
 
         <section className="section">
           <div className="section-header">
-            <h2 className="section-title">Presets (Phase 6 Format)</h2>
+            <h2 className="section-title">Presets (Phase 8C)</h2>
           </div>
           <div className="stack">
             <div className="row">
@@ -600,7 +600,7 @@ export default function App() {
                 {presets.length === 0 && <option value="">No presets</option>}
                 {presets.map((preset) => (
                   <option key={preset.name} value={preset.name}>
-                    {preset.name} ({preset.route_count} routes)
+                    {preset.name} (v{preset.schema_version}, {preset.route_count} routes)
                   </option>
                 ))}
               </select>
@@ -621,7 +621,7 @@ export default function App() {
             </div>
           </div>
           <p className="section-hint">
-            Presets will be upgraded for bus routing in Phase 8C.
+            Presets save bus routing safely. Loading does not start audio.
           </p>
         </section>
       </div>

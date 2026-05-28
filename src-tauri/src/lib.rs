@@ -9,7 +9,7 @@ use audio::devices::{DeviceInfo, DeviceListError};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
 use audio::routing::Route;
-use presets::{PresetLoadResult, PresetLoadWarning, PresetRouteV1, PresetSummary};
+use presets::{PresetFileV2, PresetLoadResult, PresetLoadWarning, PresetSummary};
 use state::{AppInner, AppState};
 
 // ── Device enumeration ────────────────────────────────────────────────────────
@@ -126,55 +126,68 @@ fn legacy_routes(inner: &AppInner) -> Vec<Route> {
     inner.graph.to_legacy_routes_a1(output, running)
 }
 
-fn apply_preset_routes(
+fn apply_preset_state(
     inner: &mut AppInner,
-    routes: &[PresetRouteV1],
-) -> Result<Vec<Route>, EngineError> {
+    preset: &PresetFileV2,
+) -> Result<(), EngineError> {
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
     }
     inner.graph.clear();
 
-    let mut a1_output: Option<String> = None;
-    for route in routes {
-        if a1_output.is_none() {
-            a1_output = Some(route.output.id.clone());
-        }
-        if route.enabled && !a1_accepts(inner, &route.output.id) {
-            return Err(EngineError {
-                message: "Preset targets multiple outputs. Current legacy preset format only maps to A1."
-                    .to_string(),
-            });
-        }
-        if !inner.graph.has_input(&route.input.id) {
-            inner.graph.add_input(&route.input.id);
-        }
-        if !inner.graph.set_send(&route.input.id, BusId::A1, route.enabled) {
-            return Err(EngineError {
-                message: format!("Failed to apply preset route '{}'", route.input.id),
-            });
-        }
-        if !inner.graph.set_send_gain(
-            &route.input.id,
-            BusId::A1,
-            route.volume.clamp(0.0, 2.0),
-            route.muted,
-        ) {
-            return Err(EngineError {
-                message: format!("Failed to apply preset gain '{}'", route.input.id),
-            });
-        }
-    }
-
-    if let Some(output) = a1_output {
-        bind_a1_to(inner, &output);
-    }
-    if let Some(bus) = inner.buses.get_mut(&BusId::A1) {
+    for bus_preset in &preset.buses {
+        let bus = inner.buses.get_mut(&bus_preset.id).ok_or_else(|| EngineError {
+            message: format!("Unknown bus: {:?}", bus_preset.id),
+        })?;
+        bus.config.name = bus_preset.name.clone();
+        bus.config.output_device_id = bus_preset.output.as_ref().map(|output| output.id.clone());
+        bus.config.volume = BusConfig::clamp_volume(bus_preset.volume);
+        bus.config.muted = bus_preset.muted;
+        bus.config.enabled = bus_preset.enabled;
         bus.engine = None;
+        bus.last_error = None;
     }
 
-    Ok(legacy_routes(inner))
+    for input_preset in &preset.inputs {
+        if !inner.graph.has_input(&input_preset.device.id) {
+            inner.graph.add_input(&input_preset.device.id);
+        }
+
+        if !inner
+            .graph
+            .set_input_gain(&input_preset.device.id, input_preset.gain, input_preset.muted)
+        {
+            return Err(EngineError {
+                message: format!("Failed to apply preset input '{}'", input_preset.device.id),
+            });
+        }
+
+        for send in &input_preset.sends {
+            if !inner.graph.set_send(&input_preset.device.id, send.bus_id, send.enabled) {
+                return Err(EngineError {
+                    message: format!(
+                        "Failed to apply preset send '{}:{:?}'",
+                        input_preset.device.id, send.bus_id
+                    ),
+                });
+            }
+            if !inner
+                .graph
+                .set_send_gain(&input_preset.device.id, send.bus_id, send.volume, send.muted)
+            {
+                return Err(EngineError {
+                    message: format!(
+                        "Failed to apply preset send gain '{}:{:?}'",
+                        input_preset.device.id, send.bus_id
+                    ),
+                });
+            }
+        }
+    }
+
+    inner.last_error = None;
+    Ok(())
 }
 
 // ── IPC status payloads ───────────────────────────────────────────────────────
@@ -316,11 +329,11 @@ fn save_preset(
     name: String,
 ) -> Result<PresetSummary, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    let preset = presets::build_preset_from_routes(&name, &legacy_routes(&inner))?;
+    let preset = presets::build_preset_v2(&name, &inner.buses, &inner.graph)?;
     let path = presets::preset_file_path(&app, &preset.name)?;
     presets::write_preset_file(&path, &preset)?;
     inner.last_error = None;
-    Ok(presets::preset_summary(&preset))
+    Ok(presets::preset_summary_v2(&preset))
 }
 
 #[tauri::command]
@@ -329,19 +342,21 @@ fn load_preset(
     app: tauri::AppHandle,
     name: String,
 ) -> Result<PresetLoadResult, EngineError> {
-    let (preset, valid_routes, mut warnings) = presets::load_preset_with_warnings(&app, &name)?;
+    let loaded = presets::load_preset_with_warnings(&app, &name)?;
     let mut inner = state.inner.lock().unwrap();
-    let routes = apply_preset_routes(&mut inner, &valid_routes)?;
+    apply_preset_state(&mut inner, &loaded.preset_v2)?;
+    let routes = legacy_routes(&inner);
+    let mut warnings = loaded.warnings;
 
     warnings.push(PresetLoadWarning {
         code: "safe_load".to_string(),
-        message: "Preset loaded in safe mode. Routes are configured only; manually enable routes to start audio."
+        message: "Preset loaded safely. Audio remains stopped until buses are manually enabled."
             .to_string(),
     });
 
     inner.last_error = None;
     Ok(PresetLoadResult {
-        preset: presets::preset_summary(&preset),
+        preset: loaded.summary,
         routes,
         warnings,
     })
@@ -734,6 +749,91 @@ fn rename_bus(
     })?;
     bus.config.name = trimmed.to_string();
     Ok(bus.read_status())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::bus::BusRuntime;
+    use crate::audio::graph::AudioGraph;
+
+    fn preset_bus(id: BusId) -> presets::PresetBusV2 {
+        presets::PresetBusV2 {
+            id,
+            name: id.default_name().to_string(),
+            output: None,
+            volume: 1.0,
+            muted: false,
+            enabled: false,
+        }
+    }
+
+    #[test]
+    fn load_preset_state_does_not_start_any_engine() {
+        let mut buses = vec![
+            preset_bus(BusId::A1),
+            preset_bus(BusId::A2),
+            preset_bus(BusId::B1),
+            preset_bus(BusId::B2),
+        ];
+        buses[0].enabled = true;
+        buses[0].output = Some(presets::PresetDeviceRef {
+            id: "speaker".to_string(),
+            name: "Speaker".to_string(),
+        });
+
+        let preset = PresetFileV2 {
+            schema_version: 2,
+            name: "test".to_string(),
+            saved_at_utc: "0".to_string(),
+            buses,
+            inputs: vec![presets::PresetInputV2 {
+                device: presets::PresetDeviceRef {
+                    id: "mic".to_string(),
+                    name: "Mic".to_string(),
+                },
+                gain: 1.0,
+                muted: false,
+                sends: vec![
+                    presets::PresetSendV2 {
+                        bus_id: BusId::A1,
+                        enabled: true,
+                        volume: 1.0,
+                        muted: false,
+                    },
+                    presets::PresetSendV2 {
+                        bus_id: BusId::A2,
+                        enabled: false,
+                        volume: 1.0,
+                        muted: false,
+                    },
+                    presets::PresetSendV2 {
+                        bus_id: BusId::B1,
+                        enabled: false,
+                        volume: 1.0,
+                        muted: false,
+                    },
+                    presets::PresetSendV2 {
+                        bus_id: BusId::B2,
+                        enabled: false,
+                        volume: 1.0,
+                        muted: false,
+                    },
+                ],
+            }],
+        };
+
+        let mut inner = AppInner {
+            buses: BusRuntime::default_set(),
+            graph: AudioGraph::new(),
+            last_error: Some("stale".to_string()),
+        };
+
+        apply_preset_state(&mut inner, &preset).unwrap();
+        assert!(inner.buses.values().all(|bus| bus.engine.is_none()));
+        assert!(legacy_routes(&inner).iter().all(|route| !route.active));
+        assert!(inner.last_error.is_none());
+    }
 }
 
 // ── Tauri entry point ─────────────────────────────────────────────────────────

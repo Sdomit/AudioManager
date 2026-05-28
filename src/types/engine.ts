@@ -42,6 +42,7 @@ export interface PresetSummary {
   name: string;
   saved_at_utc: string;
   route_count: number;
+  schema_version: number;
 }
 
 export interface PresetLoadWarning {
