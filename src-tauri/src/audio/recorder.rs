@@ -304,19 +304,9 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
 
     let tap_id = next_tap_id();
 
-    let active = ActiveTap {
-        id: tap_id,
-        kind,
-        producer,
-        dropped: Arc::clone(&dropped),
-        samples_written: Arc::clone(&samples_written),
-    };
-    engine_tap_tx
-        .send(TapCommand::Add(active))
-        .map_err(|_| EngineError {
-            message: "Audio engine is not running on the target bus".to_string(),
-        })?;
-
+    // Spawn the writer thread BEFORE publishing the tap. If the spawn
+    // fails we still own `producer`, so it drops here and never lands in
+    // the audio engine — no leaked tap, no orphan callback work.
     let writer_stop = Arc::clone(&stop_flag);
     let writer_error = Arc::clone(&error);
     let writer_bytes = Arc::clone(&bytes_written);
@@ -333,9 +323,36 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
                 path_for_thread,
             );
         })
-        .map_err(|e| EngineError {
-            message: format!("Failed to spawn recorder writer thread: {e}"),
+        .map_err(|e| {
+            // Writer spawn failed: drop the WAV file we just opened so it
+            // doesn't linger as a 0-byte orphan in the recordings folder.
+            let _ = fs::remove_file(&path);
+            EngineError {
+                message: format!("Failed to spawn recorder writer thread: {e}"),
+            }
         })?;
+
+    // Writer thread is alive. Publishing the tap to the engine is now
+    // the last fallible step. If the send fails we tear the writer down
+    // cleanly and delete the empty WAV before returning.
+    let active = ActiveTap {
+        id: tap_id,
+        kind,
+        producer,
+        dropped: Arc::clone(&dropped),
+        samples_written: Arc::clone(&samples_written),
+    };
+    if let Err(_send_err) = engine_tap_tx.send(TapCommand::Add(active)) {
+        // _send_err carries the ActiveTap back; dropping it releases the
+        // ring producer so the writer's consumer sees no further data.
+        drop(_send_err);
+        stop_flag.store(true, Ordering::Release);
+        let _ = writer_handle.join();
+        let _ = fs::remove_file(&path);
+        return Err(EngineError {
+            message: "Audio engine is not running on the target bus".to_string(),
+        });
+    }
 
     Ok(RecorderHandle {
         id,
@@ -694,6 +711,45 @@ mod tests {
         for s in [0.0_f32, 0.1, -0.1, 0.999, -0.999] {
             assert_eq!(consumer.pop(), Some(s));
         }
+    }
+
+    #[test]
+    fn start_recorder_aborts_cleanly_when_engine_send_fails() {
+        // P1 regression: with the receiver dropped, send(Add) fails. The
+        // writer thread must be torn down and the just-created WAV file
+        // must be removed — no leaked tap, no orphan file on disk.
+        let tmp = std::env::temp_dir()
+            .join(format!("am-rec-fail-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        let (tx, rx) = mpsc::channel::<TapCommand>();
+        drop(rx);
+
+        let result = start_recorder(StartRecorderRequest {
+            spec: TapSpec::BusOut { bus_id: BusId::A1 },
+            kind: CallbackTapKind::BusOut,
+            channels: 2,
+            sample_rate: 48_000,
+            engine_bus: BusId::A1,
+            engine_tap_tx: &tx,
+            recordings_dir: &tmp,
+            session_subdir: None,
+        });
+
+        assert!(result.is_err(), "expected error when engine receiver is gone");
+
+        let leftover: Vec<_> = fs::read_dir(&tmp)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "expected empty recordings dir after failed start, found {:?}",
+            leftover
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
