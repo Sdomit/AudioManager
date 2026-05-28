@@ -107,9 +107,23 @@ pub struct ActiveTap {
 }
 
 impl ActiveTap {
-    /// Push one sample; on ring-full, increment the drop counter.
+    /// Push one sample. Sanitizes the value before enqueue so WAV files
+    /// never contain NaN/Inf:
+    ///   * NaN          → 0.0
+    ///   * +Inf         → 1.0
+    ///   * -Inf         → -1.0
+    ///   * finite |s|>1 → clamped to [-1.0, 1.0]
+    /// On ring-full, increment the drop counter.
     #[inline]
     pub fn push(&mut self, s: f32) {
+        // NaN must be handled before clamp: `f32::clamp` returns NaN unchanged
+        // because all NaN comparisons are false, so the inner `<`/`>` checks
+        // never replace it with the bounds.
+        let s = if s.is_nan() {
+            0.0
+        } else {
+            s.clamp(-1.0, 1.0)
+        };
         if self.producer.push(s).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -620,6 +634,66 @@ mod tests {
             Some(BusId::B1)
         );
         assert_eq!(TapSpec::InputPre { device_id: "x".into() }.bus(), None);
+    }
+
+    fn make_tap(ring_capacity: usize) -> (ActiveTap, Consumer<f32>) {
+        let ring = RingBuffer::<f32>::new(ring_capacity);
+        let (producer, consumer) = ring.split();
+        let tap = ActiveTap {
+            id: 1,
+            kind: CallbackTapKind::BusOut,
+            producer,
+            dropped: Arc::new(AtomicU64::new(0)),
+            samples_written: Arc::new(AtomicU64::new(0)),
+        };
+        (tap, consumer)
+    }
+
+    #[test]
+    fn active_tap_push_replaces_nan_with_zero() {
+        let (mut tap, mut consumer) = make_tap(16);
+        tap.push(f32::NAN);
+        assert_eq!(consumer.pop(), Some(0.0));
+        assert_eq!(tap.samples_written.load(Ordering::Relaxed), 1);
+        assert_eq!(tap.dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn active_tap_push_clamps_infinities_to_unit() {
+        let (mut tap, mut consumer) = make_tap(16);
+        tap.push(f32::INFINITY);
+        tap.push(f32::NEG_INFINITY);
+        assert_eq!(consumer.pop(), Some(1.0));
+        assert_eq!(consumer.pop(), Some(-1.0));
+        assert_eq!(tap.samples_written.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn active_tap_push_clamps_out_of_range_finite_samples() {
+        let (mut tap, mut consumer) = make_tap(16);
+        tap.push(2.5);
+        tap.push(-3.0);
+        tap.push(0.5);
+        tap.push(-0.25);
+        tap.push(1.0);
+        tap.push(-1.0);
+        assert_eq!(consumer.pop(), Some(1.0));
+        assert_eq!(consumer.pop(), Some(-1.0));
+        assert_eq!(consumer.pop(), Some(0.5));
+        assert_eq!(consumer.pop(), Some(-0.25));
+        assert_eq!(consumer.pop(), Some(1.0));
+        assert_eq!(consumer.pop(), Some(-1.0));
+    }
+
+    #[test]
+    fn active_tap_push_preserves_finite_in_range_samples() {
+        let (mut tap, mut consumer) = make_tap(16);
+        for s in [0.0_f32, 0.1, -0.1, 0.999, -0.999] {
+            tap.push(s);
+        }
+        for s in [0.0_f32, 0.1, -0.1, 0.999, -0.999] {
+            assert_eq!(consumer.pop(), Some(s));
+        }
     }
 
     #[test]
