@@ -15,13 +15,8 @@
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
-import {
-  mockBuses,
-  mockInputs,
-  mockPresets,
-  mockSends,
-  mockStreamSetupSteps,
-} from "./mockData";
+import { mockStreamSetupSteps } from "./mockData";
+import { hydrate as fetchHydrate } from "./tauriCommands";
 import type {
   AudioInput,
   AudioManagerState,
@@ -29,6 +24,7 @@ import type {
   BusId,
   Density,
   DetailSelection,
+  Preset,
   RoutingView,
   Send,
   UseAudioManager,
@@ -37,20 +33,21 @@ import type {
 /* ── State + reducer ────────────────────────────────────────────────────── */
 
 const initialState: AudioManagerState = {
-  buses: mockBuses,
-  inputs: mockInputs,
-  sends: mockSends,
-  presets: mockPresets,
-  loadedPresetId: "preset_stream",
-  presetBannerVisible: true,
+  buses: [],
+  inputs: [],
+  sends: [],
+  presets: [],
+  loadedPresetId: null,
+  presetBannerVisible: false,
   streamSetupOpen: false,
   streamSetupSteps: mockStreamSetupSteps,
   routingView: "nodes",
   density: "comfortable",
-  selection: { kind: "input", inputId: "in_mic" },
+  selection: { kind: "none" },
 };
 
 type Action =
+  | { type: "hydrate"; buses: Bus[]; inputs: AudioInput[]; sends: Send[]; presets: Preset[] }
   | { type: "set_bus_enabled"; id: BusId; enabled: boolean }
   | { type: "set_bus_muted"; id: BusId; muted: boolean }
   | { type: "set_bus_volume"; id: BusId; volume: number }
@@ -75,6 +72,26 @@ type Action =
 
 function reducer(state: AudioManagerState, action: Action): AudioManagerState {
   switch (action.type) {
+    case "hydrate": {
+      const inputIds = new Set(action.inputs.map((i) => i.id));
+      const busIds = new Set(action.buses.map((b) => b.id));
+      let selection = state.selection;
+      if (
+        (selection.kind === "input" && !inputIds.has(selection.inputId)) ||
+        (selection.kind === "bus" && !busIds.has(selection.busId))
+      ) {
+        selection = { kind: "none" };
+      }
+      return {
+        ...state,
+        buses: action.buses,
+        inputs: action.inputs,
+        sends: action.sends,
+        presets: action.presets,
+        selection,
+      };
+    }
+
     case "set_bus_enabled":
       return updateBus(state, action.id, (b) => ({
         ...b,
@@ -281,6 +298,34 @@ export function useAudioManager(): UseAudioManager {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // Phase C: hydrate buses/inputs/sends/presets from the Rust backend on
+  // mount. Phase D will replace per-action dispatches with optimistic
+  // dispatch + invoke; Phase E will replace the RAF meter loop below
+  // with a real Tauri event subscription.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchHydrate();
+        if (cancelled) return;
+        dispatch({
+          type: "hydrate",
+          buses: result.buses,
+          inputs: result.inputs,
+          sends: result.sends,
+          presets: result.presets,
+        });
+      } catch (e) {
+        // Leave the UI in its empty initial state; surface in console
+        // until Phase D wires an error banner.
+        console.error("AudioManager hydrate failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Fake meter animation loop. Replace with Tauri event subscription.
   useEffect(() => {
