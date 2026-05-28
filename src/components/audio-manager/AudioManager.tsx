@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { BusRail } from "./BusRail";
 import { DetailPanel } from "./DetailPanel";
+import { DevicePicker } from "./DevicePicker";
 import { InputList } from "./InputList";
 import { PresetBanner } from "./PresetBanner";
 import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
 import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
+import type { BusId } from "./types";
 
 import "./tokens.css";
 import "./base.css";
@@ -28,6 +31,11 @@ import styles from "./AudioManager.module.css";
 export function AudioManager() {
   const am = useAudioManager();
   const { state } = am;
+
+  const [busPickerFor, setBusPickerFor] = useState<BusId | null>(null);
+  const busPickerTarget = busPickerFor
+    ? state.buses.find((b) => b.id === busPickerFor) ?? null
+    : null;
 
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
 
@@ -66,10 +74,7 @@ export function AudioManager() {
           am.setBusMuted(id, !bus.muted);
         }}
         onVolumeChange={am.setBusVolume}
-        onPickDevice={(id) => {
-          // Placeholder — wire to your device picker modal.
-          console.log("Pick device for bus", id);
-        }}
+        onPickDevice={(id) => setBusPickerFor(id)}
       />
 
       <main className={styles.main}>
@@ -129,9 +134,7 @@ export function AudioManager() {
               if (!bus) return;
               am.setBusMuted(id, !bus.muted);
             }}
-            onPickDevice={(id) => {
-              console.log("Pick device for bus", id);
-            }}
+            onPickDevice={(id) => setBusPickerFor(id)}
             onSelectInputContext={(id) =>
               am.setSelection({ kind: "input", inputId: id })
             }
@@ -144,6 +147,26 @@ export function AudioManager() {
         steps={state.streamSetupSteps}
         onClose={am.closeStreamSetup}
       />
+
+      {busPickerFor && busPickerTarget && (
+        <DevicePicker
+          open={true}
+          kind="output"
+          title={`Output device for ${busPickerTarget.label}`}
+          subtitle={
+            busPickerTarget.id === "B1"
+              ? "Tip: pick a virtual cable input to stream to OBS/Discord/Zoom."
+              : undefined
+          }
+          currentDeviceId={busPickerTarget.device}
+          highlightVirtual={busPickerTarget.id === "B1"}
+          onPick={(deviceId) => {
+            am.setBusDevice(busPickerFor, deviceId);
+            setBusPickerFor(null);
+          }}
+          onClose={() => setBusPickerFor(null)}
+        />
+      )}
     </div>
   );
 }

@@ -15,6 +15,8 @@
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
+import * as ipc from "../../ipc/commands";
+import { uiVolumeToBackend } from "./adapters";
 import { mockStreamSetupSteps } from "./mockData";
 import { hydrate as fetchHydrate } from "./tauriCommands";
 import type {
@@ -366,39 +368,225 @@ export function useAudioManager(): UseAudioManager {
 
   /* ── Actions ──────────────────────────────────────────────────────────── */
 
-  const setBusEnabled = useCallback((id: BusId, enabled: boolean) => {
-    dispatch({ type: "set_bus_enabled", id, enabled });
+  // rAF throttle: coalesce rapid-fire writes (e.g. slider drags) into at
+  // most one Tauri invoke per animation frame. The Map is keyed so that
+  // the same control overwrites its own pending task instead of queueing.
+  const pendingWrites = useRef<Map<string, () => Promise<unknown>>>(new Map());
+  const writeRaf = useRef(0);
+
+  const flushWrites = useCallback(() => {
+    writeRaf.current = 0;
+    const tasks = Array.from(pendingWrites.current.values());
+    pendingWrites.current.clear();
+    for (const task of tasks) {
+      task().catch((e) =>
+        console.error("AudioManager throttled write failed:", e),
+      );
+    }
   }, []);
-  const setBusMuted = useCallback((id: BusId, muted: boolean) => {
-    dispatch({ type: "set_bus_muted", id, muted });
+
+  const scheduleWrite = useCallback(
+    (key: string, task: () => Promise<unknown>) => {
+      pendingWrites.current.set(key, task);
+      if (writeRaf.current === 0) {
+        writeRaf.current = requestAnimationFrame(flushWrites);
+      }
+    },
+    [flushWrites],
+  );
+
+  useEffect(
+    () => () => {
+      if (writeRaf.current) cancelAnimationFrame(writeRaf.current);
+    },
+    [],
+  );
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetchHydrate();
+      dispatch({
+        type: "hydrate",
+        buses: r.buses,
+        inputs: r.inputs,
+        sends: r.sends,
+        presets: r.presets,
+      });
+    } catch (e) {
+      console.error("AudioManager refresh failed:", e);
+    }
   }, []);
-  const setBusVolume = useCallback((id: BusId, volume: number) => {
-    dispatch({ type: "set_bus_volume", id, volume });
-  }, []);
-  const setBusDevice = useCallback((id: BusId, device: string | null) => {
-    dispatch({ type: "set_bus_device", id, device });
-  }, []);
-  const setInputGain = useCallback((id: string, gain: number) => {
-    dispatch({ type: "set_input_gain", id, gain });
-  }, []);
-  const setInputMuted = useCallback((id: string, muted: boolean) => {
-    dispatch({ type: "set_input_muted", id, muted });
-  }, []);
+
+  const getBus = useCallback(
+    (id: BusId) => stateRef.current.buses.find((b) => b.id === id),
+    [],
+  );
+  const getInput = useCallback(
+    (id: string) => stateRef.current.inputs.find((i) => i.id === id),
+    [],
+  );
+  const getSend = useCallback(
+    (inputId: string, busId: BusId) =>
+      stateRef.current.sends.find(
+        (s) => s.inputId === inputId && s.busId === busId,
+      ),
+    [],
+  );
+
+  const setBusEnabled = useCallback(
+    (id: BusId, enabled: boolean) => {
+      const prev = getBus(id)?.enabled ?? !enabled;
+      dispatch({ type: "set_bus_enabled", id, enabled });
+      ipc
+        .setBusEnabled(id, enabled)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("setBusEnabled failed:", e);
+          dispatch({ type: "set_bus_enabled", id, enabled: prev });
+        });
+    },
+    [getBus, refresh],
+  );
+
+  const setBusMuted = useCallback(
+    (id: BusId, muted: boolean) => {
+      const bus = getBus(id);
+      if (!bus) return;
+      const prev = bus.muted;
+      dispatch({ type: "set_bus_muted", id, muted });
+      ipc
+        .setBusVolume(id, uiVolumeToBackend(bus.volume), muted)
+        .catch((e) => {
+          console.error("setBusMuted failed:", e);
+          dispatch({ type: "set_bus_muted", id, muted: prev });
+        });
+    },
+    [getBus],
+  );
+
+  const setBusVolume = useCallback(
+    (id: BusId, volume: number) => {
+      dispatch({ type: "set_bus_volume", id, volume });
+      scheduleWrite(`bus-volume:${id}`, () => {
+        const bus = getBus(id);
+        if (!bus) return Promise.resolve();
+        return ipc.setBusVolume(id, uiVolumeToBackend(bus.volume), bus.muted);
+      });
+    },
+    [getBus, scheduleWrite],
+  );
+
+  const setBusDevice = useCallback(
+    (id: BusId, device: string | null) => {
+      const prev = getBus(id)?.device ?? null;
+      dispatch({ type: "set_bus_device", id, device });
+      ipc
+        .setBusDevice(id, device)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("setBusDevice failed:", e);
+          dispatch({ type: "set_bus_device", id, device: prev });
+        });
+    },
+    [getBus, refresh],
+  );
+
+  const setInputGain = useCallback(
+    (id: string, gain: number) => {
+      dispatch({ type: "set_input_gain", id, gain });
+      scheduleWrite(`input-gain:${id}`, () => {
+        const input = getInput(id);
+        if (!input) return Promise.resolve();
+        return ipc.setInputGain(
+          id,
+          uiVolumeToBackend(input.gain),
+          input.muted,
+        );
+      });
+    },
+    [getInput, scheduleWrite],
+  );
+
+  const setInputMuted = useCallback(
+    (id: string, muted: boolean) => {
+      const input = getInput(id);
+      if (!input) return;
+      const prev = input.muted;
+      dispatch({ type: "set_input_muted", id, muted });
+      ipc
+        .setInputGain(id, uiVolumeToBackend(input.gain), muted)
+        .catch((e) => {
+          console.error("setInputMuted failed:", e);
+          dispatch({ type: "set_input_muted", id, muted: prev });
+        });
+    },
+    [getInput],
+  );
+
   const removeInput = useCallback((id: string) => {
+    // Phase D-2: wires to ipc.removeInput.
     dispatch({ type: "remove_input", id });
   }, []);
+
   const addInput = useCallback(() => {
+    // Phase D-2: wires to ipc.addInput via the input device picker.
     dispatch({ type: "add_input" });
   }, []);
-  const toggleSend = useCallback((inputId: string, busId: BusId) => {
-    dispatch({ type: "toggle_send", inputId, busId });
-  }, []);
-  const setSendGain = useCallback((inputId: string, busId: BusId, gain: number) => {
-    dispatch({ type: "set_send_gain", inputId, busId, gain });
-  }, []);
-  const setSendMuted = useCallback((inputId: string, busId: BusId, muted: boolean) => {
-    dispatch({ type: "set_send_muted", inputId, busId, muted });
-  }, []);
+
+  const toggleSend = useCallback(
+    (inputId: string, busId: BusId) => {
+      const before = !!getSend(inputId, busId);
+      const enabled = !before;
+      dispatch({ type: "toggle_send", inputId, busId });
+      ipc
+        .setSend(inputId, busId, enabled)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("toggleSend failed:", e);
+          // Re-toggle to revert.
+          dispatch({ type: "toggle_send", inputId, busId });
+        });
+    },
+    [getSend, refresh],
+  );
+
+  const setSendGain = useCallback(
+    (inputId: string, busId: BusId, gain: number) => {
+      dispatch({ type: "set_send_gain", inputId, busId, gain });
+      scheduleWrite(`send-gain:${inputId}|${busId}`, () => {
+        const send = getSend(inputId, busId);
+        if (!send) return Promise.resolve();
+        return ipc.setSendGain(
+          inputId,
+          busId,
+          uiVolumeToBackend(send.gain),
+          send.muted,
+        );
+      });
+    },
+    [getSend, scheduleWrite],
+  );
+
+  const setSendMuted = useCallback(
+    (inputId: string, busId: BusId, muted: boolean) => {
+      const send = getSend(inputId, busId);
+      if (!send) return;
+      const prev = send.muted;
+      dispatch({ type: "set_send_muted", inputId, busId, muted });
+      ipc
+        .setSendGain(
+          inputId,
+          busId,
+          uiVolumeToBackend(send.gain),
+          muted,
+        )
+        .catch((e) => {
+          console.error("setSendMuted failed:", e);
+          dispatch({ type: "set_send_muted", inputId, busId, muted: prev });
+        });
+    },
+    [getSend],
+  );
   const loadPreset = useCallback((id: string) => {
     dispatch({ type: "load_preset", id });
   }, []);

@@ -122,13 +122,30 @@ export function BusCard({
           className={`${styles.actionBtn} ${bus.enabled ? styles.actionActive : ""}`}
           onClick={(e) => {
             e.stopPropagation();
+            if (bus.state === "unconfigured") {
+              onPickDevice();
+              return;
+            }
             onToggleEnabled();
           }}
-          disabled={bus.state === "unconfigured" || bus.state === "error"}
+          disabled={bus.state === "error"}
           aria-pressed={bus.enabled}
+          title={
+            bus.state === "unconfigured"
+              ? "Pick an output device first"
+              : bus.enabled
+                ? "Disable bus"
+                : "Enable bus"
+          }
         >
           <PowerIcon size={14} />
-          <span>{bus.enabled ? "Enabled" : "Enable"}</span>
+          <span>
+            {bus.state === "unconfigured"
+              ? "Pick device"
+              : bus.enabled
+                ? "Enabled"
+                : "Enable"}
+          </span>
         </button>
         <button
           className={`${styles.actionBtn} ${bus.muted ? styles.actionMuted : ""}`}
