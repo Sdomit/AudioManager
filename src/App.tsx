@@ -336,7 +336,12 @@ export default function App() {
               return (
                 <div key={bus.id} className="bus-card">
                   <div className="bus-head">
-                    <strong>{bus.id}</strong>
+                    <div>
+                      <div className="bus-title">{bus.id}</div>
+                      {bus.output_device && (
+                        <div className="text-dim">{shortName(bus.output_device)}</div>
+                      )}
+                    </div>
                     <span className={`badge ${bus.running ? "badge-ok" : "badge-stopped"}`}>
                       {bus.running ? "running" : "stopped"}
                     </span>
@@ -360,7 +365,7 @@ export default function App() {
                     </select>
                   </label>
 
-                  <div className="row">
+                  <div className="row-tight">
                     <button
                       className={bus.enabled ? "btn-sm btn-danger" : "btn-sm btn-primary"}
                       disabled={busy}
@@ -399,7 +404,7 @@ export default function App() {
                   <div className="row-tight">
                     <MeterBar value={bus.output_peak} />
                     <span className="meter-pct">{meterPct}%</span>
-                    {bus.clipped_recently && <span className="badge badge-err">clip</span>}
+                    {bus.clipped_recently && <span className="badge badge-err">CLIP</span>}
                   </div>
 
                   {bus.last_error && <div className="msg msg-err">{bus.last_error}</div>}
@@ -414,12 +419,12 @@ export default function App() {
             <h2 className="section-title">Input Matrix</h2>
           </div>
 
-          <div className="row">
+          <div className="row control-row">
             <select
+              className="grow-field"
               value={selectedNewInput}
               onChange={(e) => setSelectedNewInput(e.target.value)}
               disabled={busy || availableNewInputs.length === 0}
-              style={{ minWidth: 260, flex: 1 }}
             >
               {availableNewInputs.length === 0 && <option value="">No remaining inputs</option>}
               {availableNewInputs.map((device) => (
@@ -440,131 +445,133 @@ export default function App() {
           {inputs.length === 0 ? (
             <div className="routes-empty">No input channels configured.</div>
           ) : (
-            <table className="matrix-table">
-              <thead>
-                <tr>
-                  <th>Input</th>
-                  <th>Meter</th>
-                  <th>Master</th>
-                  {BUS_ORDER.map((busId) => (
-                    <th key={busId}>{busId}</th>
-                  ))}
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {inputs.map((input) => (
-                  <tr key={input.device_id}>
-                    <td title={input.device_id} className="cell-dev">
-                      {shortName(input.device_id)}
-                    </td>
-                    <td>
-                      <div className="row-tight">
-                        <MeterBar value={inputMeters[input.device_id] ?? 0} width={86} />
-                        <span className="meter-pct">
-                          {Math.round(clamp01(inputMeters[input.device_id] ?? 0) * 100)}%
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="stack-tight">
+            <div className="matrix-scroll">
+              <table className="matrix-table">
+                <thead>
+                  <tr>
+                    <th>Input</th>
+                    <th>Meter</th>
+                    <th>Master</th>
+                    {BUS_ORDER.map((busId) => (
+                      <th key={busId}>{busId}</th>
+                    ))}
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {inputs.map((input) => (
+                    <tr key={input.device_id}>
+                      <td title={input.device_id} className="cell-dev">
+                        {shortName(input.device_id)}
+                      </td>
+                      <td>
                         <div className="row-tight">
-                          <input
-                            type="range"
-                            min={0}
-                            max={200}
-                            step={1}
-                            value={Math.round(input.gain * 100)}
-                            disabled={busy}
-                            onChange={(e) =>
-                              handleInputGain(
-                                input.device_id,
-                                Number(e.target.value) / 100,
-                                input.muted,
-                              )
-                            }
-                          />
-                          <span className="meter-pct">{Math.round(input.gain * 100)}%</span>
+                          <MeterBar value={inputMeters[input.device_id] ?? 0} width={86} />
+                          <span className="meter-pct">
+                            {Math.round(clamp01(inputMeters[input.device_id] ?? 0) * 100)}%
+                          </span>
                         </div>
-                        <button
-                          className={`btn-sm${input.muted ? " btn-danger" : ""}`}
-                          disabled={busy}
-                          onClick={() =>
-                            handleInputGain(input.device_id, input.gain, !input.muted)
-                          }
-                        >
-                          {input.muted ? "Muted" : "Mute"}
-                        </button>
-                      </div>
-                    </td>
+                      </td>
+                      <td>
+                        <div className="stack-tight">
+                          <div className="row-tight">
+                            <input
+                              type="range"
+                              min={0}
+                              max={200}
+                              step={1}
+                              value={Math.round(input.gain * 100)}
+                              disabled={busy}
+                              onChange={(e) =>
+                                handleInputGain(
+                                  input.device_id,
+                                  Number(e.target.value) / 100,
+                                  input.muted,
+                                )
+                              }
+                            />
+                            <span className="meter-pct">{Math.round(input.gain * 100)}%</span>
+                          </div>
+                          <button
+                            className={`btn-sm${input.muted ? " btn-danger" : ""}`}
+                            disabled={busy}
+                            onClick={() =>
+                              handleInputGain(input.device_id, input.gain, !input.muted)
+                            }
+                          >
+                            {input.muted ? "Muted" : "Mute"}
+                          </button>
+                        </div>
+                      </td>
 
-                    {BUS_ORDER.map((busId) => {
-                      const send = sendFor(input, busId);
-                      return (
-                        <td key={`${input.device_id}-${busId}`}>
-                          <div className="stack-tight">
-                            <label className="send-toggle">
-                              <input
-                                type="checkbox"
-                                checked={send.enabled}
+                      {BUS_ORDER.map((busId) => {
+                        const send = sendFor(input, busId);
+                        return (
+                          <td key={`${input.device_id}-${busId}`}>
+                            <div className="stack-tight">
+                              <label className="send-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={send.enabled}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    handleSetSend(input.device_id, busId, e.target.checked)
+                                  }
+                                />
+                                <span>On</span>
+                              </label>
+                              <div className="row-tight">
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={200}
+                                  step={1}
+                                  value={Math.round(send.volume * 100)}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    handleSetSendGain(
+                                      input.device_id,
+                                      busId,
+                                      Number(e.target.value) / 100,
+                                      send.muted,
+                                    )
+                                  }
+                                />
+                                <span className="meter-pct">{Math.round(send.volume * 100)}%</span>
+                              </div>
+                              <button
+                                className={`btn-sm${send.muted ? " btn-danger" : ""}`}
                                 disabled={busy}
-                                onChange={(e) =>
-                                  handleSetSend(input.device_id, busId, e.target.checked)
-                                }
-                              />
-                              <span>On</span>
-                            </label>
-                            <div className="row-tight">
-                              <input
-                                type="range"
-                                min={0}
-                                max={200}
-                                step={1}
-                                value={Math.round(send.volume * 100)}
-                                disabled={busy}
-                                onChange={(e) =>
+                                onClick={() =>
                                   handleSetSendGain(
                                     input.device_id,
                                     busId,
-                                    Number(e.target.value) / 100,
-                                    send.muted,
+                                    send.volume,
+                                    !send.muted,
                                   )
                                 }
-                              />
-                              <span className="meter-pct">{Math.round(send.volume * 100)}%</span>
+                              >
+                                {send.muted ? "Muted" : "Mute"}
+                              </button>
                             </div>
-                            <button
-                              className={`btn-sm${send.muted ? " btn-danger" : ""}`}
-                              disabled={busy}
-                              onClick={() =>
-                                handleSetSendGain(
-                                  input.device_id,
-                                  busId,
-                                  send.volume,
-                                  !send.muted,
-                                )
-                              }
-                            >
-                              {send.muted ? "Muted" : "Mute"}
-                            </button>
-                          </div>
-                        </td>
-                      );
-                    })}
+                          </td>
+                        );
+                      })}
 
-                    <td>
-                      <button
-                        className="btn-sm"
-                        disabled={busy}
-                        onClick={() => handleRemoveInput(input.device_id)}
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <td>
+                        <button
+                          className="btn-sm"
+                          disabled={busy}
+                          onClick={() => handleRemoveInput(input.device_id)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 
@@ -573,14 +580,14 @@ export default function App() {
             <h2 className="section-title">Presets (Phase 8C)</h2>
           </div>
           <div className="stack">
-            <div className="row">
+            <div className="row control-row">
               <input
+                className="grow-field"
                 type="text"
                 value={presetName}
                 onChange={(e) => setPresetName(e.target.value)}
                 placeholder="Preset name"
                 disabled={busy}
-                style={{ minWidth: 180, flex: 1 }}
               />
               <button
                 className="btn-primary btn-sm"
@@ -590,12 +597,12 @@ export default function App() {
                 Save
               </button>
             </div>
-            <div className="row">
+            <div className="row control-row">
               <select
+                className="grow-field"
                 value={selectedPreset}
                 onChange={(e) => setSelectedPreset(e.target.value)}
                 disabled={busy || presets.length === 0}
-                style={{ minWidth: 180, flex: 1 }}
               >
                 {presets.length === 0 && <option value="">No presets</option>}
                 {presets.map((preset) => (
