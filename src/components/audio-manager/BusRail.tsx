@@ -1,0 +1,76 @@
+import { BusCard } from "./BusCard";
+import type { Bus, BusId, DetailSelection } from "./types";
+import styles from "./BusRail.module.css";
+
+interface BusRailProps {
+  buses: Bus[];
+  selection: DetailSelection;
+  onSelectBus: (id: BusId) => void;
+  onToggleEnabled: (id: BusId) => void;
+  onToggleMuted: (id: BusId) => void;
+  onVolumeChange: (id: BusId, v: number) => void;
+  onPickDevice: (id: BusId) => void;
+}
+
+/**
+ * Horizontal rail of four bus cards.
+ *
+ * A small gap visually groups A1/A2 (monitoring) and B1/B2 (broadcast).
+ */
+export function BusRail({
+  buses,
+  selection,
+  onSelectBus,
+  onToggleEnabled,
+  onToggleMuted,
+  onVolumeChange,
+  onPickDevice,
+}: BusRailProps) {
+  const a = buses.filter((b) => b.id.startsWith("A"));
+  const b = buses.filter((b) => b.id.startsWith("B"));
+
+  return (
+    <div className={styles.rail} role="region" aria-label="Output buses">
+      <BusGroup label="Monitoring">
+        {a.map((bus) => (
+          <BusCard
+            key={bus.id}
+            bus={bus}
+            selected={selection.kind === "bus" && selection.busId === bus.id}
+            onSelect={() => onSelectBus(bus.id)}
+            onToggleEnabled={() => onToggleEnabled(bus.id)}
+            onToggleMuted={() => onToggleMuted(bus.id)}
+            onVolumeChange={(v) => onVolumeChange(bus.id, v)}
+            onPickDevice={() => onPickDevice(bus.id)}
+          />
+        ))}
+      </BusGroup>
+      <div className={styles.divider} aria-hidden />
+      <BusGroup label="Broadcast">
+        {b.map((bus) => (
+          <BusCard
+            key={bus.id}
+            bus={bus}
+            selected={selection.kind === "bus" && selection.busId === bus.id}
+            onSelect={() => onSelectBus(bus.id)}
+            onToggleEnabled={() => onToggleEnabled(bus.id)}
+            onToggleMuted={() => onToggleMuted(bus.id)}
+            onVolumeChange={(v) => onVolumeChange(bus.id, v)}
+            onPickDevice={() => onPickDevice(bus.id)}
+          />
+        ))}
+      </BusGroup>
+    </div>
+  );
+}
+
+function BusGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className={styles.group}>
+      <span className={styles.groupLabel} aria-hidden>
+        {label}
+      </span>
+      <div className={styles.groupCards}>{children}</div>
+    </div>
+  );
+}

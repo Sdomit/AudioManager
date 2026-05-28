@@ -1,0 +1,252 @@
+.bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--am-space-4);
+  padding: var(--am-space-2) var(--am-space-4);
+  background: var(--am-surface-1);
+  border-bottom: 1px solid var(--am-border-subtle);
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-3);
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 280px;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--am-space-2);
+}
+
+/* ── Wordmark ───────────────────────────────────────────────────────── */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+
+.wordmarkDot {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--am-accent);
+  color: white;
+  border-radius: var(--am-radius-md);
+  box-shadow: 0 0 0 3px var(--am-accent-muted);
+}
+
+.wordmarkText {
+  font-size: var(--am-text-14);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-tight);
+  color: var(--am-text-primary);
+}
+
+/* ── Preset menu ───────────────────────────────────────────────────── */
+.presetMenu {
+  position: relative;
+}
+
+.presetButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  padding: 5px 10px;
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  color: var(--am-text-primary);
+  font-size: var(--am-text-13);
+  transition: background var(--am-dur-fast), border-color var(--am-dur-fast);
+}
+.presetButton:hover {
+  background: var(--am-surface-3);
+  border-color: var(--am-border-strong);
+}
+
+.presetLabel {
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-wide);
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+}
+
+.presetName {
+  font-weight: 500;
+  color: var(--am-text-primary);
+}
+
+.menuBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--am-z-elevated);
+}
+
+.menuPanel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  box-shadow: var(--am-elev-3);
+  padding: var(--am-space-1);
+  z-index: calc(var(--am-z-elevated) + 1);
+}
+
+.menuHeader {
+  padding: 6px 10px;
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-wide);
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+}
+
+.menuEmpty {
+  padding: 10px;
+  font-size: var(--am-text-12);
+  color: var(--am-text-tertiary);
+  text-align: center;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--am-space-2);
+  width: 100%;
+  padding: 8px 10px;
+  font-size: var(--am-text-13);
+  color: var(--am-text-primary);
+  border-radius: var(--am-radius-sm);
+  transition: background var(--am-dur-fast);
+}
+.menuItem:hover { background: var(--am-surface-3); }
+.menuItemActive {
+  background: var(--am-accent-muted);
+  color: var(--am-accent-hover);
+}
+.menuV1 {
+  font-family: var(--am-font-mono);
+  font-size: 10px;
+  color: var(--am-warning);
+  padding: 1px 6px;
+  border-radius: var(--am-radius-sm);
+  background: var(--am-warning-muted);
+}
+.menuDivider {
+  height: 1px;
+  background: var(--am-border-subtle);
+  margin: 4px 0;
+}
+
+/* ── Stream pill ────────────────────────────────────────────────────── */
+.streamPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  padding: 5px 10px;
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-pill);
+  font-size: var(--am-text-12);
+  font-weight: 500;
+  color: var(--am-text-secondary);
+  transition: background var(--am-dur-fast), color var(--am-dur-fast), border-color var(--am-dur-fast);
+}
+.streamPill:hover { background: var(--am-surface-3); color: var(--am-text-primary); }
+
+.streamPillLabel {
+  letter-spacing: var(--am-tracking-tight);
+}
+
+.streamPillDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.streamPillCount {
+  font-family: var(--am-font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--am-radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.streamPill_ok {
+  color: var(--am-success);
+  border-color: rgba(34, 197, 94, 0.32);
+  background: var(--am-success-muted);
+}
+.streamPill_warning {
+  color: var(--am-warning);
+  border-color: rgba(245, 158, 11, 0.32);
+  background: var(--am-warning-muted);
+}
+.streamPill_error {
+  color: var(--am-meter-clip);
+  border-color: rgba(239, 68, 68, 0.32);
+  background: var(--am-danger-muted);
+}
+.streamPill_pending {
+  color: var(--am-text-secondary);
+}
+
+/* ── Density toggle ─────────────────────────────────────────────────── */
+.densityToggle {
+  display: inline-flex;
+  align-items: center;
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+.densityBtn {
+  padding: 4px 9px;
+  font-size: var(--am-text-11);
+  font-weight: 500;
+  color: var(--am-text-secondary);
+  border-radius: 5px;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast);
+}
+.densityBtn:hover { color: var(--am-text-primary); }
+.densityBtnActive {
+  background: var(--am-surface-4);
+  color: var(--am-text-primary);
+}
+
+/* ── Icon button ────────────────────────────────────────────────────── */
+.iconBtn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-md);
+}
+.iconBtn:hover {
+  color: var(--am-text-primary);
+  background: var(--am-surface-3);
+}

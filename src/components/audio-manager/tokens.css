@@ -1,0 +1,164 @@
+/* ──────────────────────────────────────────────────────────────────────────
+ *  AudioManager design tokens
+ *
+ *  All visual primitives are defined here. Components reference these
+ *  via var(--token-name) and never hard-code colors, sizes, or radii.
+ *
+ *  Density mode is switched by toggling [data-density="compact"] on the
+ *  root .audioManager element. Compact mode overrides spacing tokens.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surfaces (cool, layered grays) ─────────────────────────────────── */
+  --am-surface-0:        #0E1116;  /* app background */
+  --am-surface-1:        #151922;  /* bus rail, panels */
+  --am-surface-2:        #1C212C;  /* cards, rows */
+  --am-surface-3:        #242A37;  /* hover */
+  --am-surface-4:        #2D3441;  /* selected / pressed */
+  --am-surface-overlay:  rgba(14, 17, 22, 0.72);
+
+  /* ── Borders ────────────────────────────────────────────────────────── */
+  --am-border-subtle:    rgba(255, 255, 255, 0.06);
+  --am-border-default:   rgba(255, 255, 255, 0.10);
+  --am-border-strong:    rgba(255, 255, 255, 0.16);
+  --am-border-accent:    var(--am-accent);
+
+  /* ── Text ───────────────────────────────────────────────────────────── */
+  --am-text-primary:     #E6E9EF;
+  --am-text-secondary:   #9AA3B2;
+  --am-text-tertiary:    #6B7280;
+  --am-text-on-accent:   #FFFFFF;
+  --am-text-disabled:    #4A5160;
+
+  /* ── Brand accent (red — option #4) ─────────────────────────────────── */
+  --am-accent:           #EF4444;
+  --am-accent-hover:     #F87171;
+  --am-accent-active:    #DC2626;
+  --am-accent-muted:     rgba(239, 68, 68, 0.16);
+  --am-accent-ring:      rgba(239, 68, 68, 0.40);
+
+  /* ── State colors ───────────────────────────────────────────────────── */
+  --am-success:          #22C55E;
+  --am-success-muted:    rgba(34, 197, 94, 0.14);
+  --am-warning:          #F59E0B;
+  --am-warning-muted:    rgba(245, 158, 11, 0.14);
+  --am-danger:           #B91C1C;  /* deeper than accent, so they don't collide */
+  --am-danger-muted:     rgba(185, 28, 28, 0.16);
+  --am-info:             #3B82F6;
+  --am-info-muted:       rgba(59, 130, 246, 0.14);
+
+  /* ── Per-bus tints (low saturation, used as accents/borders) ────────── */
+  --am-bus-a1:           #FBBF24;  /* monitor — warm yellow */
+  --am-bus-a1-muted:     rgba(251, 191, 36, 0.14);
+  --am-bus-a2:           #F59E0B;  /* speakers — amber */
+  --am-bus-a2-muted:     rgba(245, 158, 11, 0.14);
+  --am-bus-b1:           #A855F7;  /* stream — purple */
+  --am-bus-b1-muted:     rgba(168, 85, 247, 0.14);
+  --am-bus-b2:           #EF4444;  /* record — red */
+  --am-bus-b2-muted:     rgba(239, 68, 68, 0.14);
+
+  /* ── Meter gradient (CSS-side; canvas reads these via getComputedStyle) ── */
+  --am-meter-low:        #22C55E;
+  --am-meter-mid:        #EAB308;
+  --am-meter-high:       #F97316;
+  --am-meter-clip:       #EF4444;
+  --am-meter-track:      rgba(255, 255, 255, 0.05);
+
+  /* ── Typography ─────────────────────────────────────────────────────── */
+  --am-font-ui: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --am-font-mono: "Geist Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+
+  --am-text-11:          11px;
+  --am-text-12:          12px;
+  --am-text-13:          13px;
+  --am-text-14:          14px;
+  --am-text-16:          16px;
+  --am-text-18:          18px;
+  --am-text-22:          22px;
+  --am-text-28:          28px;
+
+  --am-tracking-tight:   -0.01em;
+  --am-tracking-normal:  0;
+  --am-tracking-wide:    0.04em;
+
+  --am-leading-tight:    1.2;
+  --am-leading-normal:   1.45;
+
+  /* ── Spacing (4px base) ─────────────────────────────────────────────── */
+  --am-space-1:          4px;
+  --am-space-2:          8px;
+  --am-space-3:          12px;
+  --am-space-4:          16px;
+  --am-space-5:          20px;
+  --am-space-6:          24px;
+  --am-space-8:          32px;
+  --am-space-10:         40px;
+  --am-space-12:         48px;
+
+  /* ── Radii ──────────────────────────────────────────────────────────── */
+  --am-radius-sm:        4px;
+  --am-radius-md:        8px;
+  --am-radius-lg:        12px;
+  --am-radius-xl:        16px;
+  --am-radius-pill:      999px;
+
+  /* ── Elevation ──────────────────────────────────────────────────────── */
+  --am-elev-0: none;
+  --am-elev-1: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+  --am-elev-2: 0 4px 12px rgba(0, 0, 0, 0.32), 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+  --am-elev-3: 0 16px 40px rgba(0, 0, 0, 0.48), 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+  --am-dur-fast:    120ms;
+  --am-dur-base:    180ms;
+  --am-dur-slow:    240ms;
+  --am-ease-out:    cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  --am-ease-in-out: cubic-bezier(0.4, 0.0, 0.2, 1.0);
+
+  /* ── Z-index ────────────────────────────────────────────────────────── */
+  --am-z-base:       0;
+  --am-z-elevated:   10;
+  --am-z-sticky:     20;
+  --am-z-sheet:      40;
+  --am-z-modal:      50;
+  --am-z-toast:      60;
+  --am-z-tooltip:    70;
+
+  /* ── Component sizes (recomputed in compact density) ────────────────── */
+  --am-bus-card-min:    260px;
+  --am-bus-card-h:      148px;
+  --am-input-row-h:     44px;
+  --am-meter-h:         12px;
+  --am-cell-size:       32px;
+  --am-focus-ring:      2px solid var(--am-accent-ring);
+}
+
+/* ── Compact density overrides ──────────────────────────────────────────── */
+.audioManager[data-density="compact"] {
+  --am-space-1: 2px;
+  --am-space-2: 6px;
+  --am-space-3: 10px;
+  --am-space-4: 14px;
+  --am-space-5: 18px;
+  --am-space-6: 22px;
+  --am-space-8: 28px;
+
+  --am-text-13: 12px;
+  --am-text-14: 13px;
+  --am-text-16: 14px;
+  --am-text-18: 16px;
+  --am-text-22: 20px;
+
+  --am-bus-card-h: 124px;
+  --am-input-row-h: 36px;
+  --am-cell-size:   26px;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --am-dur-fast: 0ms;
+    --am-dur-base: 0ms;
+    --am-dur-slow: 0ms;
+  }
+}

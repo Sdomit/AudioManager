@@ -1,0 +1,261 @@
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-2);
+  padding: var(--am-space-3) var(--am-space-4);
+  min-width: var(--am-bus-card-min);
+  flex: 1;
+  height: var(--am-bus-card-h);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-lg);
+  cursor: pointer;
+  transition: border-color var(--am-dur-fast) var(--am-ease-out),
+              background var(--am-dur-fast) var(--am-ease-out),
+              transform var(--am-dur-fast) var(--am-ease-out);
+}
+
+.card:hover {
+  border-color: var(--am-border-strong);
+  background: var(--am-surface-3);
+}
+
+.card.selected {
+  border-color: var(--bus-accent);
+  background: var(--am-surface-3);
+  box-shadow: 0 0 0 1px var(--bus-accent), var(--am-elev-2);
+}
+
+/* State-specific tweaks */
+
+.card.state_idle .deviceName,
+.card.state_idle .meterRow {
+  opacity: 0.6;
+}
+
+.card.state_unconfigured {
+  border-style: dashed;
+  border-color: var(--am-border-default);
+}
+
+.card.state_unconfigured .deviceMissing {
+  color: var(--am-warning);
+}
+
+.card.state_error {
+  border-color: var(--am-meter-clip);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.04), transparent 40%), var(--am-surface-2);
+}
+
+.card.state_clipping {
+  border-color: var(--am-meter-clip);
+  animation: clipPulse 1.6s ease-out infinite;
+}
+
+@keyframes clipPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.0); }
+  50%      { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25); }
+}
+
+/* ── Header row ──────────────────────────────────────────────────────── */
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--am-space-2);
+}
+
+.titleGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  min-width: 0;
+}
+
+.roleIcon {
+  display: inline-flex;
+  align-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+.role {
+  font-size: var(--am-text-18);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-tight);
+  color: var(--am-text-primary);
+}
+
+.busId {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  background: var(--am-surface-3);
+  padding: 1px 6px;
+  border-radius: var(--am-radius-sm);
+  letter-spacing: 0.05em;
+}
+
+/* ── Device button ──────────────────────────────────────────────────── */
+.deviceButton {
+  text-align: left;
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.deviceButton:hover .deviceName,
+.deviceButton:hover .deviceMissing {
+  color: var(--am-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--am-border-strong);
+  text-underline-offset: 3px;
+}
+
+.deviceName { color: inherit; }
+.deviceMissing { color: var(--am-warning); font-weight: 500; }
+
+/* ── Meter row ──────────────────────────────────────────────────────── */
+.meterRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-3);
+}
+
+.dbReadout {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+  min-width: 56px;
+  text-align: right;
+}
+
+/* ── Error row ──────────────────────────────────────────────────────── */
+.errorRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  font-size: var(--am-text-12);
+  color: var(--am-meter-clip);
+}
+.errorAction {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: var(--am-text-12);
+  border-radius: var(--am-radius-sm);
+  background: var(--am-danger-muted);
+  color: var(--am-meter-clip);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.errorAction:hover { background: rgba(239, 68, 68, 0.22); }
+
+/* ── Volume slider ──────────────────────────────────────────────────── */
+.volumeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-3);
+  margin-top: auto;
+}
+
+.slider {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  background: var(--am-surface-4);
+  border-radius: var(--am-radius-pill);
+  overflow: hidden;
+}
+
+.sliderInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+  z-index: 1;
+}
+
+.sliderInput:disabled { cursor: not-allowed; }
+
+.sliderFill {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  pointer-events: none;
+  transition: width var(--am-dur-fast) var(--am-ease-out);
+}
+
+.sliderDisabled { opacity: 0.4; }
+
+.volumeReadout {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+  min-width: 56px;
+  text-align: right;
+}
+
+/* ── Action buttons ─────────────────────────────────────────────────── */
+.actionsRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--am-space-1);
+  padding: 6px 10px;
+  font-size: var(--am-text-12);
+  font-weight: 500;
+  background: var(--am-surface-3);
+  color: var(--am-text-secondary);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  transition: background var(--am-dur-fast), color var(--am-dur-fast), border-color var(--am-dur-fast);
+}
+.actionBtn:hover:not(:disabled) {
+  background: var(--am-surface-4);
+  color: var(--am-text-primary);
+}
+.actionBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.actionActive {
+  background: var(--bus-accent-muted);
+  color: var(--bus-accent);
+  border-color: var(--bus-accent);
+}
+.actionActive:hover {
+  background: var(--bus-accent-muted);
+}
+
+.actionMuted {
+  background: var(--am-danger-muted);
+  color: var(--am-meter-clip);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.moreBtn {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-md);
+}
+.moreBtn:hover {
+  color: var(--am-text-primary);
+  background: var(--am-surface-3);
+}

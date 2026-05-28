@@ -1,0 +1,85 @@
+/* ──────────────────────────────────────────────────────────────────────────
+ *  AudioManager base styles
+ *
+ *  Scoped to .audioManager — does NOT leak to your host app.
+ *  Imports the Geist font from a CDN. Replace with self-hosted in prod.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+@import url("https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-sans/style.css");
+@import url("https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-mono/style.css");
+
+.audioManager {
+  font-family: var(--am-font-ui);
+  font-size: var(--am-text-14);
+  line-height: var(--am-leading-normal);
+  color: var(--am-text-primary);
+  background: var(--am-surface-0);
+  font-feature-settings: "cv11", "ss01", "ss03";
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+
+.audioManager *,
+.audioManager *::before,
+.audioManager *::after {
+  box-sizing: border-box;
+}
+
+.audioManager button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.audioManager button:focus-visible,
+.audioManager [tabindex]:focus-visible {
+  outline: var(--am-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--am-radius-sm);
+}
+
+.audioManager input,
+.audioManager select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.audioManager input::placeholder {
+  color: var(--am-text-tertiary);
+}
+
+.audioManager kbd {
+  font-family: var(--am-font-mono);
+  font-size: 0.85em;
+  padding: 1px 6px;
+  border-radius: var(--am-radius-sm);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+  color: var(--am-text-secondary);
+}
+
+.audioManager ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.audioManager ::-webkit-scrollbar-track { background: transparent; }
+.audioManager ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+.audioManager ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.16);
+}

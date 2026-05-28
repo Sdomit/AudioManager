@@ -1,0 +1,141 @@
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-2);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 40px 1fr;
+  align-items: center;
+  gap: var(--am-space-3);
+  padding: var(--am-space-3) var(--am-space-4);
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-subtle);
+  border-radius: var(--am-radius-lg);
+  cursor: pointer;
+  transition: background var(--am-dur-fast), border-color var(--am-dur-fast);
+}
+.row:hover {
+  background: var(--am-surface-2);
+  border-color: var(--am-border-default);
+}
+.rowSelected {
+  background: var(--am-surface-2);
+  border-color: var(--am-accent);
+  box-shadow: 0 0 0 1px var(--am-accent-muted);
+}
+
+/* ── Source ────────────────────────────────────────────────────────── */
+.source {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  min-width: 0;
+}
+
+.sourceIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--am-surface-3);
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-md);
+  flex-shrink: 0;
+}
+.rowSelected .sourceIcon {
+  background: var(--am-accent-muted);
+  color: var(--am-accent-hover);
+}
+
+.sourceText {
+  min-width: 0;
+}
+
+.sourceName {
+  font-size: var(--am-text-13);
+  font-weight: 600;
+  color: var(--am-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sourceDevice {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Arrow ──────────────────────────────────────────────────────────── */
+.arrow {
+  color: var(--am-text-tertiary);
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── Chips ──────────────────────────────────────────────────────────── */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--am-space-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--am-radius-pill);
+  font-size: var(--am-text-12);
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: background var(--am-dur-fast), border-color var(--am-dur-fast), color var(--am-dur-fast);
+}
+
+.chipOff {
+  background: transparent;
+  color: var(--am-text-tertiary);
+  border-color: var(--am-border-default);
+  border-style: dashed;
+}
+.chipOff:hover {
+  color: var(--am-text-primary);
+  background: var(--am-surface-3);
+  border-color: var(--am-border-strong);
+  border-style: solid;
+}
+
+.chipOn {
+  background: var(--bus-accent-muted);
+  color: var(--bus-accent);
+  border-color: var(--bus-accent);
+}
+.chipOn:hover {
+  background: transparent;
+  border-style: dashed;
+}
+
+.chipIcon {
+  display: inline-flex;
+  align-items: center;
+  width: 12px;
+  height: 12px;
+}
+
+.chipLabel {
+  letter-spacing: var(--am-tracking-tight);
+}
+
+.chipAction {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.7;
+}
+.chip:hover .chipAction {
+  opacity: 1;
+}
