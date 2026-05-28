@@ -187,11 +187,23 @@ impl RecorderHandle {
 
     /// Stop the recording and finalize the WAV header.
     ///
-    /// Sends `Remove` to the engine (no-op if the engine has restarted),
-    /// signals the writer thread to drain + exit, joins it, and returns
-    /// the final info snapshot.
+    /// Sends `Remove` to the engine, signals the writer thread to drain
+    /// + exit, joins it, and returns the final info snapshot. If the
+    /// `Remove` send fails the engine was already torn down out-of-band
+    /// (invariant violation in IPC layer) — record it as the first error
+    /// so the surfaced `RecordingInfo.error` makes it visible instead of
+    /// silently swallowing the diagnostic.
     pub fn stop(mut self) -> RecordingInfo {
-        let _ = self.engine_tap_tx.send(TapCommand::Remove(self.tap_id));
+        if self
+            .engine_tap_tx
+            .send(TapCommand::Remove(self.tap_id))
+            .is_err()
+        {
+            set_first_error(
+                &self.error,
+                "Recorder stop: engine was already gone before Remove sent".to_string(),
+            );
+        }
         self.stop_flag.store(true, Ordering::Release);
         if let Some(handle) = self.writer_handle.take() {
             let _ = handle.join();
@@ -830,6 +842,42 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn stop_records_error_when_engine_send_fails() {
+        // P3a: a stale RecorderHandle whose engine was torn down out-of-band
+        // (invariant violation upstream) must surface a real error string
+        // through RecordingInfo.error, not silently swallow the diagnostic.
+        let (tx, rx) = mpsc::channel::<TapCommand>();
+        drop(rx);
+
+        let writer_handle = thread::spawn(|| {}); // no-op, immediately joinable
+
+        let handle = RecorderHandle {
+            id: "test-stop-err".to_string(),
+            spec: TapSpec::BusOut { bus_id: BusId::A1 },
+            file_path: PathBuf::from("ignored.wav"),
+            channels: 2,
+            sample_rate: 48_000,
+            started_at: SystemTime::now(),
+            tap_id: 42,
+            engine_bus: BusId::A1,
+            samples_written: Arc::new(AtomicU64::new(0)),
+            dropped: Arc::new(AtomicU64::new(0)),
+            bytes_written: Arc::new(AtomicU64::new(0)),
+            error: Arc::new(Mutex::new(None)),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            writer_handle: Some(writer_handle),
+            engine_tap_tx: tx,
+        };
+
+        let info = handle.stop();
+        let surfaced = info.error.unwrap_or_default();
+        assert!(
+            surfaced.contains("engine was already gone"),
+            "expected stop() to record an engine-gone error, got: {surfaced:?}"
+        );
     }
 
     #[test]

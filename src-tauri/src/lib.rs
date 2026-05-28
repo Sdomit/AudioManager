@@ -36,11 +36,10 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 
 /// Stop and remove every recorder whose tap is attached to `bus_id`.
 ///
-/// Must be called BEFORE the bus's engine is dropped — this way the
-/// `Remove` command reaches the still-running audio callback, which
-/// releases the ring producer, and the writer thread drains cleanly.
-/// Called from every site that drops a bus engine (rebuild, preset
-/// apply, clear, passthrough start/stop).
+/// Internal helper used by `tear_down_engine`. Must be called BEFORE the
+/// bus's engine is dropped — this way the `Remove` command reaches the
+/// still-running audio callback, which releases the ring producer, and
+/// the writer thread drains cleanly.
 fn stop_recorders_for_bus(inner: &mut AppInner, bus_id: BusId) {
     let ids: Vec<String> = inner
         .recorders
@@ -55,14 +54,25 @@ fn stop_recorders_for_bus(inner: &mut AppInner, bus_id: BusId) {
     }
 }
 
-/// Stop every active recorder. Used when wiping all engines at once
-/// (clear_routes, apply_preset_state, stop_passthrough).
-fn stop_all_recorders(inner: &mut AppInner) {
-    let ids: Vec<String> = inner.recorders.keys().cloned().collect();
-    for id in ids {
-        if let Some(handle) = inner.recorders.remove(&id) {
-            let _ = handle.stop();
-        }
+/// Drop the engine on `bus_id` AND ensure every recorder attached to that
+/// bus is stopped first. Single source of truth for bus-engine teardown
+/// — callers MUST go through this helper instead of writing `bus.engine
+/// = None` directly. That convention used to be enforced by code review
+/// only; routing it through one function eliminates the regression
+/// surface where a new teardown path could forget the recorder cleanup
+/// and leak writer threads polling a dead consumer.
+fn tear_down_engine(inner: &mut AppInner, bus_id: BusId) {
+    stop_recorders_for_bus(inner, bus_id);
+    if let Some(bus) = inner.buses.get_mut(&bus_id) {
+        bus.engine = None;
+    }
+}
+
+/// Tear down every bus engine (and every recorder) at once. Used by
+/// full-wipe paths: passthrough start/stop, clear_routes, preset apply.
+fn tear_down_all_engines(inner: &mut AppInner) {
+    for bus_id in BusId::ALL {
+        tear_down_engine(inner, bus_id);
     }
 }
 
@@ -87,15 +97,13 @@ fn app_local_dir(app: &tauri::AppHandle) -> Result<PathBuf, EngineError> {
 ///   * `config.output_device_id` is `Some(_)`
 ///   * The graph has at least one enabled send to `bus_id`
 fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
-    // Any recorders tapped into this bus must release their ring producers
-    // BEFORE the engine drops, otherwise the writer thread polls forever.
-    stop_recorders_for_bus(inner, bus_id);
+    // Centralized teardown: stops recorders first, then drops the engine
+    // so WASAPI handles are released before the restart attempt.
+    tear_down_engine(inner, bus_id);
     let (enabled, output_id, bus_vol, bus_muted) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
         })?;
-        // Drop first so WASAPI handles are released before a restart attempt.
-        bus.engine = None;
         (
             bus.config.enabled,
             bus.config.output_device_id.clone(),
@@ -187,9 +195,8 @@ fn apply_preset_state(
     inner: &mut AppInner,
     preset: &PresetFileV2,
 ) -> Result<(), EngineError> {
-    stop_all_recorders(inner);
+    tear_down_all_engines(inner);
     for bus in inner.buses.values_mut() {
-        bus.engine = None;
         bus.last_error = None;
     }
     inner.graph.clear();
@@ -203,7 +210,6 @@ fn apply_preset_state(
         bus.config.volume = BusConfig::clamp_volume(bus_preset.volume);
         bus.config.muted = bus_preset.muted;
         bus.config.enabled = bus_preset.enabled;
-        bus.engine = None;
         bus.last_error = None;
     }
 
@@ -293,9 +299,8 @@ fn start_passthrough(
     ensure_input_name(&input_id)?;
 
     let mut inner = state.inner.lock().unwrap();
-    stop_all_recorders(&mut inner);
+    tear_down_all_engines(&mut inner);
     for bus in inner.buses.values_mut() {
-        bus.engine = None;
         bus.last_error = None;
     }
     inner.graph.clear();
@@ -313,9 +318,8 @@ fn start_passthrough(
 #[tauri::command]
 fn stop_passthrough(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    stop_all_recorders(&mut inner);
+    tear_down_all_engines(&mut inner);
     for bus in inner.buses.values_mut() {
-        bus.engine = None;
         bus.last_error = None;
     }
     inner.graph.clear();
@@ -482,9 +486,8 @@ fn set_route(
 #[tauri::command]
 fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    stop_all_recorders(&mut inner);
+    tear_down_all_engines(&mut inner);
     for bus in inner.buses.values_mut() {
-        bus.engine = None;
         bus.last_error = None;
     }
     inner.graph.clear();
