@@ -1,0 +1,144 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  animation: fade 120ms ease-out;
+}
+
+.dialog {
+  background: var(--am-bg-elev, #1c2027);
+  border: 1px solid var(--am-border, #2e333a);
+  border-radius: 12px;
+  width: min(640px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--am-border, #2e333a);
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--am-fg, #e6e8ea);
+  margin: 0;
+}
+
+.closeBtn {
+  background: transparent;
+  border: 0;
+  color: var(--am-fg-dim, #9aa3ad);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.closeBtn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--am-fg, #e6e8ea);
+}
+
+.body {
+  padding: 16px 18px 4px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 36px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.groupTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--am-fg-dim, #9aa3ad);
+  margin: 0 0 2px;
+  font-weight: 600;
+}
+
+.entries {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+
+.key {
+  display: inline-block;
+  min-width: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--am-border, #2e333a);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--am-bg, #0e1116);
+  color: var(--am-fg, #e6e8ea);
+  font-family: var(--am-font-mono, ui-monospace, "JetBrains Mono", Menlo, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.description {
+  margin: 0;
+  color: var(--am-fg, #e6e8ea);
+  font-size: 13px;
+}
+
+.footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--am-border, #2e333a);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.footerHint {
+  font-size: 11px;
+  color: var(--am-fg-dim, #9aa3ad);
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (max-width: 540px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+}

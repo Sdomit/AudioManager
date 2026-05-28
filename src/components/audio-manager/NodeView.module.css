@@ -1,0 +1,581 @@
+.wrap {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(168, 85, 247, 0.04), transparent 40%),
+    radial-gradient(circle at 80% 80%, rgba(239, 68, 68, 0.04), transparent 40%),
+    var(--am-surface-0);
+  min-height: 100%;
+  touch-action: none;
+}
+
+.wrapDragging {
+  cursor: grabbing;
+  user-select: none;
+}
+.wrapPanReady { cursor: grab; }
+.wrapPanning  { cursor: grabbing; user-select: none; }
+
+.canvasTransform {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+
+.zoomBar {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+}
+
+.zoomBtn,
+.zoomReadout,
+.resetBtn,
+.addInputBtn {
+  padding: 4px 10px;
+  font-size: var(--am-text-11);
+  font-weight: 500;
+  color: var(--am-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--am-radius-sm);
+  letter-spacing: var(--am-tracking-tight);
+  cursor: pointer;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast);
+}
+.zoomBtn {
+  font-size: 14px;
+  line-height: 1;
+  min-width: 22px;
+}
+.zoomReadout { min-width: 40px; }
+.resetBtn {
+  margin-left: 4px;
+  border-left: 1px solid var(--am-border-default);
+  padding-left: 10px;
+}
+.addInputBtn {
+  margin-left: 4px;
+  border-left: 1px solid var(--am-border-default);
+  padding-left: 10px;
+  color: var(--am-accent, #EF4444);
+  font-weight: 600;
+}
+.zoomBtn:hover,
+.zoomReadout:hover,
+.resetBtn:hover,
+.addInputBtn:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
+}
+
+.canvas {
+  position: relative;
+}
+
+.columnLabel {
+  position: absolute;
+  top: 0;
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-wide);
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+  pointer-events: none;
+}
+
+.wiresLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.wire {
+  cursor: pointer;
+  pointer-events: all;
+  transition: opacity var(--am-dur-fast);
+}
+.wire:hover { opacity: 0.95; }
+
+@keyframes am-wire-flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -36; }
+}
+
+/* ── Common node styles ───────────────────────────────────────────── */
+.inputNode,
+.busNode {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  padding: var(--am-space-2) var(--am-space-3);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-lg);
+  cursor: grab;
+  user-select: none;
+  transition: border-color var(--am-dur-fast), background var(--am-dur-fast), box-shadow var(--am-dur-fast);
+}
+
+.inputNode:active,
+.busNode:active {
+  cursor: grabbing;
+}
+
+.nodeMoving {
+  z-index: 5;
+  cursor: grabbing !important;
+  box-shadow: 0 0 0 1px var(--am-accent), 0 12px 32px rgba(0, 0, 0, 0.5);
+  transform: scale(1.02);
+  transition: none;
+}
+
+.inputNode:hover,
+.busNode:hover,
+.nodeHovered {
+  background: var(--am-surface-3);
+  border-color: var(--am-border-strong);
+}
+
+.nodeSelected {
+  border-color: var(--am-accent) !important;
+  box-shadow: 0 0 0 1px var(--am-accent), 0 0 24px rgba(239, 68, 68, 0.18);
+}
+
+.nodeMuted .nodeName { opacity: 0.5; text-decoration: line-through; }
+.nodeDragging { box-shadow: 0 0 0 1px var(--am-accent), 0 0 16px rgba(239, 68, 68, 0.30); }
+
+.nodeMultiSelected {
+  outline: 2px dashed var(--am-accent);
+  outline-offset: 2px;
+}
+
+.marquee {
+  position: absolute;
+  border: 1px dashed var(--am-accent);
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: var(--am-radius-sm);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.nodeIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--am-surface-3);
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-md);
+  flex-shrink: 0;
+}
+.nodeSelected .nodeIcon { background: var(--am-accent-muted); color: var(--am-accent-hover); }
+.busNode .nodeIcon { background: var(--bus-accent-muted); }
+
+.nodeText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nodeName {
+  font-size: var(--am-text-13);
+  font-weight: 600;
+  color: var(--am-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nodeSub {
+  display: flex;
+  align-items: center;
+}
+
+.levelBar {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  height: 4px;
+  background: var(--am-surface-4);
+  border-radius: var(--am-radius-pill);
+  overflow: hidden;
+}
+
+.levelFill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--am-meter-low), var(--am-meter-mid) 70%, var(--am-meter-high) 90%, var(--am-meter-clip));
+  transition: width 80ms linear;
+}
+
+/* ── Ports ────────────────────────────────────────────────────────── */
+.outputPort,
+.inputPort {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: grab;
+  z-index: 2;
+}
+
+.outputPort { right: -12px; }
+.inputPort  { left:  -12px; cursor: default; }
+
+.portInner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--am-surface-1);
+  border: 2px solid var(--am-text-tertiary);
+  transition: border-color var(--am-dur-fast), background var(--am-dur-fast), transform var(--am-dur-fast);
+}
+
+.outputPort:hover .portInner {
+  border-color: var(--am-accent);
+  background: var(--am-accent);
+  transform: scale(1.15);
+}
+
+.portConnected .portInner {
+  border-color: var(--am-accent-hover);
+  background: var(--am-accent);
+}
+
+.busNode .portInner {
+  border-color: var(--bus-accent, var(--am-text-tertiary));
+}
+
+.busNodeDragTarget .portInner {
+  background: var(--bus-accent);
+  border-color: white;
+  transform: scale(1.4);
+  box-shadow: 0 0 0 6px var(--bus-accent-muted);
+}
+.busNodeDragTarget {
+  border-color: var(--bus-accent) !important;
+  box-shadow: 0 0 0 1px var(--bus-accent), 0 0 32px var(--bus-accent-muted);
+}
+
+/* ── REC badge on input + bus nodes ──────────────────────────────────── */
+.recBadge {
+  position: absolute;
+  top: 4px;
+  right: 18px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-tertiary);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 3;
+  opacity: 0.55;
+  transition: opacity var(--am-dur-fast), color var(--am-dur-fast),
+    background var(--am-dur-fast);
+}
+.busNode .recBadge { right: 6px; }
+.recBadge:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--am-meter-clip, #EF4444);
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.10);
+}
+.recBadgeArmed {
+  opacity: 1 !important;
+  color: white !important;
+  background: var(--am-meter-clip, #EF4444) !important;
+  border-color: var(--am-meter-clip, #EF4444) !important;
+  animation: am-node-rec-pulse 1.6s ease-in-out infinite;
+}
+.recBadgeArmed:hover { background: #DC2626 !important; }
+.recBadgeDisabled { opacity: 0.25; cursor: not-allowed; }
+@keyframes am-node-rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50%      { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .recBadgeArmed { animation: none; }
+}
+
+/* REC button inside the wire popover */
+.wirePopoverBtnRec {
+  background: var(--am-meter-clip, #EF4444) !important;
+  color: white !important;
+  border-color: var(--am-meter-clip, #EF4444) !important;
+  animation: am-node-rec-pulse 1.6s ease-in-out infinite;
+}
+.wirePopoverBtnRec:hover { background: #DC2626 !important; }
+
+/* ── Bus node specifics ───────────────────────────────────────────── */
+.busNode {
+  flex-direction: row;
+  align-items: stretch;
+  padding: var(--am-space-2) var(--am-space-3);
+}
+
+.busNodeText {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.busNodeHeader {
+  display: flex;
+  align-items: baseline;
+  gap: var(--am-space-2);
+}
+
+.busNodeLabel {
+  font-size: var(--am-text-14);
+  font-weight: 600;
+  color: var(--am-text-primary);
+}
+
+.busNodeId {
+  font-family: var(--am-font-mono);
+  font-size: 10px;
+  color: var(--am-text-tertiary);
+  background: var(--am-surface-3);
+  padding: 1px 5px;
+  border-radius: var(--am-radius-sm);
+}
+
+.busNodeMeter {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  background: var(--am-surface-4);
+  border-radius: var(--am-radius-pill);
+  overflow: hidden;
+}
+
+.busNodeMeterFill {
+  position: absolute;
+  inset: 0;
+  transition: width 80ms linear;
+}
+
+.busNodeState {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--am-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: var(--am-tracking-wide);
+  font-weight: 500;
+}
+
+.busStateDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.busNodeLive {
+  border-color: rgba(34, 197, 94, 0.32);
+}
+.busNodeError {
+  border-color: rgba(239, 68, 68, 0.40);
+}
+
+/* ── Wire popover ─────────────────────────────────────────────────── */
+.wirePopover {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 12px));
+  min-width: 220px;
+  background: var(--am-surface-4);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  padding: var(--am-space-2) var(--am-space-3);
+  box-shadow: var(--am-elev-3), 0 0 0 1px var(--bus-accent);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-2);
+  animation: am-popIn 120ms var(--am-ease-out);
+}
+
+@keyframes am-popIn {
+  from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)); }
+  to   { opacity: 1; transform: translate(-50%, calc(-100% - 12px)); }
+}
+
+.wirePopover::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: var(--am-surface-4);
+  border-right: 1px solid var(--bus-accent);
+  border-bottom: 1px solid var(--bus-accent);
+}
+
+.wirePopoverHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  font-size: var(--am-text-12);
+  color: var(--am-text-primary);
+}
+
+.wirePopoverFrom {
+  font-weight: 600;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wirePopoverArrow {
+  color: var(--am-text-tertiary);
+}
+
+.wirePopoverTo {
+  font-weight: 600;
+  color: var(--bus-accent);
+}
+
+.wirePopoverClose {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-sm);
+}
+.wirePopoverClose:hover {
+  color: var(--am-text-primary);
+  background: var(--am-surface-3);
+}
+
+.wirePopoverRow {
+  display: grid;
+  grid-template-columns: 40px 1fr 56px;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+
+.wirePopoverLabel {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: var(--am-tracking-wide);
+}
+
+.wirePopoverSlider { width: 100%; cursor: pointer; }
+
+.wirePopoverGain {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  text-align: right;
+}
+
+.wirePopoverActions {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+
+.wirePopoverBtn,
+.wirePopoverRemove {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--am-surface-3);
+  color: var(--am-text-secondary);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm);
+  font-size: var(--am-text-11);
+  font-weight: 500;
+}
+.wirePopoverBtn:hover,
+.wirePopoverRemove:hover { background: var(--am-surface-4); color: var(--am-text-primary); }
+
+.wirePopoverBtnActive {
+  background: var(--am-danger-muted);
+  color: var(--am-meter-clip);
+  border-color: rgba(239, 68, 68, 0.30);
+}
+
+.wirePopoverRemove {
+  margin-left: auto;
+  color: var(--am-meter-clip);
+  border-color: rgba(239, 68, 68, 0.20);
+}
+.wirePopoverRemove:hover {
+  background: var(--am-danger-muted);
+  color: var(--am-meter-clip);
+}
+
+/* ── Canvas background right-click menu ─────────────────────────────── */
+.bgCtxBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+}
+
+.bgCtxMenu {
+  position: fixed;
+  z-index: 111;
+  min-width: 200px;
+  background: var(--am-bg-elev, #1c2027);
+  border: 1px solid var(--am-border-default, #2e333a);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.bgCtxItem {
+  background: transparent;
+  border: 0;
+  color: var(--am-text-primary, #e6e8ea);
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.bgCtxItem:hover {
+  background: var(--am-surface-3, rgba(255, 255, 255, 0.05));
+}

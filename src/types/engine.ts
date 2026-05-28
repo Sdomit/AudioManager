@@ -100,3 +100,36 @@ export interface InputPeakStatus {
   device_id: string;
   peak: number;
 }
+
+// ── Recording ────────────────────────────────────────────────────────────────
+
+/**
+ * What the user asked to record. The `kind` discriminant matches the
+ * `#[serde(tag = "kind", rename_all = "snake_case")]` attribute on the
+ * Rust `TapSpec` enum.
+ */
+export type TapSpec =
+  | { kind: "input_pre"; device_id: string }
+  | { kind: "input_post"; device_id: string; bus_id: BusId }
+  | { kind: "bus_out"; bus_id: BusId };
+
+export interface RecordingInfo {
+  id: string;
+  spec: TapSpec;
+  file_path: string;
+  channels: number;
+  sample_rate: number;
+  started_at_unix_ms: number;
+  samples_written: number;
+  bytes_written: number;
+  dropped_samples: number;
+  engine_bus: BusId;
+  error: string | null;
+}
+
+export interface RecordingFile {
+  name: string;
+  file_path: string;
+  size_bytes: number;
+  modified_unix_ms: number;
+}

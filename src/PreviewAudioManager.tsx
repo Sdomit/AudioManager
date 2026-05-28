@@ -1,9 +1,8 @@
 import { AudioManager } from "./components/audio-manager";
-import "./App.css";
 
-export default function App() {
+export default function PreviewAudioManager() {
   return (
-    <div className="app-root">
+    <div style={{ height: "100vh", width: "100vw" }}>
       <AudioManager />
     </div>
   );

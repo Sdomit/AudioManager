@@ -1,0 +1,53 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-3);
+  padding: var(--am-space-2) var(--am-space-4);
+  background: var(--am-info-muted);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.24);
+  color: var(--am-text-primary);
+  font-size: var(--am-text-12);
+  animation: slideDown var(--am-dur-slow) var(--am-ease-out);
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--am-radius-pill);
+  background: rgba(59, 130, 246, 0.16);
+  color: var(--am-info);
+  flex-shrink: 0;
+}
+
+.text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--am-space-2);
+  flex: 1;
+}
+.detail {
+  color: var(--am-text-secondary);
+}
+
+.dismissBtn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-secondary);
+  border-radius: var(--am-radius-sm);
+}
+.dismissBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--am-text-primary);
+}

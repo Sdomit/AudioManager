@@ -31,3 +31,9 @@ src-tauri/Cargo.lock
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code local state
+.claude/
+
+# TypeScript incremental build info
+*.tsbuildinfo

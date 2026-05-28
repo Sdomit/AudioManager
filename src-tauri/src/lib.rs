@@ -3,11 +3,19 @@ mod presets;
 mod state;
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::devices::{DeviceInfo, DeviceListError};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
+use audio::recorder::{
+    self, CallbackTapKind, RecorderSettings, RecordingFile, RecordingInfo, StartRecorderRequest,
+    TapSpec,
+};
 use audio::routing::Route;
 use presets::{PresetFileV2, PresetLoadResult, PresetLoadWarning, PresetSummary};
 use state::{AppInner, AppState};
@@ -26,6 +34,52 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/// Stop and remove every recorder whose tap is attached to `bus_id`.
+///
+/// Must be called BEFORE the bus's engine is dropped — this way the
+/// `Remove` command reaches the still-running audio callback, which
+/// releases the ring producer, and the writer thread drains cleanly.
+/// Called from every site that drops a bus engine (rebuild, preset
+/// apply, clear, passthrough start/stop).
+fn stop_recorders_for_bus(inner: &mut AppInner, bus_id: BusId) {
+    let ids: Vec<String> = inner
+        .recorders
+        .iter()
+        .filter(|(_, h)| h.engine_bus == bus_id)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        if let Some(handle) = inner.recorders.remove(&id) {
+            let _ = handle.stop();
+        }
+    }
+}
+
+/// Stop every active recorder. Used when wiping all engines at once
+/// (clear_routes, apply_preset_state, stop_passthrough).
+fn stop_all_recorders(inner: &mut AppInner) {
+    let ids: Vec<String> = inner.recorders.keys().cloned().collect();
+    for id in ids {
+        if let Some(handle) = inner.recorders.remove(&id) {
+            let _ = handle.stop();
+        }
+    }
+}
+
+fn resolve_recordings_dir(app: &tauri::AppHandle) -> Result<PathBuf, EngineError> {
+    let base = app.path().app_local_data_dir().map_err(|e| EngineError {
+        message: format!("Failed to resolve app local data dir: {e}"),
+    })?;
+    let settings = RecorderSettings::load_or_default(&base);
+    Ok(settings.recordings_dir)
+}
+
+fn app_local_dir(app: &tauri::AppHandle) -> Result<PathBuf, EngineError> {
+    app.path().app_local_data_dir().map_err(|e| EngineError {
+        message: format!("Failed to resolve app local data dir: {e}"),
+    })
+}
+
 /// Stop the engine for `bus_id` and restart it from current matrix state.
 ///
 /// A bus runs only when all of these are true:
@@ -33,6 +87,9 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 ///   * `config.output_device_id` is `Some(_)`
 ///   * The graph has at least one enabled send to `bus_id`
 fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
+    // Any recorders tapped into this bus must release their ring producers
+    // BEFORE the engine drops, otherwise the writer thread polls forever.
+    stop_recorders_for_bus(inner, bus_id);
     let (enabled, output_id, bus_vol, bus_muted) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
@@ -130,6 +187,7 @@ fn apply_preset_state(
     inner: &mut AppInner,
     preset: &PresetFileV2,
 ) -> Result<(), EngineError> {
+    stop_all_recorders(inner);
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
@@ -235,6 +293,7 @@ fn start_passthrough(
     ensure_input_name(&input_id)?;
 
     let mut inner = state.inner.lock().unwrap();
+    stop_all_recorders(&mut inner);
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
@@ -254,6 +313,7 @@ fn start_passthrough(
 #[tauri::command]
 fn stop_passthrough(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
+    stop_all_recorders(&mut inner);
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
@@ -422,6 +482,7 @@ fn set_route(
 #[tauri::command]
 fn clear_routes(state: tauri::State<AppState>) -> Result<(), EngineError> {
     let mut inner = state.inner.lock().unwrap();
+    stop_all_recorders(&mut inner);
     for bus in inner.buses.values_mut() {
         bus.engine = None;
         bus.last_error = None;
@@ -751,6 +812,261 @@ fn rename_bus(
     Ok(bus.read_status())
 }
 
+// ── Recording ─────────────────────────────────────────────────────────────────
+
+/// Resolve target engine + callback tap kind + WAV header info for a spec.
+/// Internal helper — called by every start_* path below.
+fn resolve_tap(
+    inner: &AppInner,
+    spec: &TapSpec,
+) -> Result<
+    (
+        BusId,
+        CallbackTapKind,
+        u16,
+        u32,
+        std::sync::mpsc::Sender<recorder::TapCommand>,
+    ),
+    EngineError,
+> {
+    match spec {
+        TapSpec::BusOut { bus_id } => {
+            let bus = inner.buses.get(bus_id).ok_or_else(|| EngineError {
+                message: format!("Unknown bus: {bus_id:?}"),
+            })?;
+            let engine = bus.engine.as_ref().ok_or_else(|| EngineError {
+                message: format!(
+                    "Bus {bus_id:?} is not running. Enable a routed input first."
+                ),
+            })?;
+            Ok((
+                *bus_id,
+                CallbackTapKind::BusOut,
+                engine.out_channels,
+                engine.sample_rate,
+                engine.tap_command_tx.clone(),
+            ))
+        }
+        TapSpec::InputPost { device_id, bus_id } => {
+            let bus = inner.buses.get(bus_id).ok_or_else(|| EngineError {
+                message: format!("Unknown bus: {bus_id:?}"),
+            })?;
+            let engine = bus.engine.as_ref().ok_or_else(|| EngineError {
+                message: format!("Bus {bus_id:?} is not running"),
+            })?;
+            let (idx, channels) = engine.input_index(device_id).ok_or_else(|| EngineError {
+                message: format!(
+                    "Input '{device_id}' is not active on bus {bus_id:?}"
+                ),
+            })?;
+            Ok((
+                *bus_id,
+                CallbackTapKind::InputPost {
+                    input_index: idx,
+                    channels: channels as usize,
+                },
+                channels,
+                engine.sample_rate,
+                engine.tap_command_tx.clone(),
+            ))
+        }
+        TapSpec::InputPre { device_id } => {
+            // Pick the first running engine that has this input. Multiple
+            // engines may carry the same device — they're independent CPAL
+            // streams, but pre-gain samples are equivalent.
+            for (bus_id, bus) in inner.buses.iter() {
+                if let Some(engine) = bus.engine.as_ref() {
+                    if let Some((idx, channels)) = engine.input_index(device_id) {
+                        return Ok((
+                            *bus_id,
+                            CallbackTapKind::InputPre {
+                                input_index: idx,
+                                channels: channels as usize,
+                            },
+                            channels,
+                            engine.sample_rate,
+                            engine.tap_command_tx.clone(),
+                        ));
+                    }
+                }
+            }
+            Err(EngineError {
+                message: format!(
+                    "Input '{device_id}' is not active on any running bus"
+                ),
+            })
+        }
+    }
+}
+
+fn start_recording_inner(
+    inner: &mut AppInner,
+    recordings_dir: &std::path::Path,
+    session_subdir: Option<&str>,
+    spec: TapSpec,
+) -> Result<RecordingInfo, EngineError> {
+    let (engine_bus, kind, channels, sample_rate, tap_tx) = resolve_tap(inner, &spec)?;
+    let handle = recorder::start_recorder(StartRecorderRequest {
+        spec: spec.clone(),
+        kind,
+        channels,
+        sample_rate,
+        engine_bus,
+        engine_tap_tx: &tap_tx,
+        recordings_dir,
+        session_subdir,
+    })?;
+    let info = handle.info();
+    inner.recorders.insert(handle.id.clone(), handle);
+    Ok(info)
+}
+
+#[tauri::command]
+fn start_recording(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    spec: TapSpec,
+) -> Result<RecordingInfo, EngineError> {
+    let recordings_dir = resolve_recordings_dir(&app)?;
+    let mut inner = state.inner.lock().unwrap();
+    let result = start_recording_inner(&mut inner, &recordings_dir, None, spec);
+    if let Err(err) = &result {
+        inner.last_error = Some(err.message.clone());
+    }
+    result
+}
+
+#[tauri::command]
+fn start_master_recording(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<RecordingInfo>, EngineError> {
+    let recordings_dir = resolve_recordings_dir(&app)?;
+    let mut inner = state.inner.lock().unwrap();
+    let running_buses: Vec<BusId> = inner
+        .buses
+        .iter()
+        .filter(|(_, bus)| bus.engine.is_some())
+        .map(|(id, _)| *id)
+        .collect();
+    if running_buses.is_empty() {
+        return Err(new_last_error(
+            &mut inner,
+            "Master record: no buses are running.",
+        ));
+    }
+    let session = format!(
+        "master_{}",
+        chrono::Local::now().format("%Y-%m-%d_%H%M%S")
+    );
+    let mut out = Vec::with_capacity(running_buses.len());
+    for bus_id in running_buses {
+        match start_recording_inner(
+            &mut inner,
+            &recordings_dir,
+            Some(&session),
+            TapSpec::BusOut { bus_id },
+        ) {
+            Ok(info) => out.push(info),
+            Err(err) => {
+                inner.last_error = Some(err.message.clone());
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(EngineError {
+            message: "Master record: no buses could be tapped.".to_string(),
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn stop_recording(
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<RecordingInfo, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    let handle = inner.recorders.remove(&id).ok_or_else(|| EngineError {
+        message: format!("Recording '{id}' not found"),
+    })?;
+    Ok(handle.stop())
+}
+
+#[tauri::command]
+fn stop_all_recordings(state: tauri::State<AppState>) -> Vec<RecordingInfo> {
+    let mut inner = state.inner.lock().unwrap();
+    let ids: Vec<String> = inner.recorders.keys().cloned().collect();
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(handle) = inner.recorders.remove(&id) {
+            out.push(handle.stop());
+        }
+    }
+    out
+}
+
+#[tauri::command]
+fn list_active_recordings(state: tauri::State<AppState>) -> Vec<RecordingInfo> {
+    let inner = state.inner.lock().unwrap();
+    inner.recorders.values().map(|h| h.info()).collect()
+}
+
+#[tauri::command]
+fn list_recording_files(
+    app: tauri::AppHandle,
+) -> Result<Vec<RecordingFile>, EngineError> {
+    let dir = resolve_recordings_dir(&app)?;
+    recorder::list_recording_files(&dir)
+}
+
+#[tauri::command]
+fn get_recordings_dir(app: tauri::AppHandle) -> Result<String, EngineError> {
+    let dir = resolve_recordings_dir(&app)?;
+    Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+fn set_recordings_dir(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<String, EngineError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(EngineError {
+            message: "Recordings directory cannot be empty".to_string(),
+        });
+    }
+    let dir = PathBuf::from(trimmed);
+    std::fs::create_dir_all(&dir).map_err(|e| EngineError {
+        message: format!("Failed to create '{}': {e}", dir.display()),
+    })?;
+    let base = app_local_dir(&app)?;
+    let mut settings = RecorderSettings::load_or_default(&base);
+    settings.recordings_dir = dir.clone();
+    settings.save(&base)?;
+    Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+fn delete_recording_file(path: String) -> Result<(), EngineError> {
+    let p = PathBuf::from(path);
+    recorder::delete_recording_file(&p)
+}
+
+#[tauri::command]
+fn open_recordings_folder(app: tauri::AppHandle) -> Result<(), EngineError> {
+    let dir = resolve_recordings_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| EngineError {
+        message: format!("Failed to create '{}': {e}", dir.display()),
+    })?;
+    app.opener()
+        .open_path(dir.display().to_string(), None::<&str>)
+        .map_err(|e| EngineError {
+            message: format!("Failed to open recordings folder: {e}"),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,6 +1142,7 @@ mod tests {
         let mut inner = AppInner {
             buses: BusRuntime::default_set(),
             graph: AudioGraph::new(),
+            recorders: BTreeMap::new(),
             last_error: Some("stale".to_string()),
         };
 
@@ -870,6 +1187,16 @@ pub fn run() {
             set_bus_volume,
             set_bus_enabled,
             rename_bus,
+            start_recording,
+            start_master_recording,
+            stop_recording,
+            stop_all_recordings,
+            list_active_recordings,
+            list_recording_files,
+            get_recordings_dir,
+            set_recordings_dir,
+            delete_recording_file,
+            open_recordings_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

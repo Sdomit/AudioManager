@@ -1,0 +1,61 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: var(--am-text-11);
+  font-family: var(--am-font-mono);
+  color: var(--am-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  cursor: pointer;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast),
+    border-color var(--am-dur-fast);
+}
+
+.btn:hover:not(:disabled) {
+  color: var(--am-meter-clip, #EF4444);
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.btnArmed {
+  color: white;
+  background: var(--am-meter-clip, #EF4444);
+  border-color: var(--am-meter-clip, #EF4444);
+  animation: am-rec-pulse 1.6s ease-in-out infinite;
+}
+
+.btnArmed:hover {
+  color: white;
+  background: #DC2626;
+  border-color: #DC2626;
+}
+
+.btnCompact {
+  padding: 2px 4px;
+  border-radius: var(--am-radius-sm);
+  font-size: 10px;
+}
+
+.btnDisabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.elapsedLabel {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+@keyframes am-rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+  50%      { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.05); }
+}
+
+/* Honor reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .btnArmed { animation: none; }
+}
