@@ -696,28 +696,26 @@ export default function App() {
           </p>
         </section>
 
-        {hasVirtualOutputs && (
-          <section className="section">
-            <div className="section-header">
-              <h2 className="section-title">Stream Output Setup</h2>
-            </div>
-            <div className="stack">
-              <p className="section-hint">
-                Use Stream Output (B1) with a virtual audio cable to stream your audio to OBS, Discord, Zoom, or other applications.
-              </p>
-              <ol className="setup-steps">
-                <li>Install a virtual audio cable (e.g., VB-Cable, Virtual Audio Cable) if not already installed.</li>
-                <li>In AudioManager, assign Stream Output (B1) to the virtual cable <strong>playback/output</strong> device (usually <code>CABLE Input</code> or similar).</li>
-                <li>In your streaming or recording application (OBS, Discord, Zoom), select the matching <strong>recording/input</strong> device (usually <code>CABLE Output</code> or similar).</li>
-                <li>Send microphone, music, or browser audio to Stream Output in the input matrix below.</li>
-                <li>Start your stream or recording.</li>
-              </ol>
-              <p className="section-hint">
-                <strong>Note:</strong> Naming can be confusing. The AudioManager playback side (CABLE Input) is the recording side in OBS/Discord.
-              </p>
-            </div>
-          </section>
-        )}
+        <section className="section">
+          <div className="section-header">
+            <h2 className="section-title">Stream Output Setup</h2>
+          </div>
+          <div className="stack">
+            <p className="section-hint">
+              Use Stream Output (B1) with a virtual audio cable to stream your audio to OBS, Discord, Zoom, or other applications.
+            </p>
+            <ol className="setup-steps">
+              <li>Install a virtual audio cable (e.g., VB-Cable, Virtual Audio Cable) if not already installed.</li>
+              <li>In AudioManager, assign Stream Output (B1) to the virtual cable <strong>playback/output</strong> device (usually <code>CABLE Input</code> or similar).</li>
+              <li>In your streaming or recording application (OBS, Discord, Zoom), select the matching <strong>recording/input</strong> device (usually <code>CABLE Output</code> or similar).</li>
+              <li>Send microphone, music, or browser audio to Stream Output in the input matrix below.</li>
+              <li>Start your stream or recording.</li>
+            </ol>
+            <p className="section-hint">
+              <strong>Note:</strong> Naming can be confusing. The AudioManager playback side (CABLE Input) is the recording side in OBS/Discord.
+            </p>
+          </div>
+        </section>
       </div>
 
       {(error || systemError || presetWarnings.length > 0 || presetInfo) && (
