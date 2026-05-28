@@ -21,6 +21,8 @@ interface DevicePickerProps {
   onClose: () => void;
   /** Show virtual-audio hints (e.g. for the B1 stream bus). */
   highlightVirtual?: boolean;
+  /** Device IDs to hide from the list (e.g. already-added inputs). */
+  excludeIds?: Set<string>;
 }
 
 export function DevicePicker({
@@ -32,6 +34,7 @@ export function DevicePicker({
   onPick,
   onClose,
   highlightVirtual = false,
+  excludeIds,
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [search, setSearch] = useState("");
@@ -72,9 +75,15 @@ export function DevicePicker({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return devices;
-    return devices.filter((d) => d.name.toLowerCase().includes(q));
-  }, [devices, search]);
+    let list = devices;
+    if (excludeIds && excludeIds.size > 0) {
+      list = list.filter((d) => !excludeIds.has(d.id));
+    }
+    if (q) {
+      list = list.filter((d) => d.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [devices, search, excludeIds]);
 
   if (!open) return null;
 
@@ -158,13 +167,14 @@ export function DevicePicker({
         )}
 
         <div className={styles.footer}>
-          <button
-            className={styles.unassignBtn}
-            onClick={() => onPick(null)}
-            disabled={!currentDeviceId}
-          >
-            Unassign
-          </button>
+          {currentDeviceId && (
+            <button
+              className={styles.unassignBtn}
+              onClick={() => onPick(null)}
+            >
+              Unassign
+            </button>
+          )}
           <button className={styles.cancelBtn} onClick={onClose}>
             Cancel
           </button>

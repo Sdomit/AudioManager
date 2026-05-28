@@ -37,6 +37,9 @@ export function AudioManager() {
     ? state.buses.find((b) => b.id === busPickerFor) ?? null
     : null;
 
+  const [inputPickerOpen, setInputPickerOpen] = useState(false);
+  const usedInputIds = new Set(state.inputs.map((i) => i.id));
+
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
 
   return (
@@ -89,7 +92,7 @@ export function AudioManager() {
               am.setInputMuted(id, !input.muted);
             }}
             onInputGainChange={am.setInputGain}
-            onAddInput={am.addInput}
+            onAddInput={() => setInputPickerOpen(true)}
           />
         )}
 
@@ -165,6 +168,21 @@ export function AudioManager() {
             setBusPickerFor(null);
           }}
           onClose={() => setBusPickerFor(null)}
+        />
+      )}
+
+      {inputPickerOpen && (
+        <DevicePicker
+          open={true}
+          kind="input"
+          title="Add input device"
+          subtitle="Pick a microphone, system source, or virtual cable output."
+          excludeIds={usedInputIds}
+          onPick={(deviceId) => {
+            if (deviceId) am.addInput(deviceId);
+            setInputPickerOpen(false);
+          }}
+          onClose={() => setInputPickerOpen(false)}
         />
       )}
     </div>

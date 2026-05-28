@@ -102,7 +102,12 @@ export interface AudioManagerActions {
   setInputGain: (id: string, gain: number) => void;
   setInputMuted: (id: string, muted: boolean) => void;
   removeInput: (id: string) => void;
-  addInput: () => void;
+  /**
+   * Add an input. AudioManager opens the input device picker and calls
+   * this with the chosen device ID on confirm. Implementations that
+   * source devices another way may invoke this directly.
+   */
+  addInput: (deviceId: string) => void;
 
   toggleSend: (inputId: string, busId: BusId) => void;
   setSendGain: (inputId: string, busId: BusId, gain: number) => void;

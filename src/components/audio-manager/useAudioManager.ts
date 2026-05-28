@@ -523,15 +523,31 @@ export function useAudioManager(): UseAudioManager {
     [getInput],
   );
 
-  const removeInput = useCallback((id: string) => {
-    // Phase D-2: wires to ipc.removeInput.
-    dispatch({ type: "remove_input", id });
-  }, []);
+  const removeInput = useCallback(
+    (id: string) => {
+      dispatch({ type: "remove_input", id });
+      ipc
+        .removeInput(id)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("removeInput failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
 
-  const addInput = useCallback(() => {
-    // Phase D-2: wires to ipc.addInput via the input device picker.
-    dispatch({ type: "add_input" });
-  }, []);
+  const addInput = useCallback(
+    (deviceId: string) => {
+      ipc
+        .addInput(deviceId)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("addInput failed:", e);
+        });
+    },
+    [refresh],
+  );
 
   const toggleSend = useCallback(
     (inputId: string, busId: BusId) => {
