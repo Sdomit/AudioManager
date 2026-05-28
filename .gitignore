@@ -34,3 +34,6 @@ src-tauri/Cargo.lock
 
 # Claude Code local state
 .claude/
+
+# TypeScript incremental build info
+*.tsbuildinfo
