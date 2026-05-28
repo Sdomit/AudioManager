@@ -80,6 +80,37 @@ export async function listPresets(): Promise<Preset[]> {
   return presets.map(adaptPreset);
 }
 
+/**
+ * Lightweight meter poll. Calls `get_system_status` only (no presets,
+ * no device enumeration) and returns just what the meter loop needs:
+ *
+ *   - busLevels:  per-bus output peak in [0..1]
+ *   - inputLevels: per-input peak in [0..1]
+ *
+ * Cheap enough to call at 30 Hz. Backend `read_and_reset_meters()` is
+ * an atomic read; the round-trip is dominated by Tauri IPC marshalling.
+ *
+ * Bus state (enabled, error, output_device) transitions are NOT
+ * surfaced here — Phase E uses a slower full-refresh interval for
+ * those, so the fast path stays pure-meter and doesn't churn the
+ * reducer when nothing structural has changed.
+ */
+export async function pollMeters(): Promise<{
+  busLevels: Record<BusId, number>;
+  inputLevels: Record<string, number>;
+}> {
+  const status = await ipc.getSystemStatus();
+  const busLevels: Record<BusId, number> = {} as Record<BusId, number>;
+  for (const b of status.buses) {
+    busLevels[b.id] = Math.max(0, b.output_peak);
+  }
+  const inputLevels: Record<string, number> = {};
+  for (const p of status.input_peaks) {
+    inputLevels[p.device_id] = Math.max(0, p.peak);
+  }
+  return { busLevels, inputLevels };
+}
+
 /* ── Bus writes (Phase D wiring TODO) ───────────────────────────────────── */
 
 export async function setBusEnabled(_id: BusId, _enabled: boolean): Promise<void> {

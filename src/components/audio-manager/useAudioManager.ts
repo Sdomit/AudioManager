@@ -23,6 +23,7 @@ import {
   loadPreset as tcLoadPreset,
   savePreset as tcSavePreset,
   deletePreset as tcDeletePreset,
+  pollMeters,
 } from "./tauriCommands";
 import type {
   AudioInput,
@@ -396,41 +397,76 @@ export function useAudioManager(): UseAudioManager {
     };
   }, []);
 
-  // Fake meter animation loop. Replace with Tauri event subscription.
+  // Phase E: real meter loop.
+  //
+  // Backend doesn't emit events — it's poll-based via get_system_status.
+  // We run TWO intervals:
+  //
+  //   1. METER_POLL_MS (~33 ms / 30 Hz) — fast path. pollMeters() calls
+  //      get_system_status and dispatches tick_meters with only the
+  //      level/peak maps. Backend reads + resets atomics; very cheap.
+  //
+  //   2. STATE_REFRESH_MS (~1000 ms) — slow path. Full hydrate to pick
+  //      up out-of-band state changes (device errors surfacing on the
+  //      audio thread, devices being unplugged, etc). Keeps bus.state,
+  //      bus.error, bus.enabled in sync without paying for the heavier
+  //      hydrate at meter speed.
+  //
+  // Both intervals pause when document.hidden so a minimised window
+  // doesn't hammer the audio thread's atomics + IPC bridge.
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      if (now - last > 80) {
-        last = now;
-        const cur = stateRef.current;
-        const busLevels: Record<BusId, number> = {} as Record<BusId, number>;
-        for (const b of cur.buses) {
-          if (!b.enabled) {
-            busLevels[b.id] = 0;
-            continue;
-          }
-          const target = b.id === "B1" ? 0.85 : b.id === "A1" ? 0.55 : 0.3;
-          const jitter = (Math.random() - 0.5) * 0.3;
-          const v = clamp01(target + jitter);
-          busLevels[b.id] = v;
-        }
-        const inputLevels: Record<string, number> = {};
-        for (const i of cur.inputs) {
-          if (i.muted) {
-            inputLevels[i.id] = 0;
-            continue;
-          }
-          const base = i.gain * 0.6;
-          const jitter = (Math.random() - 0.5) * 0.25;
-          inputLevels[i.id] = clamp01(base + jitter);
-        }
+    const METER_POLL_MS = 33;
+    const STATE_REFRESH_MS = 1000;
+
+    let cancelled = false;
+    let meterInflight = false;
+    let stateInflight = false;
+    let meterTimer = 0;
+    let stateTimer = 0;
+
+    const tickMeters = async () => {
+      if (cancelled || meterInflight || document.hidden) return;
+      meterInflight = true;
+      try {
+        const { busLevels, inputLevels } = await pollMeters();
+        if (cancelled) return;
         dispatch({ type: "tick_meters", busLevels, inputLevels });
+      } catch (e) {
+        // Don't spam the console on every failed tick.
+        if (!cancelled) console.warn("pollMeters failed:", e);
+      } finally {
+        meterInflight = false;
       }
-      raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+
+    const tickState = async () => {
+      if (cancelled || stateInflight || document.hidden) return;
+      stateInflight = true;
+      try {
+        const r = await fetchHydrate();
+        if (cancelled) return;
+        dispatch({
+          type: "hydrate",
+          buses: r.buses,
+          inputs: r.inputs,
+          sends: r.sends,
+          presets: r.presets,
+        });
+      } catch (e) {
+        if (!cancelled) console.warn("state refresh failed:", e);
+      } finally {
+        stateInflight = false;
+      }
+    };
+
+    meterTimer = window.setInterval(tickMeters, METER_POLL_MS);
+    stateTimer = window.setInterval(tickState, STATE_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(meterTimer);
+      window.clearInterval(stateTimer);
+    };
   }, []);
 
   /* ── Actions ──────────────────────────────────────────────────────────── */
