@@ -49,7 +49,14 @@ export function BusCard({
       }}
       onClick={onSelect}
       role="group"
-      aria-label={`${bus.label} bus, state ${bus.state}`}
+      aria-label={ariaLabelForBus(bus)}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       data-bus-id={bus.id}
     >
       {/* Top row: role + state pill */}
@@ -222,6 +229,22 @@ function VolumeSlider({
 }
 
 /* ── Formatting helpers ─────────────────────────────────────────────────── */
+
+function ariaLabelForBus(bus: Bus): string {
+  const stateText = {
+    running: "running",
+    clipping: "clipping",
+    silent: "running but no inputs routed",
+    error: `error${bus.error ? `, ${bus.error}` : ""}`,
+    unconfigured: "no device selected",
+    idle: "idle",
+  }[bus.state];
+  const parts = [bus.label, bus.id, stateText];
+  if (bus.state === "running" || bus.state === "clipping") {
+    parts.push(`level ${levelToDb(bus.level)}`);
+  }
+  return parts.join(", ");
+}
 
 function levelToDb(level: number): string {
   if (level < 0.001) return "-∞ dB";

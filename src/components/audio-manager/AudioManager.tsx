@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BusRail } from "./BusRail";
 import { DetailPanel } from "./DetailPanel";
 import { DevicePicker } from "./DevicePicker";
+import { HotkeyOverlay } from "./HotkeyOverlay";
 import { InputList } from "./InputList";
 import { PresetBanner } from "./PresetBanner";
 import { PresetSaveDialog } from "./PresetSaveDialog";
@@ -52,6 +53,122 @@ export function AudioManager() {
   const presetNames = state.presets.map((p) => p.name);
 
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
+
+  const [hotkeyOverlayOpen, setHotkeyOverlayOpen] = useState(false);
+
+  // Hotkeys. Pause whenever a text field is focused (so typing in the
+  // preset save dialog or the device-picker search doesn't trip Space
+  // / M / number shortcuts) or when any modal/dialog is open.
+  //
+  // stateRef gives the listener current state without re-binding on
+  // every render — the listener is wired once.
+  const amRef = useRef(am);
+  amRef.current = am;
+  const dialogOpen =
+    busPickerFor !== null ||
+    inputPickerOpen ||
+    presetDialog.kind !== "closed" ||
+    state.streamSetupOpen ||
+    hotkeyOverlayOpen;
+  const dialogOpenRef = useRef(dialogOpen);
+  dialogOpenRef.current = dialogOpen;
+
+  useEffect(() => {
+    const isTextEntryTarget = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      // The hotkey overlay listens for `?` and Esc itself.
+      // Other dialogs install their own Esc listeners.
+      if (e.defaultPrevented) return;
+      if (isTextEntryTarget(e.target)) return;
+
+      // Ctrl/Cmd+S always opens save dialog (even if another dialog is open,
+      // browsers want us to suppress the default save-page behavior).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (!dialogOpenRef.current) {
+          setPresetDialog({ kind: "save" });
+        }
+        return;
+      }
+
+      // `?` toggles the hotkey overlay regardless of selection. Shift+/
+      // produces "?" on most keyboards; check both forms.
+      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+        e.preventDefault();
+        setHotkeyOverlayOpen((v) => !v);
+        return;
+      }
+
+      // Suppress remaining shortcuts while a modal is up.
+      if (dialogOpenRef.current) return;
+
+      const cur = amRef.current;
+      const sel = cur.state.selection;
+
+      // 1..4 → focus bus by id.
+      if (/^[1-4]$/.test(e.key)) {
+        e.preventDefault();
+        const id = (["A1", "A2", "B1", "B2"] as const)[Number(e.key) - 1];
+        cur.setSelection({ kind: "bus", busId: id });
+        return;
+      }
+
+      // Space → enable/disable selected bus.
+      if (e.key === " " || e.code === "Space") {
+        if (sel.kind !== "bus") return;
+        const bus = cur.state.buses.find((b) => b.id === sel.busId);
+        if (!bus) return;
+        // Don't trip on a bus that has no device (would no-op or surface
+        // a backend error). Match the BusCard's "Pick device" behavior.
+        if (!bus.device) return;
+        e.preventDefault();
+        cur.setBusEnabled(sel.busId, !bus.enabled);
+        return;
+      }
+
+      // M → mute selected bus OR selected input.
+      if (e.key === "m" || e.key === "M") {
+        if (sel.kind === "bus") {
+          const bus = cur.state.buses.find((b) => b.id === sel.busId);
+          if (!bus) return;
+          e.preventDefault();
+          cur.setBusMuted(sel.busId, !bus.muted);
+        } else if (sel.kind === "input") {
+          const input = cur.state.inputs.find((i) => i.id === sel.inputId);
+          if (!input) return;
+          e.preventDefault();
+          cur.setInputMuted(sel.inputId, !input.muted);
+        }
+        return;
+      }
+
+      // Up/Down → move selection in the input list.
+      if (sel.kind === "input" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const inputs = cur.state.inputs;
+        if (inputs.length === 0) return;
+        const idx = inputs.findIndex((i) => i.id === sel.inputId);
+        if (idx < 0) return;
+        const next =
+          e.key === "ArrowDown"
+            ? Math.min(idx + 1, inputs.length - 1)
+            : Math.max(idx - 1, 0);
+        if (next === idx) return;
+        e.preventDefault();
+        cur.setSelection({ kind: "input", inputId: inputs[next].id });
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div
@@ -215,6 +332,11 @@ export function AudioManager() {
           setPresetDialog({ kind: "closed" });
         }}
         onClose={() => setPresetDialog({ kind: "closed" })}
+      />
+
+      <HotkeyOverlay
+        open={hotkeyOverlayOpen}
+        onClose={() => setHotkeyOverlayOpen(false)}
       />
 
       <PresetSaveDialog

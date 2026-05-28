@@ -29,8 +29,20 @@ export function InputRow({
     <div
       className={`${styles.row} ${selected ? styles.selected : ""} ${input.muted ? styles.muted : ""}`}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       role="option"
+      tabIndex={0}
       aria-selected={selected}
+      aria-label={
+        input.muted
+          ? `${input.name}, muted, gain ${Math.round(input.gain * 100)} percent`
+          : `${input.name}, gain ${Math.round(input.gain * 100)} percent, level ${Math.round(input.level * 100)} percent`
+      }
       data-input-id={input.id}
     >
       <span className={styles.kindIcon} aria-hidden>

@@ -26,7 +26,7 @@ export function MeterCanvas({
   width = 320,
   height = 12,
   peakHold = true,
-  variant = "bus",
+  variant: _variant = "bus",
 }: MeterCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const currentRef = useRef(level);
@@ -125,11 +125,10 @@ export function MeterCanvas({
   return (
     <canvas
       ref={canvasRef}
-      role="meter"
-      aria-valuemin={0}
-      aria-valuemax={1}
-      aria-valuenow={level}
-      aria-label={variant === "bus" ? "Bus level meter" : "Input level meter"}
+      // Hidden from screen readers: per Phase F a11y plan, live meters
+      // would flood SR output. The parent (BusCard / InputRow) carries
+      // the level in its aria-label which is announced on focus.
+      aria-hidden="true"
       style={{ display: "block" }}
     />
   );
