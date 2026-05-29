@@ -270,6 +270,19 @@ function loadLocalEdges(): Map<string, GraphEdge> {
   return new Map();
 }
 
+/**
+ * Monotonic counter ensures sub-millisecond Add Group clicks produce
+ * distinct ids. `Date.now()` alone collides when the handler fires
+ * twice inside one event-loop tick (rapid double-click, programmatic
+ * batch). Counter is module-scoped so all NodeView instances share it.
+ */
+let groupIdCounter = 0;
+
+function nextGroupId(): string {
+  groupIdCounter += 1;
+  return `g_${Date.now().toString(36)}_${groupIdCounter.toString(36)}`;
+}
+
 export function NodeView({
   buses,
   inputs,
@@ -955,7 +968,7 @@ export function NodeView({
   // The engine has no idea these exist; the adapter will translate them
   // when the backend generalizes in Phase G-3.
   const addGroup = useCallback(() => {
-    const id = `g_${Date.now().toString(36)}`;
+    const id = nextGroupId();
     const nid = groupNodeId(id);
     setLocalGroups((prev) => {
       const next = new Map(prev);
@@ -1129,6 +1142,22 @@ export function NodeView({
         y: COL_PAD + i * (BUS_H + BUS_GAP),
       });
     });
+    // Reset must reposition existing group nodes too — otherwise the
+    // group renderer would receive `undefined` for their position, the
+    // node would fall back to (0, 0), and the user would see the group
+    // jump under the input column or be invisible behind other nodes.
+    // Lay groups out in a third column to the right of the bus column
+    // in their current insertion order. Group ids stay stable; we are
+    // only assigning positions.
+    const groupColX = busColX + BUS_W + COL_GAP_BETWEEN;
+    let groupIndex = 0;
+    for (const gid of localGroups.keys()) {
+      next.set(groupNodeId(gid), {
+        x: groupColX,
+        y: COL_PAD + groupIndex * (GROUP_H + BUS_GAP),
+      });
+      groupIndex += 1;
+    }
     setNodePositions(next);
   };
 
