@@ -347,6 +347,7 @@ export function topoSort(g: Graph): NodeId[] | null {
 
 export const NODE_ID_INPUT_PREFIX = "in:";
 export const NODE_ID_BUS_PREFIX = "bus:";
+export const NODE_ID_GROUP_PREFIX = "group:";
 
 export function inputNodeId(inputId: string): NodeId {
   return `${NODE_ID_INPUT_PREFIX}${inputId}`;
@@ -356,12 +357,20 @@ export function busNodeId(busId: BusId): NodeId {
   return `${NODE_ID_BUS_PREFIX}${busId}`;
 }
 
+export function groupNodeId(groupId: string): NodeId {
+  return `${NODE_ID_GROUP_PREFIX}${groupId}`;
+}
+
 export function isInputNodeId(id: NodeId): boolean {
   return id.startsWith(NODE_ID_INPUT_PREFIX);
 }
 
 export function isBusNodeId(id: NodeId): boolean {
   return id.startsWith(NODE_ID_BUS_PREFIX);
+}
+
+export function isGroupNodeId(id: NodeId): boolean {
+  return id.startsWith(NODE_ID_GROUP_PREFIX);
 }
 
 export function inputIdFromNodeId(id: NodeId): string | null {
@@ -375,6 +384,12 @@ export function busIdFromNodeId(id: NodeId): BusId | null {
   const raw = id.slice(NODE_ID_BUS_PREFIX.length);
   if (raw === "A1" || raw === "A2" || raw === "B1" || raw === "B2") return raw;
   return null;
+}
+
+export function groupIdFromNodeId(id: NodeId): string | null {
+  return id.startsWith(NODE_ID_GROUP_PREFIX)
+    ? id.slice(NODE_ID_GROUP_PREFIX.length)
+    : null;
 }
 
 /** Edge id for an input → bus connection. Stable across renders. */

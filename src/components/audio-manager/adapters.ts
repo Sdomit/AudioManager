@@ -135,3 +135,12 @@ export function adaptPreset(p: PresetSummary): Preset {
 export function busHasAnySend(sends: Send[], busId: BusId): boolean {
   return sends.some((s) => s.busId === busId && s.enabled);
 }
+
+/**
+ * Type guard narrowing an arbitrary string to `BusId`. Used wherever a
+ * graph-derived id (e.g. parsed from `localStorage` or a NodeId suffix)
+ * must be passed to APIs that demand a `BusId` without an unchecked cast.
+ */
+export function isBusId(id: string): id is BusId {
+  return id === "A1" || id === "A2" || id === "B1" || id === "B2";
+}

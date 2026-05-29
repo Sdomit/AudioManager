@@ -18,7 +18,28 @@ import type {
 } from "./types";
 import { gainToDb } from "./units";
 import { bipartiteToGraph } from "./graphAdapter";
-import { asBusNode, asInputNode, type GraphEdge } from "./graph";
+import {
+  addEdge as graphAddEdge,
+  addNode as graphAddNode,
+  asBusNode,
+  asInputNode,
+  busIdFromNodeId,
+  busNodeId,
+  defaultPortsFor,
+  GraphError,
+  groupIdFromNodeId,
+  groupNodeId,
+  inputIdFromNodeId,
+  inputNodeId,
+  isBusNodeId,
+  isGroupNodeId,
+  isInputNodeId,
+  type Graph,
+  type GraphEdge,
+  type GraphNode,
+  type NodeId,
+} from "./graph";
+import { isBusId } from "./adapters";
 import styles from "./NodeView.module.css";
 
 /**
@@ -74,28 +95,73 @@ const INPUT_GAP = 6;
 const BUS_W = 200;
 const BUS_H = 80;
 const BUS_GAP = 10;
+const GROUP_W = 180;
+const GROUP_H = 56;
 const COL_PAD = 14;
 const COL_GAP_BETWEEN = 160; // horizontal space between input column and bus column for wires
 
 interface DragState {
+  /**
+   * Graph NodeId of the source. Drives validation and tooltip plumbing.
+   * For input sources this is `inputNodeId(fromInputId)`; for group
+   * sources this is `groupNodeId(fromGroupId)`.
+   */
+  fromNodeId: NodeId;
+  /**
+   * Backing input id when the source is an input node. Empty string
+   * when the source is a group node. Kept so the bipartite mouseup
+   * path (which calls onToggleSend) doesn't need to re-parse.
+   */
   fromInputId: string;
   startX: number;
   startY: number;
   curX: number;
   curY: number;
+  /** Bus drop target. Null when nothing is hovered or hovering a group. */
   hoverBusId: BusId | null;
+  /** Group drop target. Null when nothing is hovered or hovering a bus. */
+  hoverGroupId: string | null;
+  /**
+   * True if the candidate edge would be accepted by the generalized
+   * graph (no cycle, ports compatible, no duplicate). Drives ghost-wire
+   * color and is checked on mouseup before firing onToggleSend so
+   * invalid drops are silently rejected.
+   */
+  dropOk: boolean;
+  /**
+   * Human-readable explanation when dropOk=false. Shown near the cursor
+   * as a tooltip so the user can see why their drop will be rejected.
+   * Null when dropOk=true.
+   */
+  dropReason: string | null;
+}
+
+/** Map GraphError.code to a short human label for the drop tooltip. */
+function dropReasonFor(code: string): string {
+  switch (code) {
+    case "CYCLE":         return "Would create a cycle";
+    case "SELF_LOOP":     return "Cannot connect to itself";
+    case "PORT_KIND":     return "Incompatible port type";
+    case "PORT_DIR":      return "Wrong port direction";
+    case "MISSING_PORT":  return "Port not found";
+    case "MISSING_NODE":  return "Node not found";
+    default:              return "Invalid connection";
+  }
 }
 
 interface NodeDragState {
-  kind: "input" | "bus";
+  kind: "input" | "bus" | "group";
   id: string;
   startMouseX: number;
   startMouseY: number;
   startNodeX: number;
   startNodeY: number;
   moved: boolean;
-  /** Starting positions of ALL selected nodes (group drag), keyed by id. */
-  groupStart: Map<string, NodePos>;
+  /**
+   * Starting positions of ALL selected nodes (group drag), keyed by
+   * graph NodeId. Single-node drags use a one-entry map.
+   */
+  groupStart: Map<NodeId, NodePos>;
 }
 
 type NodePos = { x: number; y: number };
@@ -112,19 +178,109 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
-const LS_INPUTS = "am.nodePositions.inputs";
-const LS_BUSES  = "am.nodePositions.buses";
-const LS_VIEW   = "am.nodeView.viewport";
-
-function loadStored(key: string): Map<string, NodePos> | null {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const arr = JSON.parse(raw) as Array<[string, NodePos]>;
-    return new Map(arr);
-  } catch {
-    return null;
+/** Pixel width of a node by kind. Used for port/wire endpoint maths. */
+function nodeWidthFor(n: GraphNode): number {
+  switch (n.kind.type) {
+    case "input":  return INPUT_W;
+    case "bus":    return BUS_W;
+    case "group":  return GROUP_W;
+    default:       return GROUP_W;
   }
+}
+function nodeHeightFor(n: GraphNode): number {
+  switch (n.kind.type) {
+    case "input":  return INPUT_H;
+    case "bus":    return BUS_H;
+    case "group":  return GROUP_H;
+    default:       return GROUP_H;
+  }
+}
+
+const LS_NODES_V2     = "am.nodePositions.v2";
+const LS_INPUTS_LEGACY = "am.nodePositions.inputs";
+const LS_BUSES_LEGACY  = "am.nodePositions.buses";
+const LS_VIEW          = "am.nodeView.viewport";
+const LS_GROUPS        = "am.nodeGroups.v1";
+const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
+
+/**
+ * Load unified node positions. Reads the v2 key first; if absent and
+ * the legacy split keys exist, migrates them in-place (prefix input ids
+ * with `in:` and bus ids with `bus:`) and writes v2.
+ */
+function loadNodePositions(): Map<NodeId, NodePos> {
+  try {
+    const raw = localStorage.getItem(LS_NODES_V2);
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<[NodeId, NodePos]>;
+      return new Map(arr);
+    }
+  } catch {}
+  const next = new Map<NodeId, NodePos>();
+  try {
+    const inRaw = localStorage.getItem(LS_INPUTS_LEGACY);
+    if (inRaw) {
+      const arr = JSON.parse(inRaw) as Array<[string, NodePos]>;
+      for (const [id, p] of arr) next.set(inputNodeId(id), p);
+    }
+    const busRaw = localStorage.getItem(LS_BUSES_LEGACY);
+    if (busRaw) {
+      const arr = JSON.parse(busRaw) as Array<[string, NodePos]>;
+      for (const [id, p] of arr) {
+        if (isBusId(id)) {
+          next.set(busNodeId(id), p);
+        }
+      }
+    }
+    if (next.size > 0) {
+      localStorage.setItem(LS_NODES_V2, JSON.stringify(Array.from(next.entries())));
+    }
+  } catch {}
+  return next;
+}
+
+function saveNodePositions(m: Map<NodeId, NodePos>): void {
+  try {
+    localStorage.setItem(LS_NODES_V2, JSON.stringify(Array.from(m.entries())));
+  } catch {}
+}
+
+/** Frontend-only group node metadata. Position lives in nodePositions. */
+interface GroupMeta { name: string; }
+
+function loadGroups(): Map<string, GroupMeta> {
+  try {
+    const raw = localStorage.getItem(LS_GROUPS);
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<[string, GroupMeta]>;
+      return new Map(arr);
+    }
+  } catch {}
+  return new Map();
+}
+
+function loadLocalEdges(): Map<string, GraphEdge> {
+  try {
+    const raw = localStorage.getItem(LS_LOCAL_EDGES);
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<[string, GraphEdge]>;
+      return new Map(arr);
+    }
+  } catch {}
+  return new Map();
+}
+
+/**
+ * Monotonic counter ensures sub-millisecond Add Group clicks produce
+ * distinct ids. `Date.now()` alone collides when the handler fires
+ * twice inside one event-loop tick (rapid double-click, programmatic
+ * batch). Counter is module-scoped so all NodeView instances share it.
+ */
+let groupIdCounter = 0;
+
+function nextGroupId(): string {
+  groupIdCounter += 1;
+  return `g_${Date.now().toString(36)}_${groupIdCounter.toString(36)}`;
 }
 
 export function NodeView({
@@ -166,6 +322,11 @@ export function NodeView({
   useEffect(() => { selInputsRef.current = selInputs; }, [selInputs]);
   useEffect(() => { selBusesRef.current = selBuses; }, [selBuses]);
   const [marquee, setMarquee] = useState<MarqueeState | null>(null);
+  // Mirror marquee in a ref so mouseup can read the latest rect without
+  // going through the React state-updater (which double-fires under
+  // StrictMode and would also double-fire any side effects inside it).
+  const marqueeRef = useRef<MarqueeState | null>(null);
+  useEffect(() => { marqueeRef.current = marquee; }, [marquee]);
 
   const clearMultiSelect = useCallback(() => {
     setSelInputs((s) => (s.size === 0 ? s : new Set()));
@@ -208,75 +369,114 @@ export function NodeView({
     };
   }, []);
 
-  // ── Node positions (state, with localStorage persistence) ─────────────
-  const [inputPositions, setInputPositions] = useState<Map<string, NodePos>>(() => {
-    const stored = loadStored(LS_INPUTS);
-    if (stored) return stored;
-    const m = new Map<string, NodePos>();
-    inputs.forEach((input, i) => {
-      m.set(input.id, { x: COL_PAD, y: COL_PAD + i * (INPUT_H + INPUT_GAP) });
-    });
-    return m;
-  });
+  // ── Node positions (unified Map<NodeId, NodePos>) ────────────────────
+  // Single source of truth, keyed by graph NodeId (`in:<inputId>` or
+  // `bus:<busId>`). Split views below are memoized for render-side
+  // backward compatibility with the existing wires/canvas code.
+  const [nodePositions, setNodePositions] = useState<Map<NodeId, NodePos>>(
+    loadNodePositions,
+  );
+  const nodePosRef = useRef(nodePositions);
+  useEffect(() => { nodePosRef.current = nodePositions; }, [nodePositions]);
 
-  const [busPositions, setBusPositions] = useState<Map<string, NodePos>>(() => {
-    const stored = loadStored(LS_BUSES);
-    if (stored) return stored;
-    const m = new Map<string, NodePos>();
-    const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
-    buses.forEach((bus, i) => {
-      m.set(bus.id, { x: busColX, y: COL_PAD + i * (BUS_H + BUS_GAP) });
-    });
-    return m;
-  });
-
-  // Sync when inputs/buses list changes (add defaults, prune removed)
+  // ── Group nodes (frontend-only, persisted to localStorage) ───────────
+  // Groups + their edges live in localStorage; the backend has no
+  // knowledge of them. Once the engine generalizes (Phase G-3) the
+  // adapter will translate these into real engine nodes.
+  const [localGroups, setLocalGroups] = useState<Map<string, GroupMeta>>(loadGroups);
+  const [localEdges, setLocalEdges] = useState<Map<string, GraphEdge>>(loadLocalEdges);
+  const localGroupsRef = useRef(localGroups);
+  const localEdgesRef = useRef(localEdges);
+  useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
+  useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
   useEffect(() => {
-    setInputPositions((prev) => {
-      const next = new Map(prev);
-      let changed = false;
-      inputs.forEach((input, i) => {
-        if (!next.has(input.id)) {
-          next.set(input.id, { x: COL_PAD, y: COL_PAD + i * (INPUT_H + INPUT_GAP) });
-          changed = true;
-        }
-      });
-      for (const id of Array.from(next.keys())) {
-        if (!inputs.find((i) => i.id === id)) {
-          next.delete(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [inputs]);
-
+    try {
+      localStorage.setItem(LS_GROUPS, JSON.stringify(Array.from(localGroups.entries())));
+    } catch {}
+  }, [localGroups]);
   useEffect(() => {
-    setBusPositions((prev) => {
+    try {
+      localStorage.setItem(LS_LOCAL_EDGES, JSON.stringify(Array.from(localEdges.entries())));
+    } catch {}
+  }, [localEdges]);
+
+  // Sync inputs+buses → seed defaults, prune removed. One effect now.
+  useEffect(() => {
+    setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
       const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
-      buses.forEach((bus, i) => {
-        if (!next.has(bus.id)) {
-          next.set(bus.id, { x: busColX, y: COL_PAD + i * (BUS_H + BUS_GAP) });
+      inputs.forEach((input, i) => {
+        const nid = inputNodeId(input.id);
+        if (!next.has(nid)) {
+          next.set(nid, { x: COL_PAD, y: COL_PAD + i * (INPUT_H + INPUT_GAP) });
           changed = true;
         }
       });
+      buses.forEach((bus, i) => {
+        const nid = busNodeId(bus.id);
+        if (!next.has(nid)) {
+          next.set(nid, { x: busColX, y: COL_PAD + i * (BUS_H + BUS_GAP) });
+          changed = true;
+        }
+      });
+      const aliveInputs = new Set(inputs.map((i) => inputNodeId(i.id)));
+      const aliveBuses = new Set(buses.map((b) => busNodeId(b.id)));
+      const aliveGroups = new Set(Array.from(localGroupsRef.current.keys()).map(groupNodeId));
       for (const id of Array.from(next.keys())) {
-        if (!buses.find((b) => b.id === id)) {
-          next.delete(id);
+        if (isInputNodeId(id) && !aliveInputs.has(id)) { next.delete(id); changed = true; }
+        else if (isBusNodeId(id) && !aliveBuses.has(id)) { next.delete(id); changed = true; }
+        else if (isGroupNodeId(id) && !aliveGroups.has(id)) { next.delete(id); changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [inputs, buses]);
+
+  // Prune local edges whose endpoints no longer exist.
+  useEffect(() => {
+    const aliveNodes = new Set<NodeId>();
+    inputs.forEach((i) => aliveNodes.add(inputNodeId(i.id)));
+    buses.forEach((b) => aliveNodes.add(busNodeId(b.id)));
+    for (const gid of localGroups.keys()) aliveNodes.add(groupNodeId(gid));
+    setLocalEdges((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [eid, edge] of prev) {
+        if (!aliveNodes.has(edge.fromNode) || !aliveNodes.has(edge.toNode)) {
+          next.delete(eid);
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [buses]);
+  }, [inputs, buses, localGroups]);
 
-  // Refs for the global mousemove/mouseup handlers to read latest positions.
-  const inputPosRef = useRef(inputPositions);
-  const busPosRef   = useRef(busPositions);
+  // Split views (memoized) — kept so render/wire code reads by raw input/bus id.
+  const inputPositions = useMemo(() => {
+    const m = new Map<string, NodePos>();
+    for (const [nid, p] of nodePositions) {
+      const id = inputIdFromNodeId(nid);
+      if (id != null) m.set(id, p);
+    }
+    return m;
+  }, [nodePositions]);
+
+  const busPositions = useMemo(() => {
+    const m = new Map<string, NodePos>();
+    for (const [nid, p] of nodePositions) {
+      const id = busIdFromNodeId(nid);
+      if (id != null) m.set(id, p);
+    }
+    return m;
+  }, [nodePositions]);
+
+  // Back-compat refs + setters for code paths written against the old
+  // split (Map<inputId, Pos> + Map<BusId, Pos>) model. They read from /
+  // write through the unified `nodePositions` source of truth.
+  const inputPosRef = useRef<Map<string, NodePos>>(new Map());
+  const busPosRef = useRef<Map<string, NodePos>>(new Map());
   useEffect(() => { inputPosRef.current = inputPositions; }, [inputPositions]);
-  useEffect(() => { busPosRef.current   = busPositions;   }, [busPositions]);
+  useEffect(() => { busPosRef.current = busPositions; }, [busPositions]);
 
   // Derived port coords ────────────────────────────────────────────────
   const portOf = (kind: "input" | "bus", id: string): NodePos | null => {
@@ -310,17 +510,21 @@ export function NodeView({
     (inputId: string, e: React.MouseEvent) => {
       e.stopPropagation();
       e.preventDefault();
-      const pos = inputPosRef.current.get(inputId);
+      const pos = nodePosRef.current.get(inputNodeId(inputId));
       if (!pos) return;
       const startX = pos.x + INPUT_W;
       const startY = pos.y + INPUT_H / 2;
       setDrag({
+        fromNodeId: inputNodeId(inputId),
         fromInputId: inputId,
         startX,
         startY,
         curX: startX,
         curY: startY,
         hoverBusId: null,
+        hoverGroupId: null,
+        dropOk: true,
+        dropReason: null,
       });
     },
     [],
@@ -328,13 +532,17 @@ export function NodeView({
 
   // ── Mouse handlers for moving a node ──────────────────────────────────
   const handleNodeMouseDown = useCallback(
-    (kind: "input" | "bus", id: string, e: React.MouseEvent) => {
+    (kind: "input" | "bus" | "group", id: string, e: React.MouseEvent) => {
       // Only left mouse button initiates a drag.
       if (e.button !== 0) return;
       // Ignore clicks on interactive children (ports, buttons).
       const target = e.target as HTMLElement;
       if (target.closest("button")) return;
-      const pos = kind === "input" ? inputPosRef.current.get(id) : busPosRef.current.get(id);
+      const nid =
+        kind === "input" ? inputNodeId(id)
+        : kind === "bus" ? busNodeId(id as BusId)
+        : groupNodeId(id);
+      const pos = nodePosRef.current.get(nid);
       if (!pos) return;
       // Shift+click → toggle this node in the multi-select set and
       // don't start a drag. The caller's onClick still fires after
@@ -348,36 +556,40 @@ export function NodeView({
             else next.add(id);
             return next;
           });
-        } else {
+        } else if (kind === "bus") {
+          if (!isBusId(id)) return;
           setSelBuses((s) => {
             const next = new Set(s);
-            const bid = id as BusId;
-            if (next.has(bid)) next.delete(bid);
-            else next.add(bid);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
             return next;
           });
         }
+        // Group nodes don't participate in the multi-select set yet —
+        // shift+click is a no-op there.
         e.preventDefault();
         return;
       }
       // Capture starting positions for every selected node so group
-      // drag moves them together. If this node isn't already in the
-      // selection, treat as a single-node drag (group of one).
-      const groupStart = new Map<string, NodePos>();
+      // drag moves them together. Keys are graph NodeIds. If this node
+      // isn't already in the multi-selection, treat as a single-node
+      // drag (group of one).
+      const groupStart = new Map<NodeId, NodePos>();
       const inMulti =
         (kind === "input" && selInputsRef.current.has(id)) ||
-        (kind === "bus" && selBusesRef.current.has(id as BusId));
+        (kind === "bus" && isBusId(id) && selBusesRef.current.has(id));
+      // Group nodes are never part of inMulti (no multi-select support yet).
       if (inMulti) {
         for (const inId of selInputsRef.current) {
-          const p = inputPosRef.current.get(inId);
-          if (p) groupStart.set(`i:${inId}`, p);
+          const p = nodePosRef.current.get(inputNodeId(inId));
+          if (p) groupStart.set(inputNodeId(inId), p);
         }
         for (const bId of selBusesRef.current) {
-          const p = busPosRef.current.get(bId);
-          if (p) groupStart.set(`b:${bId}`, p);
+          const p = nodePosRef.current.get(busNodeId(bId));
+          if (p) groupStart.set(busNodeId(bId), p);
         }
       } else {
-        groupStart.set(kind === "input" ? `i:${id}` : `b:${id}`, pos);
+        groupStart.set(nid, pos);
       }
       setNodeDrag({
         kind,
@@ -402,19 +614,72 @@ export function NodeView({
     const onMove = (e: MouseEvent) => {
       const { x, y } = toCanvas(e.clientX, e.clientY);
 
+      // Sweep all candidate drop targets. Both bus input ports and
+      // group input ports sit on the left edge of their nodes.
       let hoverBusId: BusId | null = null;
-      for (const [id, pos] of busPosRef.current) {
-        const portX = pos.x;
-        const portY = pos.y + BUS_H / 2;
-        const dx = x - portX;
-        const dy = y - portY;
-        if (dx * dx + dy * dy < 32 * 32) {
-          hoverBusId = id as BusId;
-          break;
+      let hoverGroupId: string | null = null;
+      for (const [nid, pos] of nodePosRef.current) {
+        if (isBusNodeId(nid)) {
+          const portX = pos.x;
+          const portY = pos.y + BUS_H / 2;
+          const dx = x - portX;
+          const dy = y - portY;
+          if (dx * dx + dy * dy < 32 * 32) {
+            const bid = busIdFromNodeId(nid);
+            if (bid) { hoverBusId = bid; hoverGroupId = null; break; }
+          }
+        } else if (isGroupNodeId(nid)) {
+          const portX = pos.x;
+          const portY = pos.y + GROUP_H / 2;
+          const dx = x - portX;
+          const dy = y - portY;
+          if (dx * dx + dy * dy < 32 * 32) {
+            const gid = groupIdFromNodeId(nid);
+            if (gid) { hoverGroupId = gid; hoverBusId = null; break; }
+          }
         }
       }
 
-      setDrag((d) => (d ? { ...d, curX: x, curY: y, hoverBusId } : null));
+      // Validate candidate edge via the generalized graph. GraphError
+      // → invalid drop unless it's DUP_EDGE / DUP_PAIR (existing edge =
+      // legitimate disconnect path; onMouseUp flips it off).
+      let dropOk = true;
+      let dropReason: string | null = null;
+      const d0 = dragRef.current;
+      if ((hoverBusId || hoverGroupId) && d0) {
+        const toNode = hoverBusId ? busNodeId(hoverBusId) : groupNodeId(hoverGroupId!);
+        const edgeId = `edge:${d0.fromNodeId}->${toNode}`;
+        const candidate: GraphEdge = {
+          id: edgeId,
+          fromNode: d0.fromNodeId,
+          fromPort: "out",
+          toNode,
+          toPort: "in",
+          gain: 0.75,
+          muted: false,
+        };
+        try {
+          graphAddEdge(graphRef.current, candidate);
+        } catch (err) {
+          if (err instanceof GraphError) {
+            if (err.code === "DUP_EDGE" || err.code === "DUP_PAIR") {
+              // Existing edge — legitimate disconnect path.
+              dropOk = true;
+            } else {
+              dropOk = false;
+              dropReason = dropReasonFor(err.code);
+            }
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      setDrag((d) =>
+        d
+          ? { ...d, curX: x, curY: y, hoverBusId, hoverGroupId, dropOk, dropReason }
+          : null,
+      );
     };
 
     const onUp = () => {
@@ -424,8 +689,36 @@ export function NodeView({
       // which is why connections appeared in Flow/Matrix but vanished
       // from NodeView on release.
       const d = dragRef.current;
-      if (d && d.hoverBusId) {
-        onToggleSend(d.fromInputId, d.hoverBusId);
+      if (d && d.dropOk) {
+        if (d.hoverBusId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
+          // Bipartite input → bus — flip via the backend send action.
+          onToggleSend(d.fromInputId, d.hoverBusId);
+        } else if (d.hoverBusId || d.hoverGroupId) {
+          // Any other valid drop targets a group node or originates from
+          // a group → frontend-only local edge.
+          const toNode = d.hoverBusId
+            ? busNodeId(d.hoverBusId)
+            : groupNodeId(d.hoverGroupId!);
+          const edgeId = `edge:${d.fromNodeId}->${toNode}`;
+          setLocalEdges((prev) => {
+            const next = new Map(prev);
+            if (next.has(edgeId)) {
+              // Disconnect (toggle off).
+              next.delete(edgeId);
+            } else {
+              next.set(edgeId, {
+                id: edgeId,
+                fromNode: d.fromNodeId,
+                fromPort: "out",
+                toNode,
+                toPort: "in",
+                gain: 0.75,
+                muted: false,
+              });
+            }
+            return next;
+          });
+        }
       }
       setDrag(null);
     };
@@ -448,26 +741,17 @@ export function NodeView({
       const dy = (e.clientY - nodeDrag.startMouseY) / z;
       setNodeDrag((d) => (d && (dx !== 0 || dy !== 0) ? { ...d, moved: true } : d));
       // Group move: apply the same delta to every node captured at
-      // mousedown (single-node drags are just a group of one).
-      const inputDeltas: Array<[string, NodePos]> = [];
-      const busDeltas: Array<[string, NodePos]> = [];
-      for (const [key, p0] of nodeDrag.groupStart) {
-        const x = Math.max(0, p0.x + dx);
-        const y = Math.max(0, p0.y + dy);
-        if (key.startsWith("i:")) inputDeltas.push([key.slice(2), { x, y }]);
-        else busDeltas.push([key.slice(2), { x, y }]);
-      }
-      if (inputDeltas.length) {
-        setInputPositions((prev) => {
+      // mousedown (single-node drags are just a group of one). Keys
+      // are graph NodeIds in the unified position store.
+      if (nodeDrag.groupStart.size > 0) {
+        setNodePositions((prev) => {
           const next = new Map(prev);
-          for (const [id, p] of inputDeltas) next.set(id, p);
-          return next;
-        });
-      }
-      if (busDeltas.length) {
-        setBusPositions((prev) => {
-          const next = new Map(prev);
-          for (const [id, p] of busDeltas) next.set(id, p);
+          for (const [nid, p0] of nodeDrag.groupStart) {
+            next.set(nid, {
+              x: Math.max(0, p0.x + dx),
+              y: Math.max(0, p0.y + dy),
+            });
+          }
           return next;
         });
       }
@@ -475,16 +759,7 @@ export function NodeView({
 
     const onUp = () => {
       // Persist positions on release.
-      try {
-        localStorage.setItem(
-          LS_INPUTS,
-          JSON.stringify(Array.from(inputPosRef.current.entries())),
-        );
-        localStorage.setItem(
-          LS_BUSES,
-          JSON.stringify(Array.from(busPosRef.current.entries())),
-        );
-      } catch {}
+      saveNodePositions(nodePosRef.current);
       setNodeDrag(null);
     };
 
@@ -630,33 +905,39 @@ export function NodeView({
       setMarquee((m) => (m ? { ...m, curX: x, curY: y } : null));
     };
     const onUp = () => {
-      setMarquee((m) => {
-        if (!m) return null;
-        const x0 = Math.min(m.startX, m.curX);
-        const y0 = Math.min(m.startY, m.curY);
-        const x1 = Math.max(m.startX, m.curX);
-        const y1 = Math.max(m.startY, m.curY);
-        // No drag: a plain click on background just clears selection.
-        if (x1 - x0 < 4 && y1 - y0 < 4) {
-          clearMultiSelect();
-          return null;
-        }
+      // Read marquee via ref, compute hits, dispatch side effects, then
+      // clear marquee state. Doing this inside setMarquee would
+      // double-fire under React 18 StrictMode (same class of bug as the
+      // node drag-to-connect we already fixed).
+      const m = marqueeRef.current;
+      if (!m) return;
+      const x0 = Math.min(m.startX, m.curX);
+      const y0 = Math.min(m.startY, m.curY);
+      const x1 = Math.max(m.startX, m.curX);
+      const y1 = Math.max(m.startY, m.curY);
+      if (x1 - x0 < 4 && y1 - y0 < 4) {
+        // Plain click on background → clear selection.
+        clearMultiSelect();
+      } else {
         const hitInputs = new Set<string>();
-        for (const [id, p] of inputPosRef.current) {
-          if (p.x + INPUT_W >= x0 && p.x <= x1 && p.y + INPUT_H >= y0 && p.y <= y1) {
-            hitInputs.add(id);
-          }
-        }
         const hitBuses = new Set<BusId>();
-        for (const [id, p] of busPosRef.current) {
-          if (p.x + BUS_W >= x0 && p.x <= x1 && p.y + BUS_H >= y0 && p.y <= y1) {
-            hitBuses.add(id as BusId);
+        for (const [nid, p] of nodePosRef.current) {
+          if (isInputNodeId(nid)) {
+            if (p.x + INPUT_W >= x0 && p.x <= x1 && p.y + INPUT_H >= y0 && p.y <= y1) {
+              const iid = inputIdFromNodeId(nid);
+              if (iid) hitInputs.add(iid);
+            }
+          } else if (isBusNodeId(nid)) {
+            if (p.x + BUS_W >= x0 && p.x <= x1 && p.y + BUS_H >= y0 && p.y <= y1) {
+              const bid = busIdFromNodeId(nid);
+              if (bid) hitBuses.add(bid);
+            }
           }
         }
         setSelInputs(hitInputs);
         setSelBuses(hitBuses);
-        return null;
-      });
+      }
+      setMarquee(null);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -680,6 +961,57 @@ export function NodeView({
 
   const resetView = useCallback(() => {
     setView({ tx: 0, ty: 0, zoom: 1 });
+  }, []);
+
+  // ── Group management ────────────────────────────────────────────────
+  // Frontend-only: creating / removing a group is a localStorage write.
+  // The engine has no idea these exist; the adapter will translate them
+  // when the backend generalizes in Phase G-3.
+  const addGroup = useCallback(() => {
+    const id = nextGroupId();
+    const nid = groupNodeId(id);
+    setLocalGroups((prev) => {
+      const next = new Map(prev);
+      next.set(id, { name: `Group ${prev.size + 1}` });
+      return next;
+    });
+    // Drop the new node near the viewport centre so the user actually
+    // sees it without having to pan around.
+    const wrap = wrapRef.current;
+    const rect = wrap?.getBoundingClientRect();
+    const cx = rect ? rect.width / 2 : 300;
+    const cy = rect ? rect.height / 2 : 200;
+    const v = viewRef.current;
+    const wx = (cx - v.tx) / v.zoom - GROUP_W / 2;
+    const wy = (cy - v.ty) / v.zoom - GROUP_H / 2;
+    setNodePositions((prev) => {
+      const next = new Map(prev);
+      next.set(nid, { x: Math.max(0, wx), y: Math.max(0, wy) });
+      return next;
+    });
+    saveNodePositions(new Map(nodePosRef.current).set(nid, {
+      x: Math.max(0, wx), y: Math.max(0, wy),
+    }));
+  }, []);
+
+  const removeGroup = useCallback((gid: string) => {
+    const nid = groupNodeId(gid);
+    setLocalGroups((prev) => {
+      const next = new Map(prev);
+      next.delete(gid);
+      return next;
+    });
+    setLocalEdges((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [eid, edge] of prev) {
+        if (edge.fromNode === nid || edge.toNode === nid) {
+          next.delete(eid);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
   }, []);
 
   // ── Stable id-based handlers (let InputNode/BusNode memoize) ─────────
@@ -708,6 +1040,34 @@ export function NodeView({
     handleNodeMouseDown("input", id, e), [handleNodeMouseDown]);
   const onBusNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
     handleNodeMouseDown("bus", id, e), [handleNodeMouseDown]);
+  const onGroupNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
+    handleNodeMouseDown("group", id, e), [handleNodeMouseDown]);
+
+  // Start a drag-connect from a group's output port.
+  const onGroupPortMouseDown = useCallback(
+    (groupId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const nid = groupNodeId(groupId);
+      const pos = nodePosRef.current.get(nid);
+      if (!pos) return;
+      const startX = pos.x + GROUP_W;
+      const startY = pos.y + GROUP_H / 2;
+      setDrag({
+        fromNodeId: nid,
+        fromInputId: "",
+        startX,
+        startY,
+        curX: startX,
+        curY: startY,
+        hoverBusId: null,
+        hoverGroupId: null,
+        dropOk: true,
+        dropReason: null,
+      });
+    },
+    [],
+  );
 
   // Precompute "input has any enabled send" once.
   const inputsWithConnections = useMemo(() => {
@@ -766,20 +1126,39 @@ export function NodeView({
 
   const resetLayout = () => {
     try {
-      localStorage.removeItem(LS_INPUTS);
-      localStorage.removeItem(LS_BUSES);
+      localStorage.removeItem(LS_NODES_V2);
     } catch {}
-    const ip = new Map<string, NodePos>();
+    const next = new Map<NodeId, NodePos>();
     inputs.forEach((input, i) => {
-      ip.set(input.id, { x: COL_PAD, y: COL_PAD + i * (INPUT_H + INPUT_GAP) });
+      next.set(inputNodeId(input.id), {
+        x: COL_PAD,
+        y: COL_PAD + i * (INPUT_H + INPUT_GAP),
+      });
     });
-    setInputPositions(ip);
-    const bp = new Map<string, NodePos>();
     const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
     buses.forEach((bus, i) => {
-      bp.set(bus.id, { x: busColX, y: COL_PAD + i * (BUS_H + BUS_GAP) });
+      next.set(busNodeId(bus.id), {
+        x: busColX,
+        y: COL_PAD + i * (BUS_H + BUS_GAP),
+      });
     });
-    setBusPositions(bp);
+    // Reset must reposition existing group nodes too — otherwise the
+    // group renderer would receive `undefined` for their position, the
+    // node would fall back to (0, 0), and the user would see the group
+    // jump under the input column or be invisible behind other nodes.
+    // Lay groups out in a third column to the right of the bus column
+    // in their current insertion order. Group ids stay stable; we are
+    // only assigning positions.
+    const groupColX = busColX + BUS_W + COL_GAP_BETWEEN;
+    let groupIndex = 0;
+    for (const gid of localGroups.keys()) {
+      next.set(groupNodeId(gid), {
+        x: groupColX,
+        y: COL_PAD + groupIndex * (GROUP_H + BUS_GAP),
+      });
+      groupIndex += 1;
+    }
+    setNodePositions(next);
   };
 
   // ── Generalized routing graph ────────────────────────────────────────
@@ -788,40 +1167,84 @@ export function NodeView({
   // the selected-wire popover walk graph.edges; future non-bipartite
   // nodes (group/fx) flow through the same code path without further
   // changes here.
-  const graph = useMemo(
+  const bipartiteGraph = useMemo(
     () => bipartiteToGraph(buses, inputs, sends),
     [buses, inputs, sends],
   );
 
+  // Full graph: bipartite + local (group nodes + local edges). Built so
+  // addEdge validation sees every existing edge when deciding cycles +
+  // duplicates. Failures inside the build (DUP_NODE etc.) are swallowed
+  // because the build is idempotent across re-renders.
+  const graph: Graph = useMemo(() => {
+    let g = bipartiteGraph;
+    for (const [gid, meta] of localGroups) {
+      const nid = groupNodeId(gid);
+      const pos = nodePositions.get(nid);
+      const node: GraphNode = {
+        id: nid,
+        kind: { type: "group" },
+        name: meta.name,
+        ports: defaultPortsFor({ type: "group" }),
+        gain: 1,
+        muted: false,
+        level: 0,
+        uiX: pos?.x ?? 0,
+        uiY: pos?.y ?? 0,
+      };
+      try { g = graphAddNode(g, node); } catch { /* idempotent */ }
+    }
+    for (const edge of localEdges.values()) {
+      try { g = graphAddEdge(g, edge); } catch { /* drop invalid */ }
+    }
+    return g;
+  }, [bipartiteGraph, localGroups, localEdges, nodePositions]);
+
+  // Stable ref so the port-drag effect reads the latest graph without
+  // re-subscribing. Used by the addEdge validation during onMove.
+  const graphRef = useRef(graph);
+  useEffect(() => { graphRef.current = graph; }, [graph]);
+
   // ── Wires to draw ─────────────────────────────────────────────────────
+  // Walks the FULL graph (bipartite + group edges). For each edge,
+  // resolves endpoint positions via the unified position store. Wire
+  // color uses bus accent when the target is a bus, neutral grey for
+  // group-touching edges. Meter flow only fires for backend bipartite
+  // edges (the only ones with live audio data).
+  interface WireDescriptor {
+    edge: GraphEdge;
+    ip: { x: number; y: number };
+    bp: { x: number; y: number };
+    color: string;
+    /** Set only for bipartite edges so meter animation can read level. */
+    input: AudioInput | null;
+    bus: Bus | null;
+  }
   const wires = useMemo(() => {
-    const out: Array<{
-      edge: GraphEdge;
-      ip: { x: number; y: number };
-      bp: { x: number; y: number };
-      input: AudioInput;
-      bus: Bus;
-    }> = [];
+    const out: WireDescriptor[] = [];
     for (const edge of graph.edges.values()) {
       const fromNode = graph.nodes.get(edge.fromNode);
       const toNode = graph.nodes.get(edge.toNode);
       if (!fromNode || !toNode) continue;
+      const fromPos = nodePositions.get(edge.fromNode);
+      const toPos = nodePositions.get(edge.toNode);
+      if (!fromPos || !toPos) continue;
+      const fromW = nodeWidthFor(fromNode);
+      const fromH = nodeHeightFor(fromNode);
+      const toH = nodeHeightFor(toNode);
       const inMeta = asInputNode(fromNode);
       const busMeta = asBusNode(toNode);
-      if (!inMeta || !busMeta) continue; // skip non-bipartite edges this turn
-      const ipPos = inputPositions.get(inMeta.backing.id);
-      const bpPos = busPositions.get(busMeta.backing.id);
-      if (!ipPos || !bpPos) continue;
       out.push({
         edge,
-        ip: { x: ipPos.x + INPUT_W, y: ipPos.y + INPUT_H / 2 },
-        bp: { x: bpPos.x, y: bpPos.y + BUS_H / 2 },
-        input: inMeta.backing,
-        bus: busMeta.backing,
+        ip: { x: fromPos.x + fromW, y: fromPos.y + fromH / 2 },
+        bp: { x: toPos.x,           y: toPos.y   + toH   / 2 },
+        color: busMeta ? busColor(busMeta.backing.id) : "rgba(170,180,200,0.7)",
+        input: inMeta?.backing ?? null,
+        bus: busMeta?.backing ?? null,
       });
     }
     return out;
-  }, [graph, inputPositions, busPositions]);
+  }, [graph, nodePositions]);
 
   return (
     <div
@@ -888,6 +1311,15 @@ export function NodeView({
             + Add input
           </button>
         )}
+        <button
+          type="button"
+          className={styles.addGroupBtn}
+          onClick={addGroup}
+          title="Add a group node (frontend only)"
+          aria-label="Add group node"
+        >
+          + Group
+        </button>
       </div>
       <div
         className={styles.canvasTransform}
@@ -923,12 +1355,15 @@ export function NodeView({
           </pattern>
           <rect width={canvasW} height={canvasH} fill="url(#nodeGrid)" />
 
-          {/* Render wires (selected/hovered last for z-order) */}
+          {/* Render wires (selected/hovered last for z-order). Wires
+              touching a group node are local-only and have no live
+              audio data → meter flow is suppressed. */}
           {wires.map((w) => {
             const id = w.edge.id;
             const isHover = hoverWire === id;
             const isSelected = selectedWire === id;
             const isLevelFlow =
+              !!w.bus && !!w.input &&
               w.bus.enabled && !w.edge.muted && !w.input.muted && w.input.level > 0.05;
             return (
               <Wire
@@ -938,11 +1373,11 @@ export function NodeView({
                 fromY={w.ip.y}
                 toX={w.bp.x}
                 toY={w.bp.y}
-                color={busColor(w.bus.id)}
+                color={w.color}
                 gain={w.edge.gain}
                 muted={w.edge.muted}
                 flowing={isLevelFlow}
-                flowSpeed={w.input.level}
+                flowSpeed={w.input?.level ?? 0}
                 hovered={isHover}
                 selected={isSelected}
                 onClick={onWireClick}
@@ -952,24 +1387,52 @@ export function NodeView({
             );
           })}
 
-          {/* Ghost wire while dragging */}
-          {drag && (
-            <Wire
-              fromX={drag.startX}
-              fromY={drag.startY}
-              toX={drag.curX}
-              toY={drag.curY}
-              color={drag.hoverBusId ? busColor(drag.hoverBusId) : "rgba(255,255,255,0.4)"}
-              gain={0.75}
-              muted={false}
-              flowing={false}
-              flowSpeed={0}
-              hovered={true}
-              selected={false}
-              dashed
-            />
-          )}
+          {/* Ghost wire while dragging. Invalid drop (cycle / port
+              mismatch) paints the ghost red AND pulses to draw the
+              eye, plus a tooltip explains the rejection. */}
+          {drag && (() => {
+            const hasTarget = !!drag.hoverBusId || !!drag.hoverGroupId;
+            const invalid = hasTarget && !drag.dropOk;
+            const targetColor = drag.hoverBusId
+              ? busColor(drag.hoverBusId)
+              : "rgba(170,180,200,0.85)"; // group accent
+            return (
+              <Wire
+                fromX={drag.startX}
+                fromY={drag.startY}
+                toX={drag.curX}
+                toY={drag.curY}
+                color={
+                  invalid
+                    ? "var(--am-drop-invalid, #EF4444)"
+                    : hasTarget
+                    ? targetColor
+                    : "rgba(255,255,255,0.4)"
+                }
+                invalid={invalid}
+                gain={0.75}
+                muted={false}
+                flowing={false}
+                flowSpeed={0}
+                hovered={true}
+                selected={false}
+                dashed
+              />
+            );
+          })()}
         </svg>
+
+        {/* Drop-rejection tooltip — only when hovering an invalid bus */}
+        {drag && drag.dropReason && (
+          <div
+            className={styles.dropTooltip}
+            style={{ left: drag.curX + 14, top: drag.curY + 14 }}
+            role="status"
+            aria-live="polite"
+          >
+            {drag.dropReason}
+          </div>
+        )}
 
         {/* Marquee box */}
         {marquee && (() => {
@@ -1053,6 +1516,29 @@ export function NodeView({
               onSelect={onBusSelect}
               onNodeMouseDown={onBusNodeMouseDown}
               onRecToggle={onBusRecToggle}
+            />
+          );
+        })}
+
+        {/* Group nodes (frontend-only DAG demo nodes) */}
+        {Array.from(localGroups.entries()).map(([gid, meta]) => {
+          const nid = groupNodeId(gid);
+          const pos = nodePositions.get(nid);
+          if (!pos) return null;
+          const isMoving = nodeDrag?.kind === "group" && nodeDrag.id === gid;
+          const isDragTarget = drag?.hoverGroupId === gid;
+          return (
+            <GroupNode
+              key={nid}
+              id={gid}
+              name={meta.name}
+              x={pos.x}
+              y={pos.y}
+              moving={isMoving}
+              dragTarget={isDragTarget}
+              onNodeMouseDown={onGroupNodeMouseDown}
+              onPortMouseDown={onGroupPortMouseDown}
+              onRemove={removeGroup}
             />
           );
         })}
@@ -1188,6 +1674,8 @@ interface WireProps {
   hovered: boolean;
   selected: boolean;
   dashed?: boolean;
+  /** Pulse the wire to signal an invalid drop target. Ghost-wire only. */
+  invalid?: boolean;
   onClick?: (id: string, e: React.MouseEvent) => void;
   onMouseEnter?: (id: string) => void;
   onMouseLeave?: (id: string) => void;
@@ -1207,6 +1695,7 @@ const Wire = memo(function Wire({
   hovered,
   selected,
   dashed,
+  invalid,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -1226,7 +1715,7 @@ const Wire = memo(function Wire({
     <g
       className={`${styles.wire} ${hovered ? styles.wireHover : ""} ${
         selected ? styles.wireSelected : ""
-      }`}
+      } ${invalid ? styles.wireInvalid : ""}`}
       onClick={onClick && id ? (e) => onClick(id, e) : undefined}
       onMouseEnter={onMouseEnter && id ? () => onMouseEnter(id) : undefined}
       onMouseLeave={onMouseLeave && id ? () => onMouseLeave(id) : undefined}
@@ -1476,6 +1965,71 @@ const BusNode = memo(function BusNode({
           <RecordIcon size={10} />
         </button>
       )}
+    </div>
+  );
+});
+
+/* ── Group node (frontend-only DAG demo) ───────────────────────────── */
+
+interface GroupNodeProps {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  moving: boolean;
+  dragTarget: boolean;
+  onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
+  onPortMouseDown: (id: string, e: React.MouseEvent) => void;
+  onRemove: (id: string) => void;
+}
+
+const GroupNode = memo(function GroupNode({
+  id,
+  name,
+  x,
+  y,
+  moving,
+  dragTarget,
+  onNodeMouseDown,
+  onPortMouseDown,
+  onRemove,
+}: GroupNodeProps) {
+  return (
+    <div
+      className={`${styles.groupNode} ${moving ? styles.nodeMoving : ""} ${
+        dragTarget ? styles.busNodeDragTarget : ""
+      }`}
+      style={{ left: x, top: y, width: GROUP_W, height: GROUP_H }}
+      onMouseDown={(e) => onNodeMouseDown(id, e)}
+    >
+      <span className={styles.groupInputPort} aria-hidden>
+        <span className={styles.portInner} />
+      </span>
+      <div className={styles.groupNodeText}>
+        <div className={styles.groupNodeLabel}>{name}</div>
+        <div className={styles.groupNodeSub}>Group</div>
+      </div>
+      <button
+        type="button"
+        className={styles.groupRemoveBtn}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove(id);
+        }}
+        title="Remove group"
+        aria-label={`Remove ${name}`}
+      >
+        <XIcon size={10} />
+      </button>
+      <button
+        className={styles.groupOutputPort}
+        onMouseDown={(e) => onPortMouseDown(id, e)}
+        onClick={(e) => e.stopPropagation()}
+        aria-label={`Drag from ${name} to connect to a bus`}
+        title="Drag to a bus to connect"
+      >
+        <span className={styles.portInner} />
+      </button>
     </div>
   );
 });
