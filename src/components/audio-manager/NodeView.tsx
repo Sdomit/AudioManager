@@ -99,6 +99,8 @@ const GROUP_W = 180;
 const GROUP_H = 56;
 const COL_PAD = 14;
 const COL_GAP_BETWEEN = 160; // horizontal space between input column and bus column for wires
+const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
+const MIN_CANVAS_H = 300;
 
 interface DragState {
   /**
@@ -300,6 +302,28 @@ export function NodeView({
   onRemoveInput,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
+  const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
+    w: MIN_CANVAS_W,
+    h: MIN_CANVAS_H,
+  });
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.max(0, Math.floor(el.clientWidth));
+      const h = Math.max(0, Math.floor(el.clientHeight));
+      setWrapSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [drag, setDrag] = useState<DragState | null>(null);
   // Mirror `drag` in a ref so the mouseup handler can read the latest
   // state without invoking the React state-updater (see onUp below).
@@ -405,7 +429,10 @@ export function NodeView({
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
+      const busColX = Math.max(
+        COL_PAD + INPUT_W + COL_GAP_BETWEEN,
+        boundsRef.current.w - BUS_W - COL_PAD,
+      );
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -488,22 +515,34 @@ export function NodeView({
     return p ? { x: p.x, y: p.y + BUS_H / 2 } : null;
   };
 
-  // Compute canvas size based on actual node positions so it grows if
-  // nodes are dragged beyond the default footprint.
-  const { canvasW, canvasH } = useMemo(() => {
-    const all = [
-      ...Array.from(inputPositions.values()).map((p) => ({ x: p.x + INPUT_W, y: p.y + INPUT_H })),
-      ...Array.from(busPositions.values()).map((p) => ({ x: p.x + BUS_W, y: p.y + BUS_H })),
-    ];
-    return {
-      canvasW: Math.max(
-        COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD,
-        ...all.map((p) => p.x + COL_PAD),
-        400,
-      ),
-      canvasH: Math.max(400, ...all.map((p) => p.y + COL_PAD)),
-    };
-  }, [inputPositions, busPositions]);
+  const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W);
+  const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H);
+  boundsRef.current = { w: canvasW, h: canvasH };
+  const busColumnX = Math.max(
+    COL_PAD + INPUT_W + COL_GAP_BETWEEN,
+    canvasW - BUS_W - COL_PAD,
+  );
+
+  // Pull stale/off-screen nodes back inside the current bounded canvas.
+  useEffect(() => {
+    setNodePositions((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [nid, p] of prev) {
+        const nodeW = isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
+        const nodeH = isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
+        const maxX = Math.max(0, canvasW - nodeW);
+        const maxY = Math.max(0, canvasH - nodeH);
+        const nx = Math.min(maxX, Math.max(0, p.x));
+        const ny = Math.min(maxY, Math.max(0, p.y));
+        if (nx !== p.x || ny !== p.y) {
+          next.set(nid, { x: nx, y: ny });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [canvasW, canvasH]);
 
   // ── Mouse handlers for drag-to-connect ────────────────────────────────
   const handlePortMouseDown = useCallback(
@@ -747,9 +786,13 @@ export function NodeView({
         setNodePositions((prev) => {
           const next = new Map(prev);
           for (const [nid, p0] of nodeDrag.groupStart) {
+            const nodeW = isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
+            const nodeH = isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
+            const maxX = Math.max(0, boundsRef.current.w - nodeW);
+            const maxY = Math.max(0, boundsRef.current.h - nodeH);
             next.set(nid, {
-              x: Math.max(0, p0.x + dx),
-              y: Math.max(0, p0.y + dy),
+              x: Math.min(maxX, Math.max(0, p0.x + dx)),
+              y: Math.min(maxY, Math.max(0, p0.y + dy)),
             });
           }
           return next;
@@ -984,13 +1027,18 @@ export function NodeView({
     const v = viewRef.current;
     const wx = (cx - v.tx) / v.zoom - GROUP_W / 2;
     const wy = (cy - v.ty) / v.zoom - GROUP_H / 2;
+    const maxX = Math.max(0, boundsRef.current.w - GROUP_W);
+    const maxY = Math.max(0, boundsRef.current.h - GROUP_H);
+    const clampedX = Math.min(maxX, Math.max(0, wx));
+    const clampedY = Math.min(maxY, Math.max(0, wy));
     setNodePositions((prev) => {
       const next = new Map(prev);
-      next.set(nid, { x: Math.max(0, wx), y: Math.max(0, wy) });
+      next.set(nid, { x: clampedX, y: clampedY });
       return next;
     });
     saveNodePositions(new Map(nodePosRef.current).set(nid, {
-      x: Math.max(0, wx), y: Math.max(0, wy),
+      x: clampedX,
+      y: clampedY,
     }));
   }, []);
 
@@ -1135,10 +1183,9 @@ export function NodeView({
         y: COL_PAD + i * (INPUT_H + INPUT_GAP),
       });
     });
-    const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
     buses.forEach((bus, i) => {
       next.set(busNodeId(bus.id), {
-        x: busColX,
+        x: busColumnX,
         y: COL_PAD + i * (BUS_H + BUS_GAP),
       });
     });
@@ -1149,12 +1196,18 @@ export function NodeView({
     // Lay groups out in a third column to the right of the bus column
     // in their current insertion order. Group ids stay stable; we are
     // only assigning positions.
-    const groupColX = busColX + BUS_W + COL_GAP_BETWEEN;
+    const groupColX = Math.min(
+      busColumnX + BUS_W + COL_GAP_BETWEEN,
+      Math.max(COL_PAD, boundsRef.current.w - GROUP_W - COL_PAD),
+    );
     let groupIndex = 0;
     for (const gid of localGroups.keys()) {
       next.set(groupNodeId(gid), {
         x: groupColX,
-        y: COL_PAD + groupIndex * (GROUP_H + BUS_GAP),
+        y: Math.min(
+          Math.max(0, boundsRef.current.h - GROUP_H),
+          COL_PAD + groupIndex * (GROUP_H + BUS_GAP),
+        ),
       });
       groupIndex += 1;
     }
@@ -1330,7 +1383,7 @@ export function NodeView({
       >
       <div className={styles.canvas} style={{ width: canvasW, height: canvasH }}>
         <ColumnLabel x={COL_PAD} label="Inputs (drag to rearrange)" />
-        <ColumnLabel x={COL_PAD + INPUT_W + COL_GAP_BETWEEN} label="Buses" />
+        <ColumnLabel x={busColumnX} label="Buses" />
 
         {/* SVG wires layer */}
         <svg

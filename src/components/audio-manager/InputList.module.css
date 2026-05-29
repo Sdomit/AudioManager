@@ -3,9 +3,9 @@
   flex-direction: column;
   background: var(--am-surface-1);
   border-right: 1px solid var(--am-border-subtle);
-  min-width: 280px;
+  width: clamp(220px, 24vw, 320px);
+  min-width: 220px;
   max-width: 360px;
-  width: 320px;
   overflow: hidden;
 }
 

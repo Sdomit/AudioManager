@@ -3,14 +3,21 @@
   flex-direction: column;
   background: var(--am-surface-1);
   border-left: 1px solid var(--am-border-subtle);
-  width: 340px;
-  min-width: 280px;
+  width: clamp(240px, 25vw, 340px);
+  min-width: 240px;
   max-width: 420px;
   overflow: hidden;
 }
 
 @media (max-width: 1199px) {
   .panel { width: 300px; }
+}
+
+@media (max-width: 920px) {
+  .panel {
+    width: 240px;
+    min-width: 220px;
+  }
 }
 
 /* ── Empty state ─────────────────────────────────────────────────────── */
