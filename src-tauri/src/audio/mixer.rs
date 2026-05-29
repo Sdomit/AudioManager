@@ -15,6 +15,12 @@ const RING_SIZE: usize = 16384;
 /// Enforced as a hard error in `start()` — no inputs are ever silently dropped.
 pub const MAX_INPUTS: usize = 8;
 
+/// Upper bound on `TapCommand`s drained per audio callback invocation.
+/// Keeps worst-case command work per block deterministic when the IPC layer
+/// bursts many `Add`/`Remove` messages. Excess commands stay queued and are
+/// processed on subsequent callbacks.
+const MAX_CMDS_PER_BLOCK: usize = 8;
+
 #[derive(Debug, Serialize, Clone)]
 pub struct EngineError {
     pub message: String,
@@ -339,19 +345,29 @@ pub fn start(
                 .build_output_stream(
                     &out_stream_cfg,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                        // Drain newly-added/removed taps. Bounded by MAX_ACTIVE_TAPS.
-                        while let Ok(cmd) = tap_rx.try_recv() {
-                            match cmd {
-                                TapCommand::Add(t) => {
+                        // Drain at most MAX_CMDS_PER_BLOCK tap commands per block so
+                        // a burst of Add/Remove can never blow the realtime budget.
+                        // Leftovers stay queued for the next callback.
+                        for _ in 0..MAX_CMDS_PER_BLOCK {
+                            match tap_rx.try_recv() {
+                                Ok(TapCommand::Add(t)) => {
                                     if active_taps.len() < MAX_ACTIVE_TAPS {
                                         active_taps.push(t);
                                     }
                                     // Silent drop above the cap is acceptable —
                                     // IPC layer should refuse far earlier.
                                 }
-                                TapCommand::Remove(id) => {
-                                    active_taps.retain(|t| t.id != id);
+                                Ok(TapCommand::Remove(id)) => {
+                                    // swap_remove is O(1); tap order is irrelevant
+                                    // because every per-frame fan-out iterates the
+                                    // whole vec anyway.
+                                    if let Some(pos) =
+                                        active_taps.iter().position(|t| t.id == id)
+                                    {
+                                        active_taps.swap_remove(pos);
+                                    }
                                 }
+                                Err(_) => break,
                             }
                         }
 

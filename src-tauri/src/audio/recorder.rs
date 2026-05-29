@@ -107,9 +107,23 @@ pub struct ActiveTap {
 }
 
 impl ActiveTap {
-    /// Push one sample; on ring-full, increment the drop counter.
+    /// Push one sample. Sanitizes the value before enqueue so WAV files
+    /// never contain NaN/Inf:
+    ///   * NaN          → 0.0
+    ///   * +Inf         → 1.0
+    ///   * -Inf         → -1.0
+    ///   * finite |s|>1 → clamped to [-1.0, 1.0]
+    /// On ring-full, increment the drop counter.
     #[inline]
     pub fn push(&mut self, s: f32) {
+        // NaN must be handled before clamp: `f32::clamp` returns NaN unchanged
+        // because all NaN comparisons are false, so the inner `<`/`>` checks
+        // never replace it with the bounds.
+        let s = if s.is_nan() {
+            0.0
+        } else {
+            s.clamp(-1.0, 1.0)
+        };
         if self.producer.push(s).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -154,6 +168,8 @@ impl RecorderHandle {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let dropped_samples = self.dropped.load(Ordering::Relaxed);
+        let write_error = self.error.lock().ok().and_then(|g| g.clone());
         RecordingInfo {
             id: self.id.clone(),
             spec: self.spec.clone(),
@@ -163,19 +179,31 @@ impl RecorderHandle {
             started_at_unix_ms,
             samples_written: self.samples_written.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
-            dropped_samples: self.dropped.load(Ordering::Relaxed),
+            dropped_samples,
             engine_bus: self.engine_bus,
-            error: self.error.lock().ok().and_then(|g| g.clone()),
+            error: recording_status_error(write_error, dropped_samples),
         }
     }
 
     /// Stop the recording and finalize the WAV header.
     ///
-    /// Sends `Remove` to the engine (no-op if the engine has restarted),
-    /// signals the writer thread to drain + exit, joins it, and returns
-    /// the final info snapshot.
+    /// Sends `Remove` to the engine, signals the writer thread to drain
+    /// + exit, joins it, and returns the final info snapshot. If the
+    /// `Remove` send fails the engine was already torn down out-of-band
+    /// (invariant violation in IPC layer) — record it as the first error
+    /// so the surfaced `RecordingInfo.error` makes it visible instead of
+    /// silently swallowing the diagnostic.
     pub fn stop(mut self) -> RecordingInfo {
-        let _ = self.engine_tap_tx.send(TapCommand::Remove(self.tap_id));
+        if self
+            .engine_tap_tx
+            .send(TapCommand::Remove(self.tap_id))
+            .is_err()
+        {
+            set_first_error(
+                &self.error,
+                "Recorder stop: engine was already gone before Remove sent".to_string(),
+            );
+        }
         self.stop_flag.store(true, Ordering::Release);
         if let Some(handle) = self.writer_handle.take() {
             let _ = handle.join();
@@ -290,19 +318,9 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
 
     let tap_id = next_tap_id();
 
-    let active = ActiveTap {
-        id: tap_id,
-        kind,
-        producer,
-        dropped: Arc::clone(&dropped),
-        samples_written: Arc::clone(&samples_written),
-    };
-    engine_tap_tx
-        .send(TapCommand::Add(active))
-        .map_err(|_| EngineError {
-            message: "Audio engine is not running on the target bus".to_string(),
-        })?;
-
+    // Spawn the writer thread BEFORE publishing the tap. If the spawn
+    // fails we still own `producer`, so it drops here and never lands in
+    // the audio engine — no leaked tap, no orphan callback work.
     let writer_stop = Arc::clone(&stop_flag);
     let writer_error = Arc::clone(&error);
     let writer_bytes = Arc::clone(&bytes_written);
@@ -319,9 +337,36 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
                 path_for_thread,
             );
         })
-        .map_err(|e| EngineError {
-            message: format!("Failed to spawn recorder writer thread: {e}"),
+        .map_err(|e| {
+            // Writer spawn failed: drop the WAV file we just opened so it
+            // doesn't linger as a 0-byte orphan in the recordings folder.
+            let _ = fs::remove_file(&path);
+            EngineError {
+                message: format!("Failed to spawn recorder writer thread: {e}"),
+            }
         })?;
+
+    // Writer thread is alive. Publishing the tap to the engine is now
+    // the last fallible step. If the send fails we tear the writer down
+    // cleanly and delete the empty WAV before returning.
+    let active = ActiveTap {
+        id: tap_id,
+        kind,
+        producer,
+        dropped: Arc::clone(&dropped),
+        samples_written: Arc::clone(&samples_written),
+    };
+    if let Err(_send_err) = engine_tap_tx.send(TapCommand::Add(active)) {
+        // _send_err carries the ActiveTap back; dropping it releases the
+        // ring producer so the writer's consumer sees no further data.
+        drop(_send_err);
+        stop_flag.store(true, Ordering::Release);
+        let _ = writer_handle.join();
+        let _ = fs::remove_file(&path);
+        return Err(EngineError {
+            message: "Audio engine is not running on the target bus".to_string(),
+        });
+    }
 
     Ok(RecorderHandle {
         id,
@@ -355,29 +400,33 @@ fn run_writer(
     const BATCH: usize = 4096;
 
     loop {
-        let mut drained = 0;
-        while drained < BATCH {
+        let mut written_this_batch = 0usize;
+        let mut write_failed = false;
+        while written_this_batch < BATCH {
             match consumer.pop() {
                 Some(sample) => {
                     if let Err(e) = writer.write_sample(sample) {
-                        let _ = error.lock().map(|mut g| {
-                            *g = Some(format!("WAV write failed: {e}"));
-                        });
-                        finalize_writer(writer, &path, &bytes_written, &error);
-                        return;
+                        set_first_error(&error, format!("WAV write failed: {e}"));
+                        write_failed = true;
+                        break;
                     }
-                    drained += 1;
+                    written_this_batch += 1;
                 }
                 None => break,
             }
         }
-        // Update byte counter approximately (sample_count * 4 bytes for f32).
-        bytes_written.fetch_add((drained as u64) * 4, Ordering::Relaxed);
+        // Update byte counter once per batch from successful writes only.
+        add_written_bytes(&bytes_written, written_this_batch);
+
+        if write_failed {
+            finalize_writer(writer, &path, &bytes_written, &error);
+            return;
+        }
 
         if stop_flag.load(Ordering::Acquire) {
             break;
         }
-        if drained == 0 {
+        if written_this_batch == 0 {
             thread::sleep(WRITER_IDLE_SLEEP);
         }
     }
@@ -387,14 +436,12 @@ fn run_writer(
     let mut tail = 0;
     while let Some(sample) = consumer.pop() {
         if let Err(e) = writer.write_sample(sample) {
-            let _ = error.lock().map(|mut g| {
-                *g = Some(format!("WAV write failed during drain: {e}"));
-            });
+            set_first_error(&error, format!("WAV write failed during drain: {e}"));
             break;
         }
         tail += 1;
     }
-    bytes_written.fetch_add((tail as u64) * 4, Ordering::Relaxed);
+    add_written_bytes(&bytes_written, tail);
 
     finalize_writer(writer, &path, &bytes_written, &error);
 }
@@ -406,9 +453,8 @@ fn finalize_writer(
     error: &Arc<Mutex<Option<String>>>,
 ) {
     if let Err(e) = writer.finalize() {
-        let _ = error.lock().map(|mut g| {
-            *g = Some(format!("WAV finalize failed: {e}"));
-        });
+        // Preserve root cause if a write error already happened.
+        set_first_error(error, format!("WAV finalize failed: {e}"));
         return;
     }
     // Replace the running-sum approximation with the actual file size.
@@ -457,6 +503,33 @@ fn safe_slug(input: &str) -> String {
         "tap".to_string()
     } else {
         trimmed
+    }
+}
+
+fn set_first_error(error: &Arc<Mutex<Option<String>>>, message: String) {
+    if let Ok(mut guard) = error.lock() {
+        if guard.is_none() {
+            *guard = Some(message);
+        }
+    }
+}
+
+fn recording_status_error(error: Option<String>, dropped_samples: u64) -> Option<String> {
+    if error.is_some() {
+        return error;
+    }
+    if dropped_samples > 0 {
+        return Some(format!(
+            "Recording is lossy: dropped {dropped_samples} samples because the writer could not keep up."
+        ));
+    }
+    None
+}
+
+#[inline]
+fn add_written_bytes(bytes_written: &Arc<AtomicU64>, successful_samples: usize) {
+    if successful_samples > 0 {
+        bytes_written.fetch_add((successful_samples as u64) * 4, Ordering::Relaxed);
     }
 }
 
@@ -620,6 +693,191 @@ mod tests {
             Some(BusId::B1)
         );
         assert_eq!(TapSpec::InputPre { device_id: "x".into() }.bus(), None);
+    }
+
+    fn make_tap(ring_capacity: usize) -> (ActiveTap, Consumer<f32>) {
+        let ring = RingBuffer::<f32>::new(ring_capacity);
+        let (producer, consumer) = ring.split();
+        let tap = ActiveTap {
+            id: 1,
+            kind: CallbackTapKind::BusOut,
+            producer,
+            dropped: Arc::new(AtomicU64::new(0)),
+            samples_written: Arc::new(AtomicU64::new(0)),
+        };
+        (tap, consumer)
+    }
+
+    #[test]
+    fn active_tap_push_replaces_nan_with_zero() {
+        let (mut tap, mut consumer) = make_tap(16);
+        tap.push(f32::NAN);
+        assert_eq!(consumer.pop(), Some(0.0));
+        assert_eq!(tap.samples_written.load(Ordering::Relaxed), 1);
+        assert_eq!(tap.dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn active_tap_push_clamps_infinities_to_unit() {
+        let (mut tap, mut consumer) = make_tap(16);
+        tap.push(f32::INFINITY);
+        tap.push(f32::NEG_INFINITY);
+        assert_eq!(consumer.pop(), Some(1.0));
+        assert_eq!(consumer.pop(), Some(-1.0));
+        assert_eq!(tap.samples_written.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn active_tap_push_clamps_out_of_range_finite_samples() {
+        let (mut tap, mut consumer) = make_tap(16);
+        tap.push(2.5);
+        tap.push(-3.0);
+        tap.push(0.5);
+        tap.push(-0.25);
+        tap.push(1.0);
+        tap.push(-1.0);
+        assert_eq!(consumer.pop(), Some(1.0));
+        assert_eq!(consumer.pop(), Some(-1.0));
+        assert_eq!(consumer.pop(), Some(0.5));
+        assert_eq!(consumer.pop(), Some(-0.25));
+        assert_eq!(consumer.pop(), Some(1.0));
+        assert_eq!(consumer.pop(), Some(-1.0));
+    }
+
+    #[test]
+    fn active_tap_push_preserves_finite_in_range_samples() {
+        let (mut tap, mut consumer) = make_tap(16);
+        for s in [0.0_f32, 0.1, -0.1, 0.999, -0.999] {
+            tap.push(s);
+        }
+        for s in [0.0_f32, 0.1, -0.1, 0.999, -0.999] {
+            assert_eq!(consumer.pop(), Some(s));
+        }
+    }
+
+    #[test]
+    fn active_tap_push_increments_dropped_counter_when_ring_is_full() {
+        let (mut tap, _consumer) = make_tap(1);
+        tap.push(0.25);
+        tap.push(0.5);
+        assert_eq!(tap.samples_written.load(Ordering::Relaxed), 1);
+        assert_eq!(tap.dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn recording_status_error_prefers_existing_error() {
+        let msg = recording_status_error(Some("WAV write failed: boom".to_string()), 42);
+        assert_eq!(msg, Some("WAV write failed: boom".to_string()));
+    }
+
+    #[test]
+    fn recording_status_error_reports_lossy_when_dropped() {
+        let msg = recording_status_error(None, 7);
+        assert_eq!(
+            msg,
+            Some(
+                "Recording is lossy: dropped 7 samples because the writer could not keep up."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn set_first_error_preserves_root_error_message() {
+        let err = Arc::new(Mutex::new(None));
+        set_first_error(&err, "first".to_string());
+        set_first_error(&err, "second".to_string());
+        assert_eq!(err.lock().unwrap().clone(), Some("first".to_string()));
+    }
+
+    #[test]
+    fn add_written_bytes_counts_successful_samples_once() {
+        let bytes = Arc::new(AtomicU64::new(0));
+        add_written_bytes(&bytes, 4096);
+        add_written_bytes(&bytes, 1024); // partial batch before a later failure
+        assert_eq!(bytes.load(Ordering::Relaxed), (4096_u64 + 1024_u64) * 4);
+    }
+
+    #[test]
+    fn add_written_bytes_ignores_zero_successes() {
+        let bytes = Arc::new(AtomicU64::new(1234));
+        add_written_bytes(&bytes, 0); // failed sample is never counted
+        assert_eq!(bytes.load(Ordering::Relaxed), 1234);
+    }
+
+    #[test]
+    fn start_recorder_aborts_cleanly_when_engine_send_fails() {
+        // P1 regression: with the receiver dropped, send(Add) fails. The
+        // writer thread must be torn down and the just-created WAV file
+        // must be removed — no leaked tap, no orphan file on disk.
+        let tmp = std::env::temp_dir()
+            .join(format!("am-rec-fail-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        let (tx, rx) = mpsc::channel::<TapCommand>();
+        drop(rx);
+
+        let result = start_recorder(StartRecorderRequest {
+            spec: TapSpec::BusOut { bus_id: BusId::A1 },
+            kind: CallbackTapKind::BusOut,
+            channels: 2,
+            sample_rate: 48_000,
+            engine_bus: BusId::A1,
+            engine_tap_tx: &tx,
+            recordings_dir: &tmp,
+            session_subdir: None,
+        });
+
+        assert!(result.is_err(), "expected error when engine receiver is gone");
+
+        let leftover: Vec<_> = fs::read_dir(&tmp)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "expected empty recordings dir after failed start, found {:?}",
+            leftover
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn stop_records_error_when_engine_send_fails() {
+        // P3a: a stale RecorderHandle whose engine was torn down out-of-band
+        // (invariant violation upstream) must surface a real error string
+        // through RecordingInfo.error, not silently swallow the diagnostic.
+        let (tx, rx) = mpsc::channel::<TapCommand>();
+        drop(rx);
+
+        let writer_handle = thread::spawn(|| {}); // no-op, immediately joinable
+
+        let handle = RecorderHandle {
+            id: "test-stop-err".to_string(),
+            spec: TapSpec::BusOut { bus_id: BusId::A1 },
+            file_path: PathBuf::from("ignored.wav"),
+            channels: 2,
+            sample_rate: 48_000,
+            started_at: SystemTime::now(),
+            tap_id: 42,
+            engine_bus: BusId::A1,
+            samples_written: Arc::new(AtomicU64::new(0)),
+            dropped: Arc::new(AtomicU64::new(0)),
+            bytes_written: Arc::new(AtomicU64::new(0)),
+            error: Arc::new(Mutex::new(None)),
+            stop_flag: Arc::new(AtomicBool::new(false)),
+            writer_handle: Some(writer_handle),
+            engine_tap_tx: tx,
+        };
+
+        let info = handle.stop();
+        let surfaced = info.error.unwrap_or_default();
+        assert!(
+            surfaced.contains("engine was already gone"),
+            "expected stop() to record an engine-gone error, got: {surfaced:?}"
+        );
     }
 
     #[test]
