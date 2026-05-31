@@ -1907,7 +1907,7 @@ const InputNode = memo(function InputNode({
             className={styles.nodeGainSlider}
             style={{ accentColor: "var(--am-accent)" }}
             aria-label={`Gain for ${input.name}`}
-            title="Mic gain (up to +6 dB)"
+            title="Mic gain (0.75 = unity, up to +20 dB)"
           />
           <span className={styles.nodeGainReadout}>{gainToDb(input.gain)}</span>
         </div>
@@ -2040,7 +2040,7 @@ const BusNode = memo(function BusNode({
             className={styles.nodeGainSlider}
             style={{ accentColor: busColor(bus.id) }}
             aria-label={`Volume for ${bus.label}`}
-            title="Bus volume (up to +6 dB)"
+            title="Bus volume (0.75 = unity, up to +20 dB)"
           />
           <span className={styles.nodeGainReadout}>{gainToDb(bus.volume)}</span>
         </div>
