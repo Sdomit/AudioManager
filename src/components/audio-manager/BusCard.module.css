@@ -4,8 +4,8 @@
   flex-direction: column;
   gap: var(--am-space-2);
   padding: var(--am-space-3) var(--am-space-4);
-  min-width: var(--am-bus-card-min);
-  flex: 1;
+  flex: 1 1 var(--am-bus-card-min);
+  min-width: 0;
   height: var(--am-bus-card-h);
   background: var(--am-surface-2);
   border: 1px solid var(--am-border-default);
@@ -124,6 +124,7 @@
   display: flex;
   align-items: center;
   gap: var(--am-space-3);
+  min-width: 0;
 }
 
 .dbReadout {

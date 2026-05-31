@@ -5,6 +5,9 @@
   padding: var(--am-space-4);
   background: var(--am-surface-1);
   border-bottom: 1px solid var(--am-border-subtle);
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .group {
