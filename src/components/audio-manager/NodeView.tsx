@@ -99,8 +99,8 @@ const BUS_H = 80;
 const BUS_GAP = 10;
 const GROUP_W = 180;
 const GROUP_H = 56;
-const COL_PAD = 14;
-const COL_GAP_BETWEEN = 160; // horizontal space between input column and bus column for wires
+const COL_PAD = 18;
+const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
 
@@ -181,6 +181,60 @@ interface PanState {
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
+// ── Layout helpers ────────────────────────────────────────────────────
+// Node footprint by graph NodeId kind. Centralizes the size lookup that
+// the clamp / drag / placement paths used to each duplicate inline.
+function nodeWidth(nid: NodeId): number {
+  return isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
+}
+function nodeHeight(nid: NodeId): number {
+  return isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
+}
+
+// Clamp a node's top-left so the whole node stays inside [0, bound-size].
+function clampToBounds(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  bw: number,
+  bh: number,
+): NodePos {
+  const maxX = Math.max(0, bw - w);
+  const maxY = Math.max(0, bh - h);
+  return { x: Math.min(maxX, Math.max(0, x)), y: Math.min(maxY, Math.max(0, y)) };
+}
+
+// Bus column x: sit at a comfortable, readable distance from the input
+// column rather than pinned to the far right edge (which left a large
+// dead gap in the middle on wide canvases). Never overflow the canvas.
+function busColumnXFor(boundsW: number): number {
+  return Math.min(boundsW - BUS_W - COL_PAD, COL_PAD + INPUT_W + COL_GAP_BETWEEN);
+}
+
+// Keep the (canvasW × canvasH) world box within the visible viewport.
+// Nodes are always clamped inside the box, so a visible box guarantees
+// every node stays on screen. When the box is smaller than the viewport
+// (zoomed out) it is centered; otherwise panning is bounded so the box
+// edges can never pull away from the viewport edges.
+function clampView(
+  v: Viewport,
+  canvasW: number,
+  canvasH: number,
+  viewW: number,
+  viewH: number,
+): Viewport {
+  const clampAxis = (t: number, content: number, viewport: number) => {
+    if (content <= viewport) return (viewport - content) / 2;
+    return Math.min(0, Math.max(viewport - content, t));
+  };
+  return {
+    zoom: v.zoom,
+    tx: clampAxis(v.tx, canvasW * v.zoom, viewW),
+    ty: clampAxis(v.ty, canvasH * v.zoom, viewH),
+  };
+}
 
 /** Pixel width of a node by kind. Used for port/wire endpoint maths. */
 function nodeWidthFor(n: GraphNode): number {
@@ -397,6 +451,16 @@ export function NodeView({
     };
   }, []);
 
+  // Clamp a viewport against the current bounds + live wrap size. Bounds
+  // (boundsRef) track the world box; the wrap element gives the on-screen
+  // viewport size. Used by every pan/zoom/reset path.
+  const clampViewToBounds = useCallback((v: Viewport): Viewport => {
+    const el = wrapRef.current;
+    const vw = el?.clientWidth ?? boundsRef.current.w;
+    const vh = el?.clientHeight ?? boundsRef.current.h;
+    return clampView(v, boundsRef.current.w, boundsRef.current.h, vw, vh);
+  }, []);
+
   // ── Node positions (unified Map<NodeId, NodePos>) ────────────────────
   // Single source of truth, keyed by graph NodeId (`in:<inputId>` or
   // `bus:<busId>`). Split views below are memoized for render-side
@@ -433,10 +497,7 @@ export function NodeView({
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      const busColX = Math.max(
-        COL_PAD + INPUT_W + COL_GAP_BETWEEN,
-        boundsRef.current.w - BUS_W - COL_PAD,
-      );
+      const busColX = busColumnXFor(boundsRef.current.w);
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -522,10 +583,7 @@ export function NodeView({
   const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W);
   const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H);
   boundsRef.current = { w: canvasW, h: canvasH };
-  const busColumnX = Math.max(
-    COL_PAD + INPUT_W + COL_GAP_BETWEEN,
-    canvasW - BUS_W - COL_PAD,
-  );
+  const busColumnX = busColumnXFor(canvasW);
 
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
@@ -533,12 +591,9 @@ export function NodeView({
       let changed = false;
       const next = new Map(prev);
       for (const [nid, p] of prev) {
-        const nodeW = isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
-        const nodeH = isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
-        const maxX = Math.max(0, canvasW - nodeW);
-        const maxY = Math.max(0, canvasH - nodeH);
-        const nx = Math.min(maxX, Math.max(0, p.x));
-        const ny = Math.min(maxY, Math.max(0, p.y));
+        const { x: nx, y: ny } = clampToBounds(
+          p.x, p.y, nodeWidth(nid), nodeHeight(nid), canvasW, canvasH,
+        );
         if (nx !== p.x || ny !== p.y) {
           next.set(nid, { x: nx, y: ny });
           changed = true;
@@ -547,6 +602,13 @@ export function NodeView({
       return changed ? next : prev;
     });
   }, [canvasW, canvasH]);
+
+  // Keep the world box within the viewport after any size/zoom change so
+  // every node (always clamped into the box) remains visible — covers
+  // initial load, window resize, and panel show/hide.
+  useEffect(() => {
+    setView((v) => clampViewToBounds(v));
+  }, [canvasW, canvasH, clampViewToBounds]);
 
   // ── Mouse handlers for drag-to-connect ────────────────────────────────
   const handlePortMouseDown = useCallback(
@@ -790,14 +852,11 @@ export function NodeView({
         setNodePositions((prev) => {
           const next = new Map(prev);
           for (const [nid, p0] of nodeDrag.groupStart) {
-            const nodeW = isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
-            const nodeH = isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
-            const maxX = Math.max(0, boundsRef.current.w - nodeW);
-            const maxY = Math.max(0, boundsRef.current.h - nodeH);
-            next.set(nid, {
-              x: Math.min(maxX, Math.max(0, p0.x + dx)),
-              y: Math.min(maxY, Math.max(0, p0.y + dy)),
-            });
+            next.set(nid, clampToBounds(
+              p0.x + dx, p0.y + dy,
+              nodeWidth(nid), nodeHeight(nid),
+              boundsRef.current.w, boundsRef.current.h,
+            ));
           }
           return next;
         });
@@ -832,10 +891,10 @@ export function NodeView({
           const factor = Math.exp(-e.deltaY * 0.0015);
           const zoom = clampZoom(v.zoom * factor);
           const k = zoom / v.zoom;
-          return { zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
+          return clampViewToBounds({ zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k });
         });
       } else {
-        setView((v) => ({ ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY }));
+        setView((v) => clampViewToBounds({ ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY }));
       }
     };
     wrap.addEventListener("wheel", onWheel, { passive: false });
@@ -933,7 +992,7 @@ export function NodeView({
     const onMove = (e: MouseEvent) => {
       const dx = e.clientX - panning.startClientX;
       const dy = e.clientY - panning.startClientY;
-      setView((v) => ({ ...v, tx: panning.startTx + dx, ty: panning.startTy + dy }));
+      setView((v) => clampViewToBounds({ ...v, tx: panning.startTx + dx, ty: panning.startTy + dy }));
     };
     const onUp = () => setPanning(null);
     window.addEventListener("mousemove", onMove);
@@ -1002,13 +1061,13 @@ export function NodeView({
     setView((v) => {
       const zoom = clampZoom(v.zoom * factor);
       const k = zoom / v.zoom;
-      return { zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
+      return clampViewToBounds({ zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k });
     });
-  }, []);
+  }, [clampViewToBounds]);
 
   const resetView = useCallback(() => {
-    setView({ tx: 0, ty: 0, zoom: 1 });
-  }, []);
+    setView(clampViewToBounds({ tx: 0, ty: 0, zoom: 1 }));
+  }, [clampViewToBounds]);
 
   // ── Group management ────────────────────────────────────────────────
   // Frontend-only: creating / removing a group is a localStorage write.
@@ -1031,10 +1090,9 @@ export function NodeView({
     const v = viewRef.current;
     const wx = (cx - v.tx) / v.zoom - GROUP_W / 2;
     const wy = (cy - v.ty) / v.zoom - GROUP_H / 2;
-    const maxX = Math.max(0, boundsRef.current.w - GROUP_W);
-    const maxY = Math.max(0, boundsRef.current.h - GROUP_H);
-    const clampedX = Math.min(maxX, Math.max(0, wx));
-    const clampedY = Math.min(maxY, Math.max(0, wy));
+    const { x: clampedX, y: clampedY } = clampToBounds(
+      wx, wy, GROUP_W, GROUP_H, boundsRef.current.w, boundsRef.current.h,
+    );
     setNodePositions((prev) => {
       const next = new Map(prev);
       next.set(nid, { x: clampedX, y: clampedY });
@@ -1216,6 +1274,9 @@ export function NodeView({
       groupIndex += 1;
     }
     setNodePositions(next);
+    // Reset is an intentional full reflow: realign the viewport too so the
+    // freshly laid-out columns are guaranteed to sit inside the visible area.
+    setView(clampViewToBounds({ tx: 0, ty: 0, zoom: 1 }));
   };
 
   // ── Generalized routing graph ────────────────────────────────────────
