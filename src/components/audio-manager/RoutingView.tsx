@@ -36,6 +36,8 @@ interface RoutingViewProps {
   onAddInput: () => void;
   /** Remove an input. Used by NodeView's Del shortcut for multi-select. */
   onRemoveInput: (id: string) => void;
+  onInputGainChange: (id: string, v: number) => void;
+  onBusVolumeChange: (id: BusId, v: number) => void;
 }
 
 /**
@@ -61,6 +63,8 @@ export function RoutingView({
   onStopRecording,
   onAddInput,
   onRemoveInput,
+  onInputGainChange,
+  onBusVolumeChange,
 }: RoutingViewProps) {
   return (
     <section className={styles.routing} aria-label="Routing">
@@ -114,6 +118,8 @@ export function RoutingView({
             onStopRecording={onStopRecording}
             onAddInput={onAddInput}
             onRemoveInput={onRemoveInput}
+            onInputGainChange={onInputGainChange}
+            onBusVolumeChange={onBusVolumeChange}
           />
         )}
       </div>

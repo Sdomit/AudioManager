@@ -340,6 +340,8 @@ export function AudioManager() {
           onStopRecording={(id: string) => void am.stopRecording(id)}
           onAddInput={() => setInputPickerOpen(true)}
           onRemoveInput={am.removeInput}
+          onInputGainChange={am.setInputGain}
+          onBusVolumeChange={am.setBusVolume}
         />
 
         {state.routingView !== "nodes" && (

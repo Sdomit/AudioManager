@@ -259,6 +259,29 @@
   transition: width 80ms linear;
 }
 
+.nodeGainRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nodeGainSlider {
+  flex: 1;
+  min-width: 0;
+  height: 12px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.nodeGainReadout {
+  flex-shrink: 0;
+  min-width: 44px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--am-text-tertiary);
+}
+
 /* ── Ports ────────────────────────────────────────────────────────── */
 .outputPort,
 .inputPort {

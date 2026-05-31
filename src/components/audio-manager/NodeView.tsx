@@ -79,6 +79,8 @@ interface NodeViewProps {
    * Buses are not removable here (4 fixed buses).
    */
   onRemoveInput?: (id: string) => void;
+  onInputGainChange: (id: string, v: number) => void;
+  onBusVolumeChange: (id: BusId, v: number) => void;
 }
 
 interface MarqueeState {
@@ -300,6 +302,8 @@ export function NodeView({
   onStopRecording,
   onAddInput,
   onRemoveInput,
+  onInputGainChange,
+  onBusVolumeChange,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
@@ -1534,6 +1538,7 @@ export function NodeView({
               onNodeMouseDown={onInputNodeMouseDown}
               onPortMouseDown={handlePortMouseDown}
               onRecToggle={onInputRecToggle}
+              onGainChange={(v) => onInputGainChange(input.id, v)}
             />
           );
         })}
@@ -1569,6 +1574,7 @@ export function NodeView({
               onSelect={onBusSelect}
               onNodeMouseDown={onBusNodeMouseDown}
               onRecToggle={onBusRecToggle}
+              onVolumeChange={(v) => onBusVolumeChange(bus.id, v)}
             />
           );
         })}
@@ -1833,6 +1839,7 @@ interface InputNodeProps {
   onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
   onPortMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: string) => void;
+  onGainChange: (v: number) => void;
 }
 
 const InputNode = memo(function InputNode({
@@ -1853,6 +1860,7 @@ const InputNode = memo(function InputNode({
   onNodeMouseDown,
   onPortMouseDown,
   onRecToggle,
+  onGainChange,
 }: InputNodeProps) {
   const id = input.id;
   return (
@@ -1883,6 +1891,25 @@ const InputNode = memo(function InputNode({
               style={{ width: `${Math.min(1, input.level) * 100}%` }}
             />
           </span>
+        </div>
+        <div
+          className={styles.nodeGainRow}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={input.gain}
+            onChange={(e) => onGainChange(Number(e.target.value))}
+            className={styles.nodeGainSlider}
+            style={{ accentColor: "var(--am-accent)" }}
+            aria-label={`Gain for ${input.name}`}
+            title="Mic gain (0.75 = unity, up to +20 dB)"
+          />
+          <span className={styles.nodeGainReadout}>{gainToDb(input.gain)}</span>
         </div>
       </div>
       <button
@@ -1931,6 +1958,7 @@ interface BusNodeProps {
   onSelect: (id: BusId) => void;
   onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: BusId) => void;
+  onVolumeChange: (v: number) => void;
 }
 
 const BusNode = memo(function BusNode({
@@ -1949,6 +1977,7 @@ const BusNode = memo(function BusNode({
   onSelect,
   onNodeMouseDown,
   onRecToggle,
+  onVolumeChange,
 }: BusNodeProps) {
   const id = bus.id;
   return (
@@ -1995,6 +2024,25 @@ const BusNode = memo(function BusNode({
               background: busColor(bus.id),
             }}
           />
+        </div>
+        <div
+          className={styles.nodeGainRow}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={bus.volume}
+            onChange={(e) => onVolumeChange(Number(e.target.value))}
+            className={styles.nodeGainSlider}
+            style={{ accentColor: busColor(bus.id) }}
+            aria-label={`Volume for ${bus.label}`}
+            title="Bus volume (0.75 = unity, up to +20 dB)"
+          />
+          <span className={styles.nodeGainReadout}>{gainToDb(bus.volume)}</span>
         </div>
         <div className={styles.busNodeState}>
           <span className={styles.busStateDot} style={{ background: stateDotColor(bus.state) }} />
