@@ -16,7 +16,8 @@ import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
-import { hasAnyAmvcDevice } from "../../utils/amvcPresets";
+import type { DeviceInfo } from "../../types/engine";
+import { hasAnyAmvcDevice, suggestAmvcBusDevice } from "../../utils/amvcPresets";
 
 import "./tokens.css";
 import "./base.css";
@@ -89,12 +90,20 @@ export function AudioManager() {
 
   const [cableNoticeDismissed, setCableNoticeDismissed] = useState(false);
   const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
+  const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
 
   useEffect(() => {
     Promise.all([ipc.listOutputDevices(), ipc.listInputDevices()])
-      .then(([outs, ins]) => { setHasCableDevices(hasAnyAmvcDevice(outs, ins)); })
+      .then(([outs, ins]) => {
+        setOutputDevicesCache(outs);
+        setHasCableDevices(hasAnyAmvcDevice(outs, ins));
+      })
       .catch(() => { setHasCableDevices(false); });
   }, []);
+
+  const recommendedBusDevice = busPickerTarget
+    ? suggestAmvcBusDevice(busPickerTarget.id, outputDevicesCache)
+    : null;
 
   // Bus right-click context menu (position + target id).
   const [busCtx, setBusCtx] = useState<{ id: BusId; x: number; y: number } | null>(null);
@@ -301,10 +310,7 @@ export function AudioManager() {
       )}
 
       {!cableNoticeDismissed && hasCableDevices === false && (
-        <CableNotice
-          onInstallRepair={() => void ipc.launchAmvcInstaller()}
-          onDismiss={() => setCableNoticeDismissed(true)}
-        />
+        <CableNotice onDismiss={() => setCableNoticeDismissed(true)} />
       )}
 
       <BusRail
@@ -429,10 +435,13 @@ export function AudioManager() {
           subtitle={
             busPickerTarget.id === "B1"
               ? "Tip: pick a virtual cable input to stream to OBS/Discord/Zoom."
+              : busPickerTarget.id === "B2"
+              ? "Tip: pick a virtual cable output for Discord/Zoom/Teams."
               : undefined
           }
           currentDeviceId={busPickerTarget.device}
-          highlightVirtual={busPickerTarget.id === "B1"}
+          highlightVirtual={busPickerTarget.id === "B1" || busPickerTarget.id === "B2"}
+          recommendedDeviceId={recommendedBusDevice}
           onPick={(deviceId) => {
             am.setBusDevice(busPickerFor, deviceId);
             setBusPickerFor(null);
