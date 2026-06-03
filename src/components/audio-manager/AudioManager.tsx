@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BusContextMenu } from "./BusContextMenu";
 import { BusRail } from "./BusRail";
 import { CableNotice } from "./CableNotice";
@@ -97,15 +97,26 @@ export function AudioManager() {
   const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
   const [inputDevicesCache, setInputDevicesCache] = useState<DeviceInfo[]>([]);
 
-  useEffect(() => {
-    Promise.all([ipc.listOutputDevices(), ipc.listInputDevices()])
-      .then(([outs, ins]) => {
-        setOutputDevicesCache(outs);
-        setInputDevicesCache(ins);
-        setHasCableDevices(hasAnyAmvcDevice(outs, ins));
-      })
-      .catch(() => { setHasCableDevices(false); });
+  // Re-poll device lists and recompute AudioManager-cable presence. Runs at
+  // mount and again on demand (e.g. after CableNotice launches the installer)
+  // so a freshly-installed cable clears the notice without an app restart.
+  const refreshCableDevices = useCallback(async () => {
+    try {
+      const [outs, ins] = await Promise.all([
+        ipc.listOutputDevices(),
+        ipc.listInputDevices(),
+      ]);
+      setOutputDevicesCache(outs);
+      setInputDevicesCache(ins);
+      setHasCableDevices(hasAnyAmvcDevice(outs, ins));
+    } catch {
+      setHasCableDevices(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshCableDevices();
+  }, [refreshCableDevices]);
 
   const recommendedBusDevice = busPickerTarget
     ? suggestAmvcBusDevice(busPickerTarget.id, outputDevicesCache)
@@ -323,7 +334,10 @@ export function AudioManager() {
       )}
 
       {!cableNoticeDismissed && hasCableDevices === false && (
-        <CableNotice onDismiss={() => setCableNoticeDismissed(true)} />
+        <CableNotice
+          onDismiss={() => setCableNoticeDismissed(true)}
+          onRecheck={() => void refreshCableDevices()}
+        />
       )}
 
       <BusRail
