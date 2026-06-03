@@ -12,6 +12,7 @@ const OUTPUTS: DeviceInfo[] = [
 
 const INPUTS: DeviceInfo[] = [
   { id: "mic", name: "Microphone (Realtek)", default_sample_rate: 48000, channels: 1, is_default: true },
+  { id: "amvc-cap-1", name: "AudioManager Cable 1 Recording", default_sample_rate: 48000, channels: 2, is_default: false },
 ];
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -136,5 +137,29 @@ describe("DevicePicker (output, B1)", () => {
 
     await screen.findByText("AudioManager Voice Output");
     expect(screen.queryByText("AudioManager Stream Output")).toBeNull();
+  });
+});
+
+describe("DevicePicker (input, app-capture)", () => {
+  it("marks an AudioManager Cable Recording source as Recommended", async () => {
+    const onPick = vi.fn();
+    render(
+      <DevicePicker
+        open
+        kind="input"
+        title="Add input device"
+        highlightVirtual
+        recommendedDeviceId="amvc-cap-1"
+        onPick={onPick}
+        onClose={() => {}}
+      />,
+    );
+
+    const cap = await screen.findByText("AudioManager Cable 1 Recording");
+    const row = cap.closest("button");
+    expect(row?.textContent).toContain("Recommended");
+
+    fireEvent.click(row!);
+    expect(onPick).toHaveBeenCalledWith("amvc-cap-1");
   });
 });

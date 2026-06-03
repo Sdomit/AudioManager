@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { DeviceInfo } from "../types/engine";
 import {
   AMVC_ALL_DEVICE_NAMES,
+  AMVC_CAPTURE_DEVICE_NAMES,
   AMVC_STREAM_OUTPUT,
   AMVC_VOICE_OUTPUT,
   compareDevicesForPicker,
   findAmvcCaptureDevices,
   hasAnyAmvcDevice,
   suggestAmvcBusDevice,
+  suggestAppCaptureInput,
 } from "./amvcPresets";
 
 function dev(name: string, over: Partial<DeviceInfo> = {}): DeviceInfo {
@@ -89,6 +91,46 @@ describe("findAmvcCaptureDevices", () => {
 
   it("returns empty for no AudioManager devices", () => {
     expect(findAmvcCaptureDevices([dev("Microphone")])).toHaveLength(0);
+  });
+});
+
+describe("AMVC_CAPTURE_DEVICE_NAMES", () => {
+  it("is the two Cable Recording endpoints in canonical order", () => {
+    expect(AMVC_CAPTURE_DEVICE_NAMES).toEqual([
+      "AudioManager Cable 1 Recording",
+      "AudioManager Cable 2 Recording",
+    ]);
+  });
+});
+
+describe("suggestAppCaptureInput", () => {
+  it("returns Cable 1 Recording when present", () => {
+    const inputs = [
+      dev("Microphone (Realtek)", { is_default: true }),
+      dev("AudioManager Cable 2 Recording", { id: "c2" }),
+      dev("AudioManager Cable 1 Recording", { id: "c1" }),
+    ];
+    expect(suggestAppCaptureInput(inputs)).toBe("c1");
+  });
+
+  it("falls back to Cable 2 when Cable 1 is absent", () => {
+    const inputs = [dev("AudioManager Cable 2 Recording", { id: "c2" })];
+    expect(suggestAppCaptureInput(inputs)).toBe("c2");
+  });
+
+  it("ignores Playback (render) endpoints", () => {
+    const inputs = [dev("AudioManager Cable 1 Playback", { id: "p1" })];
+    expect(suggestAppCaptureInput(inputs)).toBeNull();
+  });
+
+  it("returns null when no AudioManager capture device exists", () => {
+    expect(suggestAppCaptureInput([dev("Microphone")])).toBeNull();
+    expect(suggestAppCaptureInput([])).toBeNull();
+  });
+
+  it("returns the device id (not the name)", () => {
+    const inputs = [dev("AudioManager Cable 1 Recording", { id: "{guid-cap-1}" })];
+    expect(suggestAppCaptureInput(inputs)).toBe("{guid-cap-1}");
   });
 });
 

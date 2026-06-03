@@ -17,7 +17,11 @@ import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
 import type { DeviceInfo } from "../../types/engine";
-import { hasAnyAmvcDevice, suggestAmvcBusDevice } from "../../utils/amvcPresets";
+import {
+  hasAnyAmvcDevice,
+  suggestAmvcBusDevice,
+  suggestAppCaptureInput,
+} from "../../utils/amvcPresets";
 
 import "./tokens.css";
 import "./base.css";
@@ -91,11 +95,13 @@ export function AudioManager() {
   const [cableNoticeDismissed, setCableNoticeDismissed] = useState(false);
   const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
   const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
+  const [inputDevicesCache, setInputDevicesCache] = useState<DeviceInfo[]>([]);
 
   useEffect(() => {
     Promise.all([ipc.listOutputDevices(), ipc.listInputDevices()])
       .then(([outs, ins]) => {
         setOutputDevicesCache(outs);
+        setInputDevicesCache(ins);
         setHasCableDevices(hasAnyAmvcDevice(outs, ins));
       })
       .catch(() => { setHasCableDevices(false); });
@@ -104,6 +110,13 @@ export function AudioManager() {
   const recommendedBusDevice = busPickerTarget
     ? suggestAmvcBusDevice(busPickerTarget.id, outputDevicesCache)
     : null;
+
+  // App-capture source: suggest an AudioManager Cable Recording endpoint
+  // (skip any already added as an input). Routing to a chosen bus is the
+  // existing matrix action — this only surfaces the source.
+  const recommendedInputDevice = suggestAppCaptureInput(
+    inputDevicesCache.filter((d) => !usedInputIds.has(d.id)),
+  );
 
   // Bus right-click context menu (position + target id).
   const [busCtx, setBusCtx] = useState<{ id: BusId; x: number; y: number } | null>(null);
@@ -455,8 +468,14 @@ export function AudioManager() {
           open={true}
           kind="input"
           title="Add input device"
-          subtitle="Pick a microphone, system source, or virtual cable output."
+          subtitle={
+            recommendedInputDevice
+              ? "Tip: use an AudioManager Cable Recording source to capture app audio, then route it to a bus."
+              : "Pick a microphone, system source, or virtual cable output."
+          }
           excludeIds={usedInputIds}
+          highlightVirtual
+          recommendedDeviceId={recommendedInputDevice}
           onPick={(deviceId) => {
             if (deviceId) am.addInput(deviceId);
             setInputPickerOpen(false);

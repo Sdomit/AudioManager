@@ -42,6 +42,12 @@ export function suggestAmvcBusDevice(
   return found?.id ?? null;
 }
 
+/** Capture (Recording) endpoints in canonical order — app audio enters the mixer here. */
+export const AMVC_CAPTURE_DEVICE_NAMES: readonly string[] = [
+  AMVC_CABLE_1_RECORDING,
+  AMVC_CABLE_2_RECORDING,
+];
+
 /** All AudioManager capture (Recording) endpoints present in the given input list. */
 export function findAmvcCaptureDevices(inputDevices: DeviceInfo[]): DeviceInfo[] {
   return inputDevices.filter(
@@ -49,6 +55,22 @@ export function findAmvcCaptureDevices(inputDevices: DeviceInfo[]): DeviceInfo[]
       isAudioManagerVirtualDevice(d.name) &&
       d.name.toLowerCase().includes("recording"),
   );
+}
+
+/**
+ * Suggested app-capture input source: the first available AudioManager
+ * Cable Recording endpoint, in canonical (Cable 1 before Cable 2) order.
+ * Returns the device id when present, null otherwise. Pure — the caller
+ * decides whether to act on it; never auto-adds an input.
+ */
+export function suggestAppCaptureInput(inputDevices: DeviceInfo[]): string | null {
+  const captures = findAmvcCaptureDevices(inputDevices);
+  for (const name of AMVC_CAPTURE_DEVICE_NAMES) {
+    const match = captures.find((d) => d.name.toLowerCase() === name.toLowerCase());
+    if (match) return match.id;
+  }
+  // Fall back to any capture device if naming drifts from the canonical set.
+  return captures[0]?.id ?? null;
 }
 
 /** True if any AudioManager-branded endpoint appears in either device list. */
