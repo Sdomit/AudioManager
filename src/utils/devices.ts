@@ -21,7 +21,29 @@ export function extractErrorMessage(e: unknown): string {
   return String(e);
 }
 
+const AUDIOMANAGER_PREFIX = "audiomanager ";
+
+/** True when a device name belongs to AudioManager's own virtual cable. */
+export function isAudioManagerVirtualDevice(deviceName: string): boolean {
+  return deviceName.toLowerCase().startsWith(AUDIOMANAGER_PREFIX);
+}
+
+/**
+ * Role hint for AudioManager-branded endpoints.
+ * Returns null for devices that don't carry the "AudioManager " prefix.
+ */
+export function getAudioManagerDeviceHint(deviceName: string): string | null {
+  const lower = deviceName.toLowerCase();
+  if (!lower.startsWith(AUDIOMANAGER_PREFIX)) return null;
+  if (lower.includes("stream output")) return "AudioManager: B1 stream bus → OBS";
+  if (lower.includes("voice output")) return "AudioManager: B2 voice bus → Discord/Zoom/Teams";
+  if (lower.includes("cable") && lower.includes("playback")) return "AudioManager: app → mixer input (render)";
+  if (lower.includes("cable") && lower.includes("recording")) return "AudioManager: mixer captures app audio (capture)";
+  return "AudioManager virtual device";
+}
+
 export function isLikelyVirtualAudioDevice(deviceName: string): boolean {
+  if (isAudioManagerVirtualDevice(deviceName)) return true;
   const name = deviceName.toLowerCase();
   const patterns = [
     "vb-audio",
@@ -39,6 +61,8 @@ export function isLikelyVirtualAudioDevice(deviceName: string): boolean {
 }
 
 export function getVirtualDeviceHint(deviceName: string): string | null {
+  const amHint = getAudioManagerDeviceHint(deviceName);
+  if (amHint) return amHint;
   const name = deviceName.toLowerCase();
   if (name.includes("cable input")) {
     return "Virtual (playback for OBS/Discord)";

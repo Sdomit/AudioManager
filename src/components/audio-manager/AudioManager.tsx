@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BusContextMenu } from "./BusContextMenu";
 import { BusRail } from "./BusRail";
+import { CableNotice } from "./CableNotice";
 import { busRoleFor } from "./adapters";
 import { DetailPanel } from "./DetailPanel";
 import { DevicePicker } from "./DevicePicker";
@@ -14,6 +15,13 @@ import { StreamSetupSheet } from "./StreamSetupSheet";
 import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
+import * as ipc from "../../ipc/commands";
+import type { DeviceInfo } from "../../types/engine";
+import {
+  hasAnyAmvcDevice,
+  suggestAmvcBusDevice,
+  suggestAppCaptureInput,
+} from "../../utils/amvcPresets";
 
 import "./tokens.css";
 import "./base.css";
@@ -83,6 +91,43 @@ export function AudioManager() {
     | { kind: "save" }
     | { kind: "rename"; oldId: string; oldName: string }
   >({ kind: "closed" });
+
+  const [cableNoticeDismissed, setCableNoticeDismissed] = useState(false);
+  const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
+  const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
+  const [inputDevicesCache, setInputDevicesCache] = useState<DeviceInfo[]>([]);
+
+  // Re-poll device lists and recompute AudioManager-cable presence. Runs at
+  // mount and again on demand (e.g. after CableNotice launches the installer)
+  // so a freshly-installed cable clears the notice without an app restart.
+  const refreshCableDevices = useCallback(async () => {
+    try {
+      const [outs, ins] = await Promise.all([
+        ipc.listOutputDevices(),
+        ipc.listInputDevices(),
+      ]);
+      setOutputDevicesCache(outs);
+      setInputDevicesCache(ins);
+      setHasCableDevices(hasAnyAmvcDevice(outs, ins));
+    } catch {
+      setHasCableDevices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCableDevices();
+  }, [refreshCableDevices]);
+
+  const recommendedBusDevice = busPickerTarget
+    ? suggestAmvcBusDevice(busPickerTarget.id, outputDevicesCache)
+    : null;
+
+  // App-capture source: suggest an AudioManager Cable Recording endpoint
+  // (skip any already added as an input). Routing to a chosen bus is the
+  // existing matrix action — this only surfaces the source.
+  const recommendedInputDevice = suggestAppCaptureInput(
+    inputDevicesCache.filter((d) => !usedInputIds.has(d.id)),
+  );
 
   // Bus right-click context menu (position + target id).
   const [busCtx, setBusCtx] = useState<{ id: BusId; x: number; y: number } | null>(null);
@@ -288,6 +333,13 @@ export function AudioManager() {
         <PresetBanner preset={loadedPreset} onDismiss={am.dismissPresetBanner} />
       )}
 
+      {!cableNoticeDismissed && hasCableDevices === false && (
+        <CableNotice
+          onDismiss={() => setCableNoticeDismissed(true)}
+          onRecheck={() => void refreshCableDevices()}
+        />
+      )}
+
       <BusRail
         buses={state.buses}
         selection={state.selection}
@@ -410,10 +462,13 @@ export function AudioManager() {
           subtitle={
             busPickerTarget.id === "B1"
               ? "Tip: pick a virtual cable input to stream to OBS/Discord/Zoom."
+              : busPickerTarget.id === "B2"
+              ? "Tip: pick a virtual cable output for Discord/Zoom/Teams."
               : undefined
           }
           currentDeviceId={busPickerTarget.device}
-          highlightVirtual={busPickerTarget.id === "B1"}
+          highlightVirtual={busPickerTarget.id === "B1" || busPickerTarget.id === "B2"}
+          recommendedDeviceId={recommendedBusDevice}
           onPick={(deviceId) => {
             am.setBusDevice(busPickerFor, deviceId);
             setBusPickerFor(null);
@@ -427,8 +482,14 @@ export function AudioManager() {
           open={true}
           kind="input"
           title="Add input device"
-          subtitle="Pick a microphone, system source, or virtual cable output."
+          subtitle={
+            recommendedInputDevice
+              ? "Tip: use an AudioManager Cable Recording source to capture app audio, then route it to a bus."
+              : "Pick a microphone, system source, or virtual cable output."
+          }
           excludeIds={usedInputIds}
+          highlightVirtual
+          recommendedDeviceId={recommendedInputDevice}
           onPick={(deviceId) => {
             if (deviceId) am.addInput(deviceId);
             setInputPickerOpen(false);
