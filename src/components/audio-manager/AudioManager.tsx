@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BusContextMenu } from "./BusContextMenu";
 import { BusRail } from "./BusRail";
+import { CableNotice } from "./CableNotice";
 import { busRoleFor } from "./adapters";
 import { DetailPanel } from "./DetailPanel";
 import { DevicePicker } from "./DevicePicker";
@@ -14,6 +15,8 @@ import { StreamSetupSheet } from "./StreamSetupSheet";
 import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
+import * as ipc from "../../ipc/commands";
+import { hasAnyAmvcDevice } from "../../utils/amvcPresets";
 
 import "./tokens.css";
 import "./base.css";
@@ -83,6 +86,15 @@ export function AudioManager() {
     | { kind: "save" }
     | { kind: "rename"; oldId: string; oldName: string }
   >({ kind: "closed" });
+
+  const [cableNoticeDismissed, setCableNoticeDismissed] = useState(false);
+  const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    Promise.all([ipc.listOutputDevices(), ipc.listInputDevices()])
+      .then(([outs, ins]) => { setHasCableDevices(hasAnyAmvcDevice(outs, ins)); })
+      .catch(() => { setHasCableDevices(false); });
+  }, []);
 
   // Bus right-click context menu (position + target id).
   const [busCtx, setBusCtx] = useState<{ id: BusId; x: number; y: number } | null>(null);
@@ -286,6 +298,13 @@ export function AudioManager() {
 
       {state.presetBannerVisible && loadedPreset && (
         <PresetBanner preset={loadedPreset} onDismiss={am.dismissPresetBanner} />
+      )}
+
+      {!cableNoticeDismissed && hasCableDevices === false && (
+        <CableNotice
+          onInstallRepair={() => void ipc.launchAmvcInstaller()}
+          onDismiss={() => setCableNoticeDismissed(true)}
+        />
       )}
 
       <BusRail

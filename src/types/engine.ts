@@ -133,3 +133,32 @@ export interface RecordingFile {
   size_bytes: number;
   modified_unix_ms: number;
 }
+
+// ── AudioManager Virtual Cable helper (amvc-helper) ──────────────────────────
+
+export type AmvcHealthStatus =
+  | "not-installed"
+  | "installed-healthy"
+  | "installed-degraded"
+  | "needs-repair"
+  | "needs-reboot";
+
+export interface AmvcStatus {
+  status: AmvcHealthStatus;
+  found: number;
+  expected: number;
+  driver_in_store: boolean;
+  reboot_pending: boolean;
+  detected: string[];
+  missing: string[];
+}
+
+/**
+ * Discriminated union returned by the `query_amvc_helper` Tauri command.
+ *
+ * `kind: "ok"` — helper ran and returned valid JSON (driver may still be absent).
+ * `kind: "unavailable"` — helper binary not found or output could not be parsed.
+ */
+export type AmvcQueryResult =
+  | ({ kind: "ok" } & AmvcStatus)
+  | { kind: "unavailable"; reason: string };

@@ -1,3 +1,4 @@
+mod amvc;
 mod audio;
 mod presets;
 mod state;
@@ -1200,6 +1201,8 @@ pub fn run() {
             set_recordings_dir,
             delete_recording_file,
             open_recordings_folder,
+            amvc::query_amvc_helper,
+            amvc::launch_amvc_installer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
