@@ -35,14 +35,28 @@ pub enum AmvcQueryResult {
 }
 
 /// Internal JSON shape emitted by `amvc-helper status --json`.
+///
+/// `status` is the only required field — if it's missing, the helper output is
+/// malformed and the caller surfaces `Unavailable`. Every other field defaults
+/// to a safe value (0 for counts, false for flags, [] for lists) so a helper
+/// that omits a field still yields a usable `Ok` result. This matches the
+/// lenient TypeScript parser in `src/utils/amvc.ts`.
+fn default_expected() -> u32 { 6 }
+
 #[derive(serde::Deserialize)]
 struct HelperOutput {
     status: String,
+    #[serde(default)]
     found: u32,
+    #[serde(default = "default_expected")]
     expected: u32,
+    #[serde(default)]
     driver_in_store: bool,
+    #[serde(default)]
     reboot_pending: bool,
+    #[serde(default)]
     detected: Vec<String>,
+    #[serde(default)]
     missing: Vec<String>,
 }
 
@@ -258,6 +272,26 @@ mod tests {
         match parse(r#"{"found": 0}"#) {
             AmvcQueryResult::Unavailable { .. } => {}
             _ => panic!("expected Unavailable for missing required fields"),
+        }
+    }
+
+    #[test]
+    fn tolerates_missing_optional_fields_when_status_present() {
+        // Only `status` is required. Everything else falls back to safe defaults
+        // (matches the lenient TypeScript parser).
+        match parse(r#"{"status": "not-installed"}"#) {
+            AmvcQueryResult::Ok { status, found, expected, driver_in_store, reboot_pending, detected, missing } => {
+                assert_eq!(status, "not-installed");
+                assert_eq!(found, 0);
+                assert_eq!(expected, 6);
+                assert!(!driver_in_store);
+                assert!(!reboot_pending);
+                assert!(detected.is_empty());
+                assert!(missing.is_empty());
+            }
+            AmvcQueryResult::Unavailable { reason } => {
+                panic!("expected Ok with defaults, got Unavailable: {reason}")
+            }
         }
     }
 }
