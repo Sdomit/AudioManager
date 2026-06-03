@@ -5,9 +5,16 @@
 //! If the helper binary is absent the result is `AmvcQueryResult::Unavailable`
 //! — callers must treat that as a soft "no driver" state, not an error.
 
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
+
+/// Max time to wait for `amvc-helper status` before killing it and reporting
+/// the helper as unavailable. Bounds the worst case so a hung helper can never
+/// wedge the query path.
+const HELPER_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Outcome returned to the frontend by `query_amvc_helper`.
 #[derive(Debug, Serialize)]
@@ -39,23 +46,67 @@ struct HelperOutput {
     missing: Vec<String>,
 }
 
-pub fn run_helper_status() -> AmvcQueryResult {
-    let output = match Command::new("amvc-helper").args(["status", "--json"]).output() {
-        Ok(o) => o,
-        Err(e) => {
-            return AmvcQueryResult::Unavailable {
-                reason: format!("helper not found or could not be launched: {e}"),
-            };
+/// Run `amvc-helper status --json` with a hard timeout, returning its stdout
+/// bytes on success. On spawn failure, non-zero exit, or timeout, returns the
+/// `Unavailable` variant to surface directly. Blocking — call off the main
+/// thread (see `query_amvc_helper`).
+fn capture_helper_status(timeout: Duration) -> Result<Vec<u8>, AmvcQueryResult> {
+    let mut child = Command::new("amvc-helper")
+        .args(["status", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| AmvcQueryResult::Unavailable {
+            reason: format!("helper not found or could not be launched: {e}"),
+        })?;
+
+    // Drain stdout on a separate thread so a large write can't deadlock the
+    // child against a full pipe buffer while we poll for exit.
+    let mut stdout = child.stdout.take().expect("stdout was piped");
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(AmvcQueryResult::Unavailable {
+                        reason: format!("helper timed out after {}s", timeout.as_secs()),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(AmvcQueryResult::Unavailable {
+                    reason: format!("failed waiting on helper: {e}"),
+                });
+            }
         }
     };
 
-    if !output.status.success() {
-        return AmvcQueryResult::Unavailable {
-            reason: format!("helper exited with status {}", output.status),
-        };
+    if !status.success() {
+        return Err(AmvcQueryResult::Unavailable {
+            reason: format!("helper exited with status {status}"),
+        });
     }
 
-    let stdout = match std::str::from_utf8(&output.stdout) {
+    Ok(reader.join().unwrap_or_default())
+}
+
+pub fn run_helper_status() -> AmvcQueryResult {
+    let stdout_bytes = match capture_helper_status(HELPER_STATUS_TIMEOUT) {
+        Ok(bytes) => bytes,
+        Err(unavailable) => return unavailable,
+    };
+
+    let stdout = match std::str::from_utf8(&stdout_bytes) {
         Ok(s) => s,
         Err(e) => {
             return AmvcQueryResult::Unavailable {
@@ -93,14 +144,24 @@ pub fn spawn_helper_install() -> Result<(), String> {
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
+/// Async so Tauri runs it off the main thread; the blocking subprocess work is
+/// pushed to the dedicated blocking pool via `spawn_blocking`. Without this the
+/// synchronous `Command` call would run on the main thread and freeze the UI
+/// until the helper returned.
 #[tauri::command]
-pub fn query_amvc_helper() -> AmvcQueryResult {
-    run_helper_status()
+pub async fn query_amvc_helper() -> AmvcQueryResult {
+    tauri::async_runtime::spawn_blocking(run_helper_status)
+        .await
+        .unwrap_or_else(|e| AmvcQueryResult::Unavailable {
+            reason: format!("helper task failed to run: {e}"),
+        })
 }
 
 #[tauri::command]
-pub fn launch_amvc_installer() -> Result<(), String> {
-    spawn_helper_install()
+pub async fn launch_amvc_installer() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(spawn_helper_install)
+        .await
+        .map_err(|e| format!("installer task failed to run: {e}"))?
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
