@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAmvcHealthy, isAmvcInstalled, parseAmvcHelperOutput } from "./amvc";
+import { isAmvcHealthy, parseAmvcHelperOutput } from "./amvc";
 
 const HEALTHY_JSON = JSON.stringify({
   status: "installed-healthy",
@@ -137,28 +137,6 @@ describe("parseAmvcHelperOutput", () => {
       expect(r.detected).toEqual([]);
       expect(r.missing).toEqual([]);
     }
-  });
-});
-
-describe("isAmvcInstalled", () => {
-  it("returns false for not-installed", () => {
-    expect(isAmvcInstalled(parseAmvcHelperOutput(NOT_INSTALLED_JSON))).toBe(false);
-  });
-
-  it("returns true for installed-healthy", () => {
-    expect(isAmvcInstalled(parseAmvcHelperOutput(HEALTHY_JSON))).toBe(true);
-  });
-
-  it("returns true for needs-repair (installed but broken)", () => {
-    expect(isAmvcInstalled(parseAmvcHelperOutput(NEEDS_REPAIR_JSON))).toBe(true);
-  });
-
-  it("returns true for needs-reboot", () => {
-    expect(isAmvcInstalled(parseAmvcHelperOutput(NEEDS_REBOOT_JSON))).toBe(true);
-  });
-
-  it("returns false for unavailable", () => {
-    expect(isAmvcInstalled({ kind: "unavailable", reason: "not found" })).toBe(false);
   });
 });
 

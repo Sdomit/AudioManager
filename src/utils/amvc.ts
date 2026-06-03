@@ -33,10 +33,10 @@ export function parseAmvcHelperOutput(stdout: string): AmvcQueryResult {
   };
 }
 
-export function isAmvcInstalled(r: AmvcQueryResult): boolean {
-  return r.kind === "ok" && r.status !== "not-installed";
-}
-
+/**
+ * Driver is installed AND every endpoint is present. Useful as a positive
+ * gate for features that require a fully functional virtual cable.
+ */
 export function isAmvcHealthy(r: AmvcQueryResult): boolean {
   return r.kind === "ok" && r.status === "installed-healthy";
 }
