@@ -1,5 +1,6 @@
 import type { DeviceInfo } from "../types/engine";
 import type { BusId } from "../components/audio-manager/types";
+import { isAudioManagerVirtualDevice } from "./devices";
 
 export const AMVC_STREAM_OUTPUT = "AudioManager Stream Output";
 export const AMVC_VOICE_OUTPUT = "AudioManager Voice Output";
@@ -45,7 +46,7 @@ export function suggestAmvcBusDevice(
 export function findAmvcCaptureDevices(inputDevices: DeviceInfo[]): DeviceInfo[] {
   return inputDevices.filter(
     (d) =>
-      d.name.toLowerCase().startsWith("audiomanager ") &&
+      isAudioManagerVirtualDevice(d.name) &&
       d.name.toLowerCase().includes("recording"),
   );
 }
@@ -56,6 +57,20 @@ export function hasAnyAmvcDevice(
   inputDevices: DeviceInfo[],
 ): boolean {
   return [...outputDevices, ...inputDevices].some((d) =>
-    d.name.toLowerCase().startsWith("audiomanager "),
+    isAudioManagerVirtualDevice(d.name),
   );
+}
+
+/**
+ * Ordering comparator for the DevicePicker list. AudioManager-branded
+ * endpoints sort first; within each tier the system default sorts before
+ * the rest, then alphabetical. Pure — extracted so it can be unit-tested
+ * independently of the React component.
+ */
+export function compareDevicesForPicker(a: DeviceInfo, b: DeviceInfo): number {
+  const aAm = isAudioManagerVirtualDevice(a.name);
+  const bAm = isAudioManagerVirtualDevice(b.name);
+  if (aAm !== bAm) return aAm ? -1 : 1;
+  if (a.is_default !== b.is_default) return a.is_default ? -1 : 1;
+  return a.name.localeCompare(b.name);
 }

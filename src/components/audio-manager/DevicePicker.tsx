@@ -7,6 +7,7 @@ import {
   isAudioManagerVirtualDevice,
   isLikelyVirtualAudioDevice,
 } from "../../utils/devices";
+import { compareDevicesForPicker } from "../../utils/amvcPresets";
 import styles from "./DevicePicker.module.css";
 
 export type DevicePickerKind = "input" | "output";
@@ -87,13 +88,7 @@ export function DevicePicker({
       list = list.filter((d) => d.name.toLowerCase().includes(q));
     }
     // AudioManager-branded devices sort first; within each tier, default then alpha.
-    return [...list].sort((a, b) => {
-      const aAm = isAudioManagerVirtualDevice(a.name);
-      const bAm = isAudioManagerVirtualDevice(b.name);
-      if (aAm !== bAm) return aAm ? -1 : 1;
-      if (a.is_default !== b.is_default) return a.is_default ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+    return [...list].sort(compareDevicesForPicker);
   }, [devices, search, excludeIds]);
 
   if (!open) return null;
