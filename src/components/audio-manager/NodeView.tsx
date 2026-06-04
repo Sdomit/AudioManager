@@ -79,6 +79,8 @@ interface NodeViewProps {
    * Buses are not removable here (4 fixed buses).
    */
   onRemoveInput?: (id: string) => void;
+  onInputGainChange: (id: string, v: number) => void;
+  onBusVolumeChange: (id: BusId, v: number) => void;
 }
 
 interface MarqueeState {
@@ -97,8 +99,10 @@ const BUS_H = 80;
 const BUS_GAP = 10;
 const GROUP_W = 180;
 const GROUP_H = 56;
-const COL_PAD = 14;
-const COL_GAP_BETWEEN = 160; // horizontal space between input column and bus column for wires
+const COL_PAD = 18;
+const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
+const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
+const MIN_CANVAS_H = 300;
 
 interface DragState {
   /**
@@ -177,6 +181,60 @@ interface PanState {
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
+// ── Layout helpers ────────────────────────────────────────────────────
+// Node footprint by graph NodeId kind. Centralizes the size lookup that
+// the clamp / drag / placement paths used to each duplicate inline.
+function nodeWidth(nid: NodeId): number {
+  return isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
+}
+function nodeHeight(nid: NodeId): number {
+  return isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
+}
+
+// Clamp a node's top-left so the whole node stays inside [0, bound-size].
+function clampToBounds(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  bw: number,
+  bh: number,
+): NodePos {
+  const maxX = Math.max(0, bw - w);
+  const maxY = Math.max(0, bh - h);
+  return { x: Math.min(maxX, Math.max(0, x)), y: Math.min(maxY, Math.max(0, y)) };
+}
+
+// Bus column x: sit at a comfortable, readable distance from the input
+// column rather than pinned to the far right edge (which left a large
+// dead gap in the middle on wide canvases). Never overflow the canvas.
+function busColumnXFor(boundsW: number): number {
+  return Math.min(boundsW - BUS_W - COL_PAD, COL_PAD + INPUT_W + COL_GAP_BETWEEN);
+}
+
+// Keep the (canvasW × canvasH) world box within the visible viewport.
+// Nodes are always clamped inside the box, so a visible box guarantees
+// every node stays on screen. When the box is smaller than the viewport
+// (zoomed out) it is centered; otherwise panning is bounded so the box
+// edges can never pull away from the viewport edges.
+function clampView(
+  v: Viewport,
+  canvasW: number,
+  canvasH: number,
+  viewW: number,
+  viewH: number,
+): Viewport {
+  const clampAxis = (t: number, content: number, viewport: number) => {
+    if (content <= viewport) return (viewport - content) / 2;
+    return Math.min(0, Math.max(viewport - content, t));
+  };
+  return {
+    zoom: v.zoom,
+    tx: clampAxis(v.tx, canvasW * v.zoom, viewW),
+    ty: clampAxis(v.ty, canvasH * v.zoom, viewH),
+  };
+}
 
 /** Pixel width of a node by kind. Used for port/wire endpoint maths. */
 function nodeWidthFor(n: GraphNode): number {
@@ -298,8 +356,32 @@ export function NodeView({
   onStopRecording,
   onAddInput,
   onRemoveInput,
+  onInputGainChange,
+  onBusVolumeChange,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
+  const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
+    w: MIN_CANVAS_W,
+    h: MIN_CANVAS_H,
+  });
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.max(0, Math.floor(el.clientWidth));
+      const h = Math.max(0, Math.floor(el.clientHeight));
+      setWrapSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [drag, setDrag] = useState<DragState | null>(null);
   // Mirror `drag` in a ref so the mouseup handler can read the latest
   // state without invoking the React state-updater (see onUp below).
@@ -369,6 +451,16 @@ export function NodeView({
     };
   }, []);
 
+  // Clamp a viewport against the current bounds + live wrap size. Bounds
+  // (boundsRef) track the world box; the wrap element gives the on-screen
+  // viewport size. Used by every pan/zoom/reset path.
+  const clampViewToBounds = useCallback((v: Viewport): Viewport => {
+    const el = wrapRef.current;
+    const vw = el?.clientWidth ?? boundsRef.current.w;
+    const vh = el?.clientHeight ?? boundsRef.current.h;
+    return clampView(v, boundsRef.current.w, boundsRef.current.h, vw, vh);
+  }, []);
+
   // ── Node positions (unified Map<NodeId, NodePos>) ────────────────────
   // Single source of truth, keyed by graph NodeId (`in:<inputId>` or
   // `bus:<busId>`). Split views below are memoized for render-side
@@ -405,7 +497,7 @@ export function NodeView({
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
+      const busColX = busColumnXFor(boundsRef.current.w);
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -488,22 +580,35 @@ export function NodeView({
     return p ? { x: p.x, y: p.y + BUS_H / 2 } : null;
   };
 
-  // Compute canvas size based on actual node positions so it grows if
-  // nodes are dragged beyond the default footprint.
-  const { canvasW, canvasH } = useMemo(() => {
-    const all = [
-      ...Array.from(inputPositions.values()).map((p) => ({ x: p.x + INPUT_W, y: p.y + INPUT_H })),
-      ...Array.from(busPositions.values()).map((p) => ({ x: p.x + BUS_W, y: p.y + BUS_H })),
-    ];
-    return {
-      canvasW: Math.max(
-        COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD,
-        ...all.map((p) => p.x + COL_PAD),
-        400,
-      ),
-      canvasH: Math.max(400, ...all.map((p) => p.y + COL_PAD)),
-    };
-  }, [inputPositions, busPositions]);
+  const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W);
+  const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H);
+  boundsRef.current = { w: canvasW, h: canvasH };
+  const busColumnX = busColumnXFor(canvasW);
+
+  // Pull stale/off-screen nodes back inside the current bounded canvas.
+  useEffect(() => {
+    setNodePositions((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [nid, p] of prev) {
+        const { x: nx, y: ny } = clampToBounds(
+          p.x, p.y, nodeWidth(nid), nodeHeight(nid), canvasW, canvasH,
+        );
+        if (nx !== p.x || ny !== p.y) {
+          next.set(nid, { x: nx, y: ny });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [canvasW, canvasH]);
+
+  // Keep the world box within the viewport after any size/zoom change so
+  // every node (always clamped into the box) remains visible — covers
+  // initial load, window resize, and panel show/hide.
+  useEffect(() => {
+    setView((v) => clampViewToBounds(v));
+  }, [canvasW, canvasH, clampViewToBounds]);
 
   // ── Mouse handlers for drag-to-connect ────────────────────────────────
   const handlePortMouseDown = useCallback(
@@ -747,10 +852,11 @@ export function NodeView({
         setNodePositions((prev) => {
           const next = new Map(prev);
           for (const [nid, p0] of nodeDrag.groupStart) {
-            next.set(nid, {
-              x: Math.max(0, p0.x + dx),
-              y: Math.max(0, p0.y + dy),
-            });
+            next.set(nid, clampToBounds(
+              p0.x + dx, p0.y + dy,
+              nodeWidth(nid), nodeHeight(nid),
+              boundsRef.current.w, boundsRef.current.h,
+            ));
           }
           return next;
         });
@@ -785,10 +891,10 @@ export function NodeView({
           const factor = Math.exp(-e.deltaY * 0.0015);
           const zoom = clampZoom(v.zoom * factor);
           const k = zoom / v.zoom;
-          return { zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
+          return clampViewToBounds({ zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k });
         });
       } else {
-        setView((v) => ({ ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY }));
+        setView((v) => clampViewToBounds({ ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY }));
       }
     };
     wrap.addEventListener("wheel", onWheel, { passive: false });
@@ -886,7 +992,7 @@ export function NodeView({
     const onMove = (e: MouseEvent) => {
       const dx = e.clientX - panning.startClientX;
       const dy = e.clientY - panning.startClientY;
-      setView((v) => ({ ...v, tx: panning.startTx + dx, ty: panning.startTy + dy }));
+      setView((v) => clampViewToBounds({ ...v, tx: panning.startTx + dx, ty: panning.startTy + dy }));
     };
     const onUp = () => setPanning(null);
     window.addEventListener("mousemove", onMove);
@@ -955,13 +1061,13 @@ export function NodeView({
     setView((v) => {
       const zoom = clampZoom(v.zoom * factor);
       const k = zoom / v.zoom;
-      return { zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
+      return clampViewToBounds({ zoom, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k });
     });
-  }, []);
+  }, [clampViewToBounds]);
 
   const resetView = useCallback(() => {
-    setView({ tx: 0, ty: 0, zoom: 1 });
-  }, []);
+    setView(clampViewToBounds({ tx: 0, ty: 0, zoom: 1 }));
+  }, [clampViewToBounds]);
 
   // ── Group management ────────────────────────────────────────────────
   // Frontend-only: creating / removing a group is a localStorage write.
@@ -984,13 +1090,17 @@ export function NodeView({
     const v = viewRef.current;
     const wx = (cx - v.tx) / v.zoom - GROUP_W / 2;
     const wy = (cy - v.ty) / v.zoom - GROUP_H / 2;
+    const { x: clampedX, y: clampedY } = clampToBounds(
+      wx, wy, GROUP_W, GROUP_H, boundsRef.current.w, boundsRef.current.h,
+    );
     setNodePositions((prev) => {
       const next = new Map(prev);
-      next.set(nid, { x: Math.max(0, wx), y: Math.max(0, wy) });
+      next.set(nid, { x: clampedX, y: clampedY });
       return next;
     });
     saveNodePositions(new Map(nodePosRef.current).set(nid, {
-      x: Math.max(0, wx), y: Math.max(0, wy),
+      x: clampedX,
+      y: clampedY,
     }));
   }, []);
 
@@ -1135,10 +1245,9 @@ export function NodeView({
         y: COL_PAD + i * (INPUT_H + INPUT_GAP),
       });
     });
-    const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
     buses.forEach((bus, i) => {
       next.set(busNodeId(bus.id), {
-        x: busColX,
+        x: busColumnX,
         y: COL_PAD + i * (BUS_H + BUS_GAP),
       });
     });
@@ -1149,16 +1258,25 @@ export function NodeView({
     // Lay groups out in a third column to the right of the bus column
     // in their current insertion order. Group ids stay stable; we are
     // only assigning positions.
-    const groupColX = busColX + BUS_W + COL_GAP_BETWEEN;
+    const groupColX = Math.min(
+      busColumnX + BUS_W + COL_GAP_BETWEEN,
+      Math.max(COL_PAD, boundsRef.current.w - GROUP_W - COL_PAD),
+    );
     let groupIndex = 0;
     for (const gid of localGroups.keys()) {
       next.set(groupNodeId(gid), {
         x: groupColX,
-        y: COL_PAD + groupIndex * (GROUP_H + BUS_GAP),
+        y: Math.min(
+          Math.max(0, boundsRef.current.h - GROUP_H),
+          COL_PAD + groupIndex * (GROUP_H + BUS_GAP),
+        ),
       });
       groupIndex += 1;
     }
     setNodePositions(next);
+    // Reset is an intentional full reflow: realign the viewport too so the
+    // freshly laid-out columns are guaranteed to sit inside the visible area.
+    setView(clampViewToBounds({ tx: 0, ty: 0, zoom: 1 }));
   };
 
   // ── Generalized routing graph ────────────────────────────────────────
@@ -1330,7 +1448,7 @@ export function NodeView({
       >
       <div className={styles.canvas} style={{ width: canvasW, height: canvasH }}>
         <ColumnLabel x={COL_PAD} label="Inputs (drag to rearrange)" />
-        <ColumnLabel x={COL_PAD + INPUT_W + COL_GAP_BETWEEN} label="Buses" />
+        <ColumnLabel x={busColumnX} label="Buses" />
 
         {/* SVG wires layer */}
         <svg
@@ -1481,6 +1599,7 @@ export function NodeView({
               onNodeMouseDown={onInputNodeMouseDown}
               onPortMouseDown={handlePortMouseDown}
               onRecToggle={onInputRecToggle}
+              onGainChange={(v) => onInputGainChange(input.id, v)}
             />
           );
         })}
@@ -1516,6 +1635,7 @@ export function NodeView({
               onSelect={onBusSelect}
               onNodeMouseDown={onBusNodeMouseDown}
               onRecToggle={onBusRecToggle}
+              onVolumeChange={(v) => onBusVolumeChange(bus.id, v)}
             />
           );
         })}
@@ -1780,6 +1900,7 @@ interface InputNodeProps {
   onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
   onPortMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: string) => void;
+  onGainChange: (v: number) => void;
 }
 
 const InputNode = memo(function InputNode({
@@ -1800,6 +1921,7 @@ const InputNode = memo(function InputNode({
   onNodeMouseDown,
   onPortMouseDown,
   onRecToggle,
+  onGainChange,
 }: InputNodeProps) {
   const id = input.id;
   return (
@@ -1830,6 +1952,25 @@ const InputNode = memo(function InputNode({
               style={{ width: `${Math.min(1, input.level) * 100}%` }}
             />
           </span>
+        </div>
+        <div
+          className={styles.nodeGainRow}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={input.gain}
+            onChange={(e) => onGainChange(Number(e.target.value))}
+            className={styles.nodeGainSlider}
+            style={{ accentColor: "var(--am-accent)" }}
+            aria-label={`Gain for ${input.name}`}
+            title="Mic gain (0.75 = unity, up to +20 dB)"
+          />
+          <span className={styles.nodeGainReadout}>{gainToDb(input.gain)}</span>
         </div>
       </div>
       <button
@@ -1878,6 +2019,7 @@ interface BusNodeProps {
   onSelect: (id: BusId) => void;
   onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: BusId) => void;
+  onVolumeChange: (v: number) => void;
 }
 
 const BusNode = memo(function BusNode({
@@ -1896,6 +2038,7 @@ const BusNode = memo(function BusNode({
   onSelect,
   onNodeMouseDown,
   onRecToggle,
+  onVolumeChange,
 }: BusNodeProps) {
   const id = bus.id;
   return (
@@ -1942,6 +2085,25 @@ const BusNode = memo(function BusNode({
               background: busColor(bus.id),
             }}
           />
+        </div>
+        <div
+          className={styles.nodeGainRow}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={bus.volume}
+            onChange={(e) => onVolumeChange(Number(e.target.value))}
+            className={styles.nodeGainSlider}
+            style={{ accentColor: busColor(bus.id) }}
+            aria-label={`Volume for ${bus.label}`}
+            title="Bus volume (0.75 = unity, up to +20 dB)"
+          />
+          <span className={styles.nodeGainReadout}>{gainToDb(bus.volume)}</span>
         </div>
         <div className={styles.busNodeState}>
           <span className={styles.busStateDot} style={{ background: stateDotColor(bus.state) }} />

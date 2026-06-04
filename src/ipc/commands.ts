@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AmvcQueryResult,
   BusId,
   BusStatus,
   DeviceInfo,
@@ -14,25 +15,6 @@ import type {
   SystemStatus,
   TapSpec,
 } from "../types/engine";
-import type { AmvcStatus } from "../utils/amvc";
-
-// ── AMVC helper commands ──────────────────────────────────────────────────────
-
-export const amvcStatus = (): Promise<AmvcStatus> =>
-  invoke<AmvcStatus>("amvc_status");
-
-export const amvcInstall = (infPath: string): Promise<string> =>
-  invoke<string>("amvc_install", { infPath });
-
-export const amvcRepair = (infPath: string): Promise<string> =>
-  invoke<string>("amvc_repair", { infPath });
-
-export const amvcUninstall = (): Promise<string> =>
-  invoke<string>("amvc_uninstall");
-
-export const amvcRenameEndpoints = (): Promise<string> =>
-  invoke<string>("amvc_rename_endpoints");
-
 // ── Device enumeration ────────────────────────────────────────────────────────
 
 export const listInputDevices = (): Promise<DeviceInfo[]> =>
@@ -207,3 +189,13 @@ export const deleteRecordingFile = (path: string): Promise<void> =>
 
 export const openRecordingsFolder = (): Promise<void> =>
   invoke<void>("open_recordings_folder");
+
+// ── AudioManager Virtual Cable helper ────────────────────────────────────────
+
+/** Query the amvc-helper binary for driver status. Never rejects. */
+export const queryAmvcHelper = (): Promise<AmvcQueryResult> =>
+  invoke<AmvcQueryResult>("query_amvc_helper");
+
+/** Spawn the amvc-helper installer in the background. */
+export const launchAmvcInstaller = (): Promise<void> =>
+  invoke<void>("launch_amvc_installer");

@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertIcon, InfoIcon, XIcon } from "./Icon";
-import { amvcStatus, amvcRenameEndpoints } from "../../utils/amvc";
-import type { AmvcStatus } from "../../utils/amvc";
+import { queryAmvcHelper } from "../../utils/amvc";
+import type { AmvcQueryResult } from "../../utils/amvc";
 import styles from "./AmvcBanner.module.css";
 
 const POLL_MS = 30_000;
 
 export function AmvcBanner() {
-  const [status, setStatus] = useState<AmvcStatus | null>(null);
+  const [result, setResult] = useState<AmvcQueryResult | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(() => {
-    amvcStatus().then(setStatus).catch(() => setStatus(null));
+    queryAmvcHelper().then(setResult).catch(() => setResult(null));
   }, []);
 
   useEffect(() => {
@@ -21,31 +20,20 @@ export function AmvcBanner() {
     return () => window.clearInterval(id);
   }, [refresh]);
 
-  if (!status || dismissed) return null;
+  if (!result || dismissed) return null;
+  if (result.kind === "unavailable") return null;
 
-  const { status: s, names_aligned } = status;
+  const { status, names_aligned } = result;
 
-  if (s === "installed-healthy" && names_aligned) return null;
+  if (status === "installed-healthy" && names_aligned) return null;
 
-  const handleFixNames = async () => {
-    setBusy(true);
-    try {
-      await amvcRenameEndpoints();
-      refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (s === "installed-healthy" && !names_aligned) {
+  if (status === "installed-healthy" && !names_aligned) {
     return (
       <div className={`${styles.banner} ${styles.info}`} role="status">
         <span className={styles.icon}><InfoIcon size={14} /></span>
         <div className={styles.text}>
           <span>Virtual cable endpoint names are out of sync.</span>
-          <button className={styles.link} onClick={handleFixNames} disabled={busy}>
-            {busy ? "Fixing…" : "Fix names"}
-          </button>
+          <span className={styles.detail}>Run <code>amvc-helper rename-endpoints</code> (elevated) to fix.</span>
         </div>
         <button className={styles.dismissBtn} onClick={() => setDismissed(true)} aria-label="Dismiss">
           <XIcon size={14} />
@@ -54,7 +42,7 @@ export function AmvcBanner() {
     );
   }
 
-  if (s === "needs-reboot") {
+  if (status === "needs-reboot") {
     return (
       <div className={`${styles.banner} ${styles.info}`} role="status">
         <span className={styles.icon}><InfoIcon size={14} /></span>
@@ -69,17 +57,17 @@ export function AmvcBanner() {
     );
   }
 
-  if (s === "installed-degraded" || s === "needs-repair") {
+  if (status === "installed-degraded" || status === "needs-repair") {
     return (
       <div className={`${styles.banner} ${styles.warning}`} role="alert">
         <span className={styles.icon}><AlertIcon size={14} /></span>
         <div className={styles.text}>
           <strong>
-            {s === "installed-degraded"
-              ? `Virtual cable degraded (${status.found}/${status.expected} endpoints)`
+            {status === "installed-degraded"
+              ? `Virtual cable degraded (${result.found}/${result.expected} endpoints)`
               : "Virtual cable not responding"}
           </strong>
-          <span className={styles.detail}>Run Repair to restore all endpoints.</span>
+          <span className={styles.detail}>Run <code>amvc-helper repair &lt;inf&gt; --execute</code> (elevated) to restore.</span>
         </div>
         <button className={styles.dismissBtn} onClick={() => setDismissed(true)} aria-label="Dismiss">
           <XIcon size={14} />
@@ -88,7 +76,7 @@ export function AmvcBanner() {
     );
   }
 
-  if (s === "not-installed") {
+  if (status === "not-installed") {
     return (
       <div className={`${styles.banner} ${styles.info}`} role="status">
         <span className={styles.icon}><InfoIcon size={14} /></span>

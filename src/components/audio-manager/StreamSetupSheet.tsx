@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { CablePanel } from "./CablePanel";
 import { AlertIcon, CheckIcon, ChevronRightIcon, XIcon } from "./Icon";
 import type { StreamSetupStep } from "./types";
 import styles from "./StreamSetupSheet.module.css";
@@ -54,6 +55,8 @@ export function StreamSetupSheet({ open, steps, onClose }: StreamSetupSheetProps
         <div className={styles.progressLabel}>
           {completedCount} of {totalCount} ready
         </div>
+
+        <CablePanel open={open} />
 
         <div className={styles.steps}>
           {steps.map((step, idx) => (

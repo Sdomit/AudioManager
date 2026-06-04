@@ -125,7 +125,7 @@
   --am-z-tooltip:    70;
 
   /* ── Component sizes (recomputed in compact density) ────────────────── */
-  --am-bus-card-min:    260px;
+  --am-bus-card-min:    clamp(168px, 20vw, 260px);
   --am-bus-card-h:      148px;
   --am-input-row-h:     44px;
   --am-meter-h:         12px;

@@ -1201,11 +1201,8 @@ pub fn run() {
             set_recordings_dir,
             delete_recording_file,
             open_recordings_folder,
-            amvc::amvc_status,
-            amvc::amvc_install,
-            amvc::amvc_repair,
-            amvc::amvc_uninstall,
-            amvc::amvc_rename_endpoints,
+            amvc::query_amvc_helper,
+            amvc::launch_amvc_installer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

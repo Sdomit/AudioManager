@@ -1,25 +1,57 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { AmvcHealthStatus, AmvcQueryResult } from "../types/engine";
 import type { DeviceInfo } from "../types/engine";
 import { listOutputDevices, setBusDevice } from "../ipc/commands";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+export type { AmvcHealthStatus, AmvcQueryResult } from "../types/engine";
 
-export type AmvcInstallStatus =
-  | "not-installed"
-  | "installed-healthy"
-  | "installed-degraded"
-  | "needs-repair"
-  | "needs-reboot";
+/**
+ * Parse the raw stdout string from `amvc-helper status --json`.
+ * Pure function — no Tauri dependency, safe to unit-test.
+ */
+export function parseAmvcHelperOutput(stdout: string): AmvcQueryResult {
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(stdout) as Record<string, unknown>;
+  } catch (e) {
+    return { kind: "unavailable", reason: `json parse error: ${String(e)}` };
+  }
+  if (typeof data.status !== "string") {
+    return { kind: "unavailable", reason: "missing or invalid 'status' field" };
+  }
+  return {
+    kind: "ok",
+    status: data.status as AmvcHealthStatus,
+    found: typeof data.found === "number" ? data.found : 0,
+    expected: typeof data.expected === "number" ? data.expected : 6,
+    driver_in_store: data.driver_in_store === true,
+    reboot_pending: data.reboot_pending === true,
+    names_aligned: data.names_aligned === true,
+    detected: Array.isArray(data.detected)
+      ? (data.detected as string[]).filter((v) => typeof v === "string")
+      : [],
+    missing: Array.isArray(data.missing)
+      ? (data.missing as string[]).filter((v) => typeof v === "string")
+      : [],
+  };
+}
 
-export interface AmvcStatus {
-  status: AmvcInstallStatus;
-  found: number;
-  expected: number;
-  driver_in_store: boolean;
-  reboot_pending: boolean;
-  names_aligned: boolean;
-  detected: string[];
-  missing: string[];
+/**
+ * Driver is installed AND every endpoint is present. Useful as a positive
+ * gate for features that require a fully functional virtual cable.
+ */
+export function isAmvcHealthy(r: AmvcQueryResult): boolean {
+  return r.kind === "ok" && r.status === "installed-healthy";
+}
+
+/** Query the helper binary via Tauri. Never throws — returns unavailable on any error. */
+export function queryAmvcHelper(): Promise<AmvcQueryResult> {
+  return invoke<AmvcQueryResult>("query_amvc_helper");
+}
+
+/** Spawn the helper installer. Resolves immediately; helper runs in background. */
+export function launchAmvcInstaller(): Promise<void> {
+  return invoke<void>("launch_amvc_installer");
 }
 
 // ── Canonical endpoint names ──────────────────────────────────────────────────
@@ -53,26 +85,9 @@ export function amvcEndpointRole(deviceName: string): string | null {
   }
 }
 
-// ── Tauri commands ────────────────────────────────────────────────────────────
-
-export const amvcStatus = (): Promise<AmvcStatus> =>
-  invoke<AmvcStatus>("amvc_status");
-
-export const amvcInstall = (infPath: string): Promise<string> =>
-  invoke<string>("amvc_install", { infPath });
-
-export const amvcRepair = (infPath: string): Promise<string> =>
-  invoke<string>("amvc_repair", { infPath });
-
-export const amvcUninstall = (): Promise<string> =>
-  invoke<string>("amvc_uninstall");
-
-export const amvcRenameEndpoints = (): Promise<string> =>
-  invoke<string>("amvc_rename_endpoints");
-
 // ── Routing preset ────────────────────────────────────────────────────────────
 
-export interface PresetResult {
+export interface AmvcPresetResult {
   b1Applied: boolean;
   b2Applied: boolean;
   b1DeviceId: string | null;
@@ -83,7 +98,7 @@ export interface PresetResult {
  * Wire B1 → Stream Output and B2 → Voice Output using the existing
  * setBusDevice command. Precondition: status == "installed-healthy".
  */
-export async function applyAmvcRoutingPreset(): Promise<PresetResult> {
+export async function applyAmvcRoutingPreset(): Promise<AmvcPresetResult> {
   const outputs: DeviceInfo[] = await listOutputDevices();
 
   const streamOut = outputs.find(d => d.name === AMVC_ENDPOINTS.streamOutput) ?? null;

@@ -4,8 +4,10 @@ import * as ipc from "../../ipc/commands";
 import type { DeviceInfo } from "../../types/engine";
 import {
   getVirtualDeviceHint,
+  isAudioManagerVirtualDevice,
   isLikelyVirtualAudioDevice,
 } from "../../utils/devices";
+import { compareDevicesForPicker } from "../../utils/amvcPresets";
 import styles from "./DevicePicker.module.css";
 
 export type DevicePickerKind = "input" | "output";
@@ -23,6 +25,8 @@ interface DevicePickerProps {
   highlightVirtual?: boolean;
   /** Device IDs to hide from the list (e.g. already-added inputs). */
   excludeIds?: Set<string>;
+  /** Device id to highlight as the suggested/recommended pick. */
+  recommendedDeviceId?: string | null;
 }
 
 export function DevicePicker({
@@ -35,6 +39,7 @@ export function DevicePicker({
   onClose,
   highlightVirtual = false,
   excludeIds,
+  recommendedDeviceId = null,
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [search, setSearch] = useState("");
@@ -82,7 +87,8 @@ export function DevicePicker({
     if (q) {
       list = list.filter((d) => d.name.toLowerCase().includes(q));
     }
-    return list;
+    // AudioManager-branded devices sort first; within each tier, default then alpha.
+    return [...list].sort(compareDevicesForPicker);
   }, [devices, search, excludeIds]);
 
   if (!open) return null;
@@ -139,16 +145,19 @@ export function DevicePicker({
           <ul className={styles.list}>
             {filtered.map((device) => {
               const selected = device.id === currentDeviceId;
+              const isAmvc = isAudioManagerVirtualDevice(device.name);
+              const isRecommended = recommendedDeviceId != null && device.id === recommendedDeviceId;
               const isVirtual = isLikelyVirtualAudioDevice(device.name);
-              const hint = highlightVirtual && isVirtual
+              const hint = (highlightVirtual || isAmvc) && isVirtual
                 ? getVirtualDeviceHint(device.name)
                 : null;
+              let itemClass = styles.item;
+              if (selected) itemClass += ` ${styles.selected}`;
+              if (isAmvc) itemClass += ` ${styles.itemAmvc}`;
               return (
                 <li key={device.id}>
                   <button
-                    className={
-                      selected ? `${styles.item} ${styles.selected}` : styles.item
-                    }
+                    className={itemClass}
                     onClick={() => onPick(device.id)}
                   >
                     <div className={styles.itemMain}>
@@ -158,7 +167,12 @@ export function DevicePicker({
                         {device.is_default ? " · default" : ""}
                       </div>
                     </div>
-                    {hint && <span className={styles.itemHint}>{hint}</span>}
+                    <div className={styles.itemBadges}>
+                      {isRecommended && (
+                        <span className={styles.recommendedBadge}>Recommended</span>
+                      )}
+                      {hint && <span className={styles.itemHint}>{hint}</span>}
+                    </div>
                   </button>
                 </li>
               );

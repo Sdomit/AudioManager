@@ -14,14 +14,43 @@ This guide explains how to use **B1 (Stream Output)** with a virtual audio cable
 
 ### 1. Install a Virtual Audio Cable
 
-Choose one:
+#### Option A — AudioManager Virtual Cable (recommended)
+
+The companion project [AudioManagerVirtualCable](https://github.com/Sdomit/AudioManagerVirtualCable) ships a Windows virtual audio cable that AudioManager detects and integrates with as first-class devices. Once installed it exposes six WASAPI endpoints, all prefixed `AudioManager `:
+
+| Device | Direction | Role |
+|---|---|---|
+| `AudioManager Cable 1 Playback` | render | App → mixer input |
+| `AudioManager Cable 1 Recording` | capture | Mixer captures app audio |
+| `AudioManager Cable 2 Playback` | render | App → mixer input (second pair) |
+| `AudioManager Cable 2 Recording` | capture | Mixer captures app audio (second pair) |
+| `AudioManager Stream Output` | render | **B1** stream bus → OBS |
+| `AudioManager Voice Output` | render | **B2** voice bus → Discord/Zoom/Teams |
+
+**What AudioManager surfaces about it:**
+
+- Detects these endpoints by the `AudioManager ` name prefix and marks them as first-class (distinct from third-party cables).
+- In the **Stream Setup** sheet, a **Virtual Cable** panel shows live status from `amvc-helper status --json`: `Connected` / `Degraded` / `Needs repair` / `Reboot required` / `Not installed` / `Helper not found`, with `found/expected` count, per-endpoint live/missing dots, and **Install** / **Repair** / **Re-check** buttons.
+- The **B1** and **B2** output device pickers highlight `Stream Output` and `Voice Output` with a **Recommended** badge.
+- The **Add input** picker highlights `AudioManager Cable N Recording` as the suggested app-capture source.
+
+**Install:**
+
+1. Install the AudioManager Virtual Cable from the companion repo (follow its README).
+2. The bundled `amvc-helper` CLI must be reachable on `PATH` (or alongside the driver per its installer).
+3. AudioManager never installs or touches the driver directly — it only invokes `amvc-helper`. Use the **Install / Repair** action in AudioManager's notice banner or Stream Setup panel to launch the helper.
+4. **Restart your computer** after install (Windows audio devices require it).
+
+**If the helper or driver is absent:** AudioManager continues to run normally and falls back to third-party cables (Option B). A non-blocking banner offers Install / Repair / Re-check.
+
+#### Option B — Third-party virtual cables
+
+If you don't use the AudioManager Virtual Cable, either of these also works:
 
 - **VB-Cable** (Windows, $4.95 or free): https://vb-audio.com/Cable/
 - **Virtual Audio Cable** (Windows, trial or free): https://virtualaudiocable.org/
 
-> Note: AudioManager does NOT install or manage drivers. You must download and install manually.
-
-After installation, **restart your computer**.
+> Note: AudioManager does NOT install or manage third-party drivers. You must download and install manually. **Restart your computer** after install.
 
 ### 2. Configure AudioManager
 
@@ -90,10 +119,11 @@ AudioManager Input (Mic, Music, Browser)
 
 The naming of virtual cable devices is confusing because they expose two sides:
 
-| Context | VB-Cable Name | Virtual Audio Cable Name | What It Is |
-|---------|---------------|-------------------------|-----------|
-| **AudioManager Output** | CABLE Input | Line 1 - Output | Where AudioManager sends audio |
-| **OBS/Discord Input** | CABLE Output | Line 1 - Input | Where OBS/Discord listens |
+| Context | AudioManager Cable | VB-Cable Name | Virtual Audio Cable Name | What It Is |
+|---------|--------------------|---------------|-------------------------|-----------|
+| **AudioManager Output (B1)** | AudioManager Stream Output | CABLE Input | Line 1 - Output | Where AudioManager sends stream audio |
+| **AudioManager Output (B2)** | AudioManager Voice Output | — | — | Where AudioManager sends voice-call audio |
+| **OBS/Discord Input** | AudioManager Cable 1 Recording | CABLE Output | Line 1 - Input | Where OBS/Discord listens |
 
 This is **not** backwards. The virtual cable is a bidirectional bridge:
 - AudioManager writes to the **playback** side (CABLE Input / Output)
