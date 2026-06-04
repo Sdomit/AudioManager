@@ -54,37 +54,6 @@ export function launchAmvcInstaller(): Promise<void> {
   return invoke<void>("launch_amvc_installer");
 }
 
-// ── Canonical endpoint names ──────────────────────────────────────────────────
-
-export const AMVC_ENDPOINTS = {
-  cable1Playback:  "AudioManager Cable 1 Playback",
-  cable1Recording: "AudioManager Cable 1 Recording",
-  cable2Playback:  "AudioManager Cable 2 Playback",
-  cable2Recording: "AudioManager Cable 2 Recording",
-  streamOutput:    "AudioManager Stream Output",
-  voiceOutput:     "AudioManager Voice Output",
-} as const;
-
-export type AmvcEndpointName = (typeof AMVC_ENDPOINTS)[keyof typeof AMVC_ENDPOINTS];
-
-const AMVC_PREFIX = "AudioManager ";
-
-export function isAmvcEndpoint(deviceName: string): boolean {
-  return deviceName.startsWith(AMVC_PREFIX);
-}
-
-export function amvcEndpointRole(deviceName: string): string | null {
-  switch (deviceName as AmvcEndpointName) {
-    case AMVC_ENDPOINTS.cable1Playback:  return "Cable 1 — app audio into mixer";
-    case AMVC_ENDPOINTS.cable1Recording: return "Cable 1 — capture app audio";
-    case AMVC_ENDPOINTS.cable2Playback:  return "Cable 2 — second app audio";
-    case AMVC_ENDPOINTS.cable2Recording: return "Cable 2 — second capture";
-    case AMVC_ENDPOINTS.streamOutput:    return "B1 stream bus → OBS/streaming";
-    case AMVC_ENDPOINTS.voiceOutput:     return "B2 voice bus → Discord/Zoom";
-    default:                             return null;
-  }
-}
-
 // ── Routing preset ────────────────────────────────────────────────────────────
 
 export interface AmvcPresetResult {
@@ -101,8 +70,8 @@ export interface AmvcPresetResult {
 export async function applyAmvcRoutingPreset(): Promise<AmvcPresetResult> {
   const outputs: DeviceInfo[] = await listOutputDevices();
 
-  const streamOut = outputs.find(d => d.name === AMVC_ENDPOINTS.streamOutput) ?? null;
-  const voiceOut  = outputs.find(d => d.name === AMVC_ENDPOINTS.voiceOutput)  ?? null;
+  const streamOut = outputs.find(d => d.name === "AudioManager Stream Output") ?? null;
+  const voiceOut  = outputs.find(d => d.name === "AudioManager Voice Output")  ?? null;
 
   await Promise.all([
     streamOut ? setBusDevice("B1", streamOut.id) : Promise.resolve(null),

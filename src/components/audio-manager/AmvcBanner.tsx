@@ -76,20 +76,7 @@ export function AmvcBanner() {
     );
   }
 
-  if (status === "not-installed") {
-    return (
-      <div className={`${styles.banner} ${styles.info}`} role="status">
-        <span className={styles.icon}><InfoIcon size={14} /></span>
-        <div className={styles.text}>
-          <span>AudioManager virtual cable not installed.</span>
-          <span className={styles.detail}>Routing and presets work without it.</span>
-        </div>
-        <button className={styles.dismissBtn} onClick={() => setDismissed(true)} aria-label="Dismiss">
-          <XIcon size={14} />
-        </button>
-      </div>
-    );
-  }
+  // not-installed handled by CableNotice
 
   return null;
 }
