@@ -6,6 +6,7 @@ import { DetailPanel } from "./DetailPanel";
 import { DevicePicker } from "./DevicePicker";
 import { HotkeyOverlay } from "./HotkeyOverlay";
 import { InputList } from "./InputList";
+import { AmvcBanner } from "./AmvcBanner";
 import { PresetBanner } from "./PresetBanner";
 import { PresetSaveDialog } from "./PresetSaveDialog";
 import { RecordingsPanel } from "./RecordingsPanel";
@@ -283,6 +284,8 @@ export function AudioManager() {
         onDensityChange={am.setDensity}
         onOpenStreamSetup={am.openStreamSetup}
       />
+
+      <AmvcBanner />
 
       {state.presetBannerVisible && loadedPreset && (
         <PresetBanner preset={loadedPreset} onDismiss={am.dismissPresetBanner} />
