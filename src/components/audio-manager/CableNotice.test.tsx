@@ -22,6 +22,7 @@ function ok(status: AmvcHealthStatus): AmvcQueryResult {
     expected: 6,
     driver_in_store: false,
     reboot_pending: false,
+    names_aligned: false,
     detected: [],
     missing: [],
   };

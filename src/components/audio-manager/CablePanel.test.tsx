@@ -31,6 +31,7 @@ function ok(status: AmvcHealthStatus, detected: string[]): AmvcQueryResult {
     expected: 6,
     driver_in_store: status !== "not-installed",
     reboot_pending: status === "needs-reboot",
+    names_aligned: false,
     detected,
     missing: ALL.filter((n) => !detected.includes(n)),
   };

@@ -15,7 +15,6 @@ import type {
   SystemStatus,
   TapSpec,
 } from "../types/engine";
-
 // ── Device enumeration ────────────────────────────────────────────────────────
 
 export const listInputDevices = (): Promise<DeviceInfo[]> =>

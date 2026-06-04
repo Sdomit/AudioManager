@@ -27,6 +27,7 @@ pub enum AmvcQueryResult {
         expected: u32,
         driver_in_store: bool,
         reboot_pending: bool,
+        names_aligned: bool,
         detected: Vec<String>,
         missing: Vec<String>,
     },
@@ -54,6 +55,8 @@ struct HelperOutput {
     driver_in_store: bool,
     #[serde(default)]
     reboot_pending: bool,
+    #[serde(default)]
+    names_aligned: bool,
     #[serde(default)]
     detected: Vec<String>,
     #[serde(default)]
@@ -136,6 +139,7 @@ pub fn run_helper_status() -> AmvcQueryResult {
             expected: h.expected,
             driver_in_store: h.driver_in_store,
             reboot_pending: h.reboot_pending,
+            names_aligned: h.names_aligned,
             detected: h.detected,
             missing: h.missing,
         },
@@ -192,6 +196,7 @@ mod tests {
                 expected: h.expected,
                 driver_in_store: h.driver_in_store,
                 reboot_pending: h.reboot_pending,
+                names_aligned: h.names_aligned,
                 detected: h.detected,
                 missing: h.missing,
             },
@@ -280,12 +285,13 @@ mod tests {
         // Only `status` is required. Everything else falls back to safe defaults
         // (matches the lenient TypeScript parser).
         match parse(r#"{"status": "not-installed"}"#) {
-            AmvcQueryResult::Ok { status, found, expected, driver_in_store, reboot_pending, detected, missing } => {
+            AmvcQueryResult::Ok { status, found, expected, driver_in_store, reboot_pending, names_aligned, detected, missing } => {
                 assert_eq!(status, "not-installed");
                 assert_eq!(found, 0);
                 assert_eq!(expected, 6);
                 assert!(!driver_in_store);
                 assert!(!reboot_pending);
+                assert!(!names_aligned);
                 assert!(detected.is_empty());
                 assert!(missing.is_empty());
             }

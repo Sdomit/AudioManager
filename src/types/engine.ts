@@ -149,6 +149,7 @@ export interface AmvcStatus {
   expected: number;
   driver_in_store: boolean;
   reboot_pending: boolean;
+  names_aligned: boolean;
   detected: string[];
   missing: string[];
 }
