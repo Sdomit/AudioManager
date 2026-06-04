@@ -22,6 +22,7 @@ export function extractErrorMessage(e: unknown): string {
 }
 
 export function isLikelyVirtualAudioDevice(deviceName: string): boolean {
+  if (deviceName.startsWith("AudioManager ")) return true;
   const name = deviceName.toLowerCase();
   const patterns = [
     "vb-audio",
@@ -39,6 +40,10 @@ export function isLikelyVirtualAudioDevice(deviceName: string): boolean {
 }
 
 export function getVirtualDeviceHint(deviceName: string): string | null {
+  if (deviceName.startsWith("AudioManager ")) {
+    const suffix = deviceName.slice("AudioManager ".length);
+    return `AudioManager — ${suffix}`;
+  }
   const name = deviceName.toLowerCase();
   if (name.includes("cable input")) {
     return "Virtual (playback for OBS/Discord)";

@@ -14,6 +14,24 @@ import type {
   SystemStatus,
   TapSpec,
 } from "../types/engine";
+import type { AmvcStatus } from "../utils/amvc";
+
+// ── AMVC helper commands ──────────────────────────────────────────────────────
+
+export const amvcStatus = (): Promise<AmvcStatus> =>
+  invoke<AmvcStatus>("amvc_status");
+
+export const amvcInstall = (infPath: string): Promise<string> =>
+  invoke<string>("amvc_install", { infPath });
+
+export const amvcRepair = (infPath: string): Promise<string> =>
+  invoke<string>("amvc_repair", { infPath });
+
+export const amvcUninstall = (): Promise<string> =>
+  invoke<string>("amvc_uninstall");
+
+export const amvcRenameEndpoints = (): Promise<string> =>
+  invoke<string>("amvc_rename_endpoints");
 
 // ── Device enumeration ────────────────────────────────────────────────────────
 
