@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { launchAmvcInstaller, queryAmvcHelper } from "../../utils/amvc";
+import { launchAmvcInstaller, queryAmvcHelper, setAmvcDeviceEnabled } from "../../utils/amvc";
 import type { AmvcQueryResult } from "../../types/engine";
 import { AMVC_ALL_DEVICE_NAMES } from "../../utils/amvcPresets";
 import styles from "./CablePanel.module.css";
@@ -15,6 +15,7 @@ export function CablePanel({ open }: CablePanelProps) {
   const [result, setResult] = useState<AmvcQueryResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [togglingDevice, setTogglingDevice] = useState(false);
   const busyRef = useRef(false);
 
   async function recheck() {
@@ -45,6 +46,21 @@ export function CablePanel({ open }: CablePanelProps) {
     }
   }
 
+  async function toggleDevice(enable: boolean) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setTogglingDevice(true);
+    try {
+      await setAmvcDeviceEnabled(enable);
+      await recheck();
+    } catch {
+      // Error surface via re-check status.
+    } finally {
+      setTogglingDevice(false);
+      busyRef.current = false;
+    }
+  }
+
   // Query once each time the sheet transitions to open.
   useEffect(() => {
     if (open) void recheck();
@@ -54,6 +70,9 @@ export function CablePanel({ open }: CablePanelProps) {
   const detected = new Set(
     result?.kind === "ok" ? result.detected.map((n) => n.toLowerCase()) : [],
   );
+
+  const deviceEnabled: boolean | undefined =
+    result?.kind === "ok" ? result.device_enabled : undefined;
 
   let tone: Tone = "neutral";
   let headline = "Checking…";
@@ -68,33 +87,43 @@ export function CablePanel({ open }: CablePanelProps) {
       "Install the AudioManager Virtual Cable. Its helper (amvc-helper) was not detected on this system.";
   } else if (result?.kind === "ok") {
     const { status, found, expected } = result;
-    switch (status) {
-      case "installed-healthy":
-        tone = "ok";
-        headline = "Connected";
-        detail = `All ${expected} endpoints present.`;
-        break;
-      case "needs-reboot":
-        tone = "warn";
-        headline = "Reboot required";
-        detail = "The cable is installed but needs a system reboot to finish.";
-        break;
-      case "installed-degraded":
-      case "needs-repair":
-        tone = "warn";
-        headline = status === "needs-repair" ? "Needs repair" : "Degraded";
-        detail = `${found} of ${expected} endpoints present.`;
-        showInstall = true;
-        installLabel = "Repair";
-        break;
-      case "not-installed":
-      default:
-        tone = "neutral";
-        headline = "Not installed";
-        detail = "Install the AudioManager Virtual Cable to enable branded routing.";
-        showInstall = true;
-        installLabel = "Install";
-        break;
+
+    // Device explicitly disabled: driver is installed but endpoints are hidden.
+    // evaluate() returns needs-repair in this case (found=0, in_store=true),
+    // so check device_enabled before the status switch.
+    if (result.device_enabled === false && result.driver_in_store) {
+      tone = "warn";
+      headline = "Disabled";
+      detail = "Driver installed — endpoints hidden from Windows Sound settings.";
+    } else {
+      switch (status) {
+        case "installed-healthy":
+          tone = "ok";
+          headline = "Connected";
+          detail = `All ${expected} endpoints present.`;
+          break;
+        case "needs-reboot":
+          tone = "warn";
+          headline = "Reboot required";
+          detail = "The cable is installed but needs a system reboot to finish.";
+          break;
+        case "installed-degraded":
+        case "needs-repair":
+          tone = "warn";
+          headline = status === "needs-repair" ? "Needs repair" : "Degraded";
+          detail = `${found} of ${expected} endpoints present.`;
+          showInstall = true;
+          installLabel = "Repair";
+          break;
+        case "not-installed":
+        default:
+          tone = "neutral";
+          headline = "Not installed";
+          detail = "Install the AudioManager Virtual Cable to enable branded routing.";
+          showInstall = true;
+          installLabel = "Install";
+          break;
+      }
     }
   }
 
@@ -128,6 +157,26 @@ export function CablePanel({ open }: CablePanelProps) {
             disabled={installing || checking}
           >
             {installing ? "Installing…" : installLabel}
+          </button>
+        )}
+        {deviceEnabled === true && result?.kind === "ok" && result.status === "installed-healthy" && (
+          <button
+            className={styles.secondaryBtn}
+            onClick={() => void toggleDevice(false)}
+            disabled={togglingDevice || checking}
+            title="Hide all AMVC endpoints from Windows Sound settings"
+          >
+            {togglingDevice ? "Disabling…" : "Disable from Windows"}
+          </button>
+        )}
+        {deviceEnabled === false && (
+          <button
+            className={styles.primaryBtn}
+            onClick={() => void toggleDevice(true)}
+            disabled={togglingDevice || checking}
+            title="Show AMVC endpoints in Windows Sound settings"
+          >
+            {togglingDevice ? "Enabling…" : "Enable in Windows"}
           </button>
         )}
         <button

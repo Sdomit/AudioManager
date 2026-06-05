@@ -162,6 +162,8 @@ export interface AmvcStatus {
   names_aligned: boolean;
   detected: string[];
   missing: string[];
+  /** `true` = device enabled (endpoints visible in Windows Sound), `false` = disabled, `undefined` = driver not present. */
+  device_enabled?: boolean;
 }
 
 /**

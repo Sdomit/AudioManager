@@ -1257,6 +1257,7 @@ pub fn run() {
             open_recordings_folder,
             amvc::query_amvc_helper,
             amvc::launch_amvc_installer,
+            amvc::amvc_set_device_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -30,6 +30,9 @@ pub enum AmvcQueryResult {
         names_aligned: bool,
         detected: Vec<String>,
         missing: Vec<String>,
+        /// `Some(true)` = device enabled (endpoints visible in Windows Sound),
+        /// `Some(false)` = device disabled, `None` = driver not present / unknown.
+        device_enabled: Option<bool>,
     },
     /// Helper binary absent, non-zero exit, or output could not be parsed.
     Unavailable { reason: String },
@@ -61,6 +64,8 @@ struct HelperOutput {
     detected: Vec<String>,
     #[serde(default)]
     missing: Vec<String>,
+    #[serde(default)]
+    device_enabled: Option<bool>,
 }
 
 /// Run `amvc-helper status --json` with a hard timeout, returning its stdout
@@ -142,6 +147,7 @@ pub fn run_helper_status() -> AmvcQueryResult {
             names_aligned: h.names_aligned,
             detected: h.detected,
             missing: h.missing,
+            device_enabled: h.device_enabled,
         },
         Err(e) => AmvcQueryResult::Unavailable {
             reason: format!("failed to parse helper JSON: {e}"),
@@ -182,6 +188,28 @@ pub async fn launch_amvc_installer() -> Result<(), String> {
         .map_err(|e| format!("installer task failed to run: {e}"))?
 }
 
+/// Enable or disable the AMVC device node via `amvc-helper enable-device --execute`
+/// / `disable-device --execute`. Requires the helper to run elevated.
+/// Returns an error string if the helper is absent or the operation fails.
+#[tauri::command]
+pub async fn amvc_set_device_enabled(enabled: bool) -> Result<(), String> {
+    let op = if enabled { "enable-device" } else { "disable-device" };
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = std::process::Command::new("amvc-helper")
+            .args([op, "--execute"])
+            .output()
+            .map_err(|e| format!("failed to launch amvc-helper: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            Err(format!("amvc-helper {op} failed: {stderr}"))
+        }
+    })
+    .await
+    .map_err(|e| format!("device toggle task failed: {e}"))?
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -199,6 +227,7 @@ mod tests {
                 names_aligned: h.names_aligned,
                 detected: h.detected,
                 missing: h.missing,
+                device_enabled: h.device_enabled,
             },
             Err(e) => AmvcQueryResult::Unavailable {
                 reason: format!("failed to parse helper JSON: {e}"),
