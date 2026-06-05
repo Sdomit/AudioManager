@@ -9,8 +9,7 @@
 //! Synthetic id scheme:
 //!   * `sys:default`     → whole default render endpoint (system loopback)
 //!   * `proc:<pid>`      → one application by PID (process loopback)
-//!   * `app:<image>`     → one application by image name, e.g. `app:chrome.exe`
-//!                         (resolved to a live PID at engine-build time)
+//!   * `app:<image>`     → one app by image name, e.g. `app:chrome.exe` (resolved to a live PID at build time)
 //!   * anything else     → a cpal input device, keyed by its reported name
 //!
 //! Process loopback always captures the process *tree* (a browser plays audio

@@ -110,16 +110,46 @@ pub fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, EngineError> {
     Ok(out)
 }
 
-/// Resolve a stable image name to a live PID that currently owns a render
-/// session, choosing the lowest matching PID (the tree root). `Ok(None)` means
-/// the app is not currently playing audio.
+/// Resolve a stable image name to the **tree-root** PID of a live instance
+/// whose process tree currently owns a render session. `Ok(None)` means the app
+/// is not currently playing audio.
+///
+/// Browsers (and other multi-process apps) play audio from a child
+/// renderer/utility process, not the main process. Capturing that child with
+/// `include_tree` would miss its siblings — i.e. the other tabs. So we walk up
+/// to the top-most ancestor sharing the image name (the main browser process)
+/// and return it; capturing *that* with `include_tree` grabs every renderer,
+/// covering all tabs.
 #[cfg(windows)]
 pub fn resolve_pid_for_image(image_name: &str) -> Result<Option<u32>, EngineError> {
-    let target = image_name.to_lowercase();
-    Ok(collect_render_sessions()?
+    use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+
+    let matches: Vec<u32> = collect_render_sessions()?
         .into_iter()
-        .filter(|(_, name)| name.to_lowercase() == target)
+        .filter(|(_, name)| name.eq_ignore_ascii_case(image_name))
         .map(|(pid, _)| pid)
+        .collect();
+    if matches.is_empty() {
+        return Ok(None);
+    }
+
+    let system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
+    );
+    let parent_of = |pid: u32| -> Option<(u32, String)> {
+        let ppid = system.process(Pid::from_u32(pid))?.parent()?.as_u32();
+        let pname = system
+            .process(Pid::from_u32(ppid))?
+            .name()
+            .to_string_lossy()
+            .to_string();
+        Some((ppid, pname))
+    };
+
+    // Lowest root PID = the oldest / main instance when several are running.
+    Ok(matches
+        .into_iter()
+        .map(|pid| walk_to_root(pid, image_name, &parent_of))
         .min())
 }
 
@@ -135,4 +165,76 @@ pub fn resolve_pid_for_image(_image_name: &str) -> Result<Option<u32>, EngineErr
     Err(EngineError {
         message: "Process loopback is only supported on Windows.".to_string(),
     })
+}
+
+/// Walk up the process tree from `start` while each parent shares `image_name`,
+/// returning the top-most same-named ancestor (the tree root). `parent_of`
+/// yields `(parent_pid, parent_image_name)`, or `None` at the top / for a
+/// missing process. Bounded to 64 hops so a malformed or cyclic tree can never
+/// spin. Pure and platform-independent so the heuristic is unit-testable.
+#[cfg(any(windows, test))]
+fn walk_to_root<F>(start: u32, image_name: &str, parent_of: &F) -> u32
+where
+    F: Fn(u32) -> Option<(u32, String)>,
+{
+    let mut cur = start;
+    for _ in 0..64 {
+        match parent_of(cur) {
+            Some((ppid, pname)) if pname.eq_ignore_ascii_case(image_name) => cur = ppid,
+            _ => break,
+        }
+    }
+    cur
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn walk_to_root_climbs_browser_tree_to_main_process() {
+        // chrome.exe(100) -> chrome.exe(200) -> chrome.exe(300); root parent is
+        // explorer.exe, so 100 is the top-most same-named ancestor.
+        let mut t: HashMap<u32, (u32, String)> = HashMap::new();
+        t.insert(100, (10, "explorer.exe".into()));
+        t.insert(200, (100, "chrome.exe".into()));
+        t.insert(300, (200, "chrome.exe".into()));
+        let parent_of = |pid: u32| t.get(&pid).cloned();
+
+        assert_eq!(walk_to_root(300, "chrome.exe", &parent_of), 100);
+        assert_eq!(walk_to_root(200, "chrome.exe", &parent_of), 100);
+        assert_eq!(walk_to_root(100, "chrome.exe", &parent_of), 100);
+    }
+
+    #[test]
+    fn walk_to_root_stops_at_foreign_parent() {
+        // Single-process app under a different-image parent stays put.
+        let parent_of = |pid: u32| match pid {
+            500 => Some((10, "explorer.exe".to_string())),
+            _ => None,
+        };
+        assert_eq!(walk_to_root(500, "spotify.exe", &parent_of), 500);
+    }
+
+    #[test]
+    fn walk_to_root_is_case_insensitive() {
+        let parent_of = |pid: u32| match pid {
+            2 => Some((1, "Chrome.exe".to_string())),
+            _ => None,
+        };
+        assert_eq!(walk_to_root(2, "chrome.exe", &parent_of), 1);
+    }
+
+    #[test]
+    fn walk_to_root_guards_against_cycles() {
+        // Pathological same-named cycle must terminate within the hop bound.
+        let parent_of = |pid: u32| match pid {
+            1 => Some((2, "x.exe".to_string())),
+            2 => Some((1, "x.exe".to_string())),
+            _ => None,
+        };
+        let r = walk_to_root(1, "x.exe", &parent_of);
+        assert!(r == 1 || r == 2);
+    }
 }
