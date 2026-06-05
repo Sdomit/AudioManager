@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// Fixed number of parametric EQ bands exposed in #32. The serde shape is a
 /// `Vec` so older/newer payloads deserialize, but [`EqConfig::clamp`] pads or
 /// truncates to exactly this many bands so the realtime slot count is constant.
-pub const MAX_EQ_BANDS: usize = 3;
+pub const MAX_EQ_BANDS: usize = 4;
 
 /// Clamp `v` to `[lo, hi]`, substituting `default` for any non-finite value.
 /// Mirrors the `clamp_gain` / `clamp_volume` discipline elsewhere in the engine.
@@ -42,7 +42,10 @@ pub struct HpfConfig {
 
 impl Default for HpfConfig {
     fn default() -> Self {
-        Self { enabled: false, freq_hz: 80.0 }
+        Self {
+            enabled: false,
+            freq_hz: 80.0,
+        }
     }
 }
 
@@ -114,10 +117,33 @@ impl Default for EqConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            // Broadcast-voice band layout: mud cut, box/nasal cut, presence
+            // boost, harshness/sibilance shaping.
             bands: vec![
-                EqBand { enabled: false, freq_hz: 100.0, q: 0.9, gain_db: 0.0 },
-                EqBand { enabled: false, freq_hz: 1_000.0, q: 1.0, gain_db: 0.0 },
-                EqBand { enabled: false, freq_hz: 8_000.0, q: 0.9, gain_db: 0.0 },
+                EqBand {
+                    enabled: false,
+                    freq_hz: 100.0,
+                    q: 0.9,
+                    gain_db: 0.0,
+                },
+                EqBand {
+                    enabled: false,
+                    freq_hz: 400.0,
+                    q: 1.0,
+                    gain_db: 0.0,
+                },
+                EqBand {
+                    enabled: false,
+                    freq_hz: 3_000.0,
+                    q: 1.0,
+                    gain_db: 0.0,
+                },
+                EqBand {
+                    enabled: false,
+                    freq_hz: 8_000.0,
+                    q: 0.9,
+                    gain_db: 0.0,
+                },
             ],
         }
     }
@@ -172,7 +198,8 @@ impl CompressorConfig {
         self.ratio = clamp_finite(self.ratio, d.ratio, 1.0, 20.0);
         self.attack_ms = clamp_finite(self.attack_ms, d.attack_ms, TIME_MIN, TIME_MAX);
         self.release_ms = clamp_finite(self.release_ms, d.release_ms, TIME_MIN, TIME_MAX);
-        self.makeup_db = clamp_finite(self.makeup_db, d.makeup_db, 0.0, 24.0);
+        // Makeup doubles as a trim once EQ/comp are combined, so allow cut too.
+        self.makeup_db = clamp_finite(self.makeup_db, d.makeup_db, -24.0, 24.0);
     }
 }
 
@@ -272,13 +299,13 @@ mod tests {
         c.hpf.freq_hz = 50_000.0;
         c.gate.threshold_db = 20.0;
         c.compressor.ratio = 0.2;
-        c.compressor.makeup_db = -5.0;
+        c.compressor.makeup_db = -100.0;
         c.limiter.threshold_db = 6.0;
         c.clamp();
         assert_eq!(c.hpf.freq_hz, FREQ_MAX);
         assert_eq!(c.gate.threshold_db, 0.0);
         assert_eq!(c.compressor.ratio, 1.0);
-        assert_eq!(c.compressor.makeup_db, 0.0);
+        assert_eq!(c.compressor.makeup_db, -24.0);
         assert_eq!(c.limiter.threshold_db, 0.0);
     }
 
@@ -296,22 +323,38 @@ mod tests {
 
     #[test]
     fn eq_clamp_pads_short_band_list() {
-        let mut eq = EqConfig { enabled: true, bands: vec![] };
+        let mut eq = EqConfig {
+            enabled: true,
+            bands: vec![],
+        };
         eq.clamp();
         assert_eq!(eq.bands.len(), MAX_EQ_BANDS);
     }
 
     #[test]
     fn eq_clamp_truncates_long_band_list() {
-        let extra = EqBand { enabled: true, freq_hz: 500.0, q: 1.0, gain_db: 3.0 };
-        let mut eq = EqConfig { enabled: true, bands: vec![extra; MAX_EQ_BANDS + 4] };
+        let extra = EqBand {
+            enabled: true,
+            freq_hz: 500.0,
+            q: 1.0,
+            gain_db: 3.0,
+        };
+        let mut eq = EqConfig {
+            enabled: true,
+            bands: vec![extra; MAX_EQ_BANDS + 4],
+        };
         eq.clamp();
         assert_eq!(eq.bands.len(), MAX_EQ_BANDS);
     }
 
     #[test]
     fn eq_band_clamp_bounds_q_and_gain() {
-        let mut band = EqBand { enabled: true, freq_hz: 1_000.0, q: 100.0, gain_db: 99.0 };
+        let mut band = EqBand {
+            enabled: true,
+            freq_hz: 1_000.0,
+            q: 100.0,
+            gain_db: 99.0,
+        };
         band.clamp();
         assert_eq!(band.q, 10.0);
         assert_eq!(band.gain_db, 24.0);
@@ -332,6 +375,21 @@ mod tests {
         // Missing keys fall back to per-field defaults (preset back-compat).
         let c: DspConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(c, DspConfig::default());
+    }
+
+    #[test]
+    fn compressor_makeup_allows_negative_trim() {
+        let mut c = CompressorConfig {
+            makeup_db: -6.0,
+            ..CompressorConfig::default()
+        };
+        c.clamp();
+        assert_eq!(c.makeup_db, -6.0);
+    }
+
+    #[test]
+    fn eq_default_has_max_bands() {
+        assert_eq!(EqConfig::default().bands.len(), MAX_EQ_BANDS);
     }
 
     #[test]

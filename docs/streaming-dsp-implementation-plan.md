@@ -85,7 +85,7 @@ exact extension of the existing `InputSlotShared` gain/mute atomics
   plays (allocation off the RT path is fine): `HPF → Gate → EQ(N bands) →
   Compressor → Limiter`. No `Vec` growth at runtime; effects are toggled, never
   added or removed.
-- Add `InputDspShared` to the `Arc<Vec<InputSlotShared>>` family: a generation
+- Add `InputDspShared` to the `Arc<Vec<InputSlotShared>>` family: a `generation`
   counter plus, per effect, an `AtomicBool enabled` and `AtomicU32` (f32 bits)
   parameter fields.
 - **Biquad coefficients are precomputed on the IPC thread** (HPF + each EQ band)
@@ -93,12 +93,29 @@ exact extension of the existing `InputSlotShared` gain/mute atomics
   coefficients — no `sin/cos` in the callback. Gate/comp/limiter one-pole
   attack/release coefficients are likewise precomputed off-thread; their
   per-sample math is already transcendental-free.
-- **Per block:** the callback loads `generation` (Relaxed). If it changed since
-  last seen, it reloads each effect's atomics into the local effect structs
-  (field assignment only — no alloc, no lock) and calls `reset()` on any slot
-  whose `enabled` just flipped false→true (clears stale envelope/filter state so
-  re-enabling does not pop). Steady state: one atomic load per block, unchanged
-  per-sample cost.
+- **Publish protocol (seqlock, not a plain dirty flag).** A coefficient set spans
+  multiple atomics, so the callback must never observe a half-published mix (a
+  torn HPF/EQ set can destabilize an IIR filter). The IPC thread publishes as a
+  seqlock: store `generation` to an **odd** value (`Release`), write all
+  param/coefficient field atomics (`Relaxed`), then store `generation` to the
+  next **even** value (`Release`). The callback, once per block: load `generation`
+  (`Acquire`); if it is **odd** (publish in flight) it keeps its previous local
+  config for this block — **no spinning, no lock**. Otherwise it reads the fields
+  (`Relaxed`) and re-loads `generation` (`Acquire`), accepting the new values only
+  if that second read is unchanged and even; a mismatch means a publish raced, so
+  it again keeps the previous config and retries next block. Only the
+  `generation` publish/observe uses `Release`/`Acquire`; field atomics stay
+  `Relaxed`. *(A double/triple-buffered immutable snapshot with an atomic
+  published index is an acceptable alternative.)*
+- On accepting a new config, the callback calls `reset()` on any slot whose
+  `enabled` just flipped false→true (clears stale envelope/filter state so
+  re-enabling does not pop). Steady state: one `Acquire` load per block,
+  unchanged per-sample cost.
+- **Effect setters are a step-2 prerequisite.** `BiquadFilter`, `NoiseGate`,
+  `Compressor`, and `Limiter` currently expose only constructors + `set_enabled`.
+  Step 2 adds in-place setters (or thin fixed-slot wrappers) so the per-block
+  reload updates private params/coefficients **without reconstructing** the
+  effect — reconstruction would discard filter history / envelope state and pop.
 
 This is lock-free, allocation-free, and block-free, and reuses the proven
 once-per-block atomic-load pattern. `DspEffect::is_enabled()` already exists
@@ -127,11 +144,15 @@ pub struct BusDspConfig { pub limiter: LimiterConfig, /* room for #33 */ }
 ```
 
 Each sub-config carries `enabled: bool` + params + `Default`, and a `clamp()`
-that bounds every parameter to a safe range (frequencies to Nyquist, ratios ≥ 1,
-gains to a sane dB window, times ≥ 0). Clamp runs on the IPC thread before the
-atomics are stored, so the RT thread always sees valid values. EQ uses a fixed
-`MAX_EQ_BANDS` (3 for #32) with per-band enable flags to keep the slot count
-fixed; the serde shape can still be a `Vec` that the IPC layer pads/truncates.
+that bounds every parameter to a safe range (frequencies to a fixed audible
+window, ratios ≥ 1, gains to a sane dB window, compressor makeup as a ±24 dB
+trim, times ≥ 0). Clamp runs on the IPC thread before the atomics are stored, so
+the RT thread always sees valid values. The config is sample-rate independent;
+**step 2 must additionally clamp each frequency to `< Nyquist` (mandatory)** when
+the engine sample rate is known, before computing coefficients. EQ uses a fixed
+`MAX_EQ_BANDS` (4 for #32 — mud / box / presence / sibilance) with per-band
+enable flags to keep the slot count fixed; the serde shape is a `Vec` that
+`clamp()` pads/truncates to exactly that many bands.
 
 ### Server-side storage
 
@@ -180,16 +201,34 @@ Register all new commands in the `invoke_handler!` list (`lib.rs:1257` area).
   applies it. V1→V2 migration (`presets.rs:395`) is unaffected — migrated presets
   get default DSP. A test asserts an old V2 fixture loads with bypassed defaults.
 
+## Review decisions (Codex, 2026-06-05)
+
+- **Architecture approved** with the seqlock publish protocol amendment above
+  (P1). Fixed slots, atomics read once per block, bus post-sum/pre-clip — correct
+  realtime-safe shape.
+- **P2:** effect setter/wrapper APIs are an explicit step-2 prerequisite (the
+  current effects expose only constructors + `set_enabled`).
+- **Q1 — EQ bands:** `MAX_EQ_BANDS = 4` (not 3) for a broadcast voice chain.
+- **Q2 — preset schema:** no V3 bump; `#[serde(default)] dsp` on V2 is approved;
+  keep the old-V2 fixture test.
+- **Params:** compressor `makeup_db` widened to ±24 dB (acts as a trim). Nyquist
+  frequency clamp in step 2 is mandatory. Effect order accepted; #34 inserts
+  stereo/pan/MS post-EQ, pre-comp.
+
 ## Sub-step / PROMPT order
 
 Each step is one focused commit; run the validation suite before each.
 
 1. **Config model** — `dsp/config.rs`: `DspConfig`, `BusDspConfig`, sub-configs,
    `Default`, `clamp()`. Unit tests for clamping. (Rust only, no wiring.)
-2. **Shared atomics + RT apply** — `InputDspShared` / `BusDspShared`, off-thread
-   coefficient precompute, fixed-slot chain build in `mixer::start`, per-block
-   generation-gated reload. Replace empty `dsp_chains`. Engine
-   `update_input_dsp` / `update_bus_dsp`. Tests for atomic store + generation.
+   **— delivered `b49a600` + review fixups (4 bands, ±24 dB makeup); 11 tests.**
+2. **Shared atomics + RT apply** — `InputDspShared` / `BusDspShared` with the
+   **seqlock publish protocol** (odd/even `generation`, `Release`/`Acquire`),
+   off-thread coefficient precompute, **in-place effect setters**, fixed-slot
+   chain build in `mixer::start`, per-block generation-gated reload with
+   Nyquist-clamped frequencies. Replace empty `dsp_chains`. Engine
+   `update_input_dsp` / `update_bus_dsp`. Tests for the seqlock (no torn reads)
+   and atomic store/generation.
 3. **Server storage + IPC** — `dsp` on `InputChannel` + bus config;
    `set_input_dsp` / `set_bus_dsp` commands; seed atomics on `rebuild_bus`;
    register handlers. Command-behavior tests.
