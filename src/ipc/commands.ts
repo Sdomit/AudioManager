@@ -221,3 +221,12 @@ export const setBusBufferSize = (
   frames: number | null,
 ): Promise<BusStatus> =>
   invoke<BusStatus>("set_bus_buffer_size", { busId, frames });
+
+/** Update a running input's DSP chain live. Stores to graph (survives rebuild)
+ *  and publishes to the engine seqlock — audio callback picks up next block. */
+export const updateInputDsp = (
+  busId: BusId,
+  deviceId: string,
+  config: DspConfig,
+): Promise<void> =>
+  invoke<void>("update_input_dsp", { busId, deviceId, config });
