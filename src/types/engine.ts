@@ -10,6 +10,16 @@ export interface DeviceListError {
   message: string;
 }
 
+/**
+ * A capturable application, returned by `list_audio_sessions`. `source_id` is a
+ * ready `proc:<pid>` id to pass to `addInput` for per-app loopback capture.
+ */
+export interface AudioSessionInfo {
+  pid: number;
+  name: string;
+  source_id: string;
+}
+
 export interface PassthroughStatus {
   running: boolean;
   input_device: string | null;

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AmvcQueryResult,
+  AudioSessionInfo,
   BusId,
   BusStatus,
   DeviceInfo,
@@ -22,6 +23,10 @@ export const listInputDevices = (): Promise<DeviceInfo[]> =>
 
 export const listOutputDevices = (): Promise<DeviceInfo[]> =>
   invoke<DeviceInfo[]>("list_output_devices");
+
+/** Apps currently playing audio (default render endpoint), for the AppPicker. */
+export const listAudioSessions = (): Promise<AudioSessionInfo[]> =>
+  invoke<AudioSessionInfo[]>("list_audio_sessions");
 
 // ── Phase 1 passthrough (kept for compatibility) ──────────────────────────────
 

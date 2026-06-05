@@ -79,17 +79,37 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
   };
 }
 
+/** Synthetic id scheme shared with the Rust `audio::source` module. */
+const SYS_LOOPBACK_ID = "sys:default";
+const PROC_PREFIX = "proc:";
+
 function inputKindFor(deviceId: string): InputSourceKind {
+  if (deviceId === SYS_LOOPBACK_ID) return "system";
+  if (deviceId.startsWith(PROC_PREFIX)) return "app";
   return isLikelyVirtualAudioDevice(deviceId) ? "virtual" : "microphone";
+}
+
+/**
+ * Display name derived purely from the id. The AppPicker may pass a friendlier
+ * label (e.g. the resolved image name) at add time; this is the fallback when
+ * only the id is known (e.g. after a preset load).
+ */
+function inputNameFor(deviceId: string): string {
+  if (deviceId === SYS_LOOPBACK_ID) return "System sound";
+  if (deviceId.startsWith(PROC_PREFIX)) {
+    return `App (PID ${deviceId.slice(PROC_PREFIX.length)})`;
+  }
+  return deviceId;
 }
 
 export function adaptInput(
   ch: InputChannel,
   peak: number,
+  label?: string,
 ): AudioInput {
   return {
     id: ch.device_id,
-    name: ch.device_id,
+    name: label ?? inputNameFor(ch.device_id),
     kind: inputKindFor(ch.device_id),
     device: ch.device_id,
     gain: backendVolumeToUi(ch.gain),

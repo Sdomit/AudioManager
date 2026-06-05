@@ -63,34 +63,6 @@ impl InputSourceSpec {
         }
     }
 
-    /// True for loopback-backed sources (process or system), false for devices.
-    #[allow(dead_code)] // consumed by IPC/UI in #17–#19
-    pub fn is_loopback(&self) -> bool {
-        matches!(
-            self,
-            InputSourceSpec::Process { .. } | InputSourceSpec::SystemLoopback
-        )
-    }
-
-    /// Frontend source-kind tag (`InputSourceKind` in `src/types/engine.ts`).
-    #[allow(dead_code)] // surfaced through the status IPC in #18
-    pub fn kind_str(&self) -> &'static str {
-        match self {
-            InputSourceSpec::Device { .. } => "device",
-            InputSourceSpec::Process { .. } => "app",
-            InputSourceSpec::SystemLoopback => "system",
-        }
-    }
-
-    /// Human label fallback when no richer metadata (app name) is available.
-    #[allow(dead_code)] // surfaced through the status IPC in #18
-    pub fn label(&self) -> String {
-        match self {
-            InputSourceSpec::Device { name } => name.clone(),
-            InputSourceSpec::Process { pid, .. } => format!("App (PID {pid})"),
-            InputSourceSpec::SystemLoopback => "System sound".to_string(),
-        }
-    }
 }
 
 /// True when `id` uses a reserved synthetic namespace and therefore must not be
@@ -166,28 +138,11 @@ mod tests {
     }
 
     #[test]
-    fn is_loopback_only_for_loopback_variants() {
-        assert!(InputSourceSpec::SystemLoopback.is_loopback());
-        assert!(InputSourceSpec::Process { pid: 1, include_tree: true }.is_loopback());
-        assert!(!InputSourceSpec::Device { name: "x".into() }.is_loopback());
-    }
-
-    #[test]
     fn reserved_ids_cover_both_namespaces() {
         assert!(is_reserved_id("proc:1"));
         assert!(is_reserved_id("sys:default"));
         assert!(is_reserved_id("sys:anything"));
         assert!(!is_reserved_id("Microphone"));
         assert!(!is_reserved_id("CABLE Output (VB-Audio Virtual Cable)"));
-    }
-
-    #[test]
-    fn kind_str_matches_frontend_tags() {
-        assert_eq!(InputSourceSpec::Device { name: "x".into() }.kind_str(), "device");
-        assert_eq!(InputSourceSpec::SystemLoopback.kind_str(), "system");
-        assert_eq!(
-            InputSourceSpec::Process { pid: 1, include_tree: true }.kind_str(),
-            "app"
-        );
     }
 }

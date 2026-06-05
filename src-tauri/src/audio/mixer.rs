@@ -48,10 +48,6 @@ pub struct MixerInputInfo {
     /// synthetic id (`sys:default`, `proc:<pid>`); for devices it is the name.
     /// Kept named `device_name` so status readers that surface it are untouched.
     pub device_name: String,
-    /// Typed capture backend for this input. Surfaced through the status IPC
-    /// in #18 (source metadata end-to-end).
-    #[allow(dead_code)]
-    pub source: InputSourceSpec,
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
 }
@@ -577,7 +573,6 @@ pub fn start(
                 .zip(info.input_channels.iter().copied())
                 .map(|((source, _, _), channels)| MixerInputInfo {
                     device_name: source.to_id(),
-                    source,
                     channels,
                 })
                 .collect(),
@@ -630,7 +625,6 @@ mod tests {
                 .enumerate()
                 .map(|(i, _)| MixerInputInfo {
                     device_name: format!("fake_device_{i}"),
-                    source: InputSourceSpec::Device { name: format!("fake_device_{i}") },
                     channels: 2,
                 })
                 .collect(),

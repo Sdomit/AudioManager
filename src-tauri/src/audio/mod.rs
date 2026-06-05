@@ -6,4 +6,5 @@ pub mod mixer;
 pub mod passthrough;
 pub mod recorder;
 pub mod routing;
+pub mod session;
 pub mod source;

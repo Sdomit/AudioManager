@@ -34,6 +34,13 @@ fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
     audio::devices::list_output_devices()
 }
 
+/// List applications currently holding a session on the default render
+/// endpoint. Each entry carries a ready `proc:<pid>` source id for `add_input`.
+#[tauri::command]
+fn list_audio_sessions() -> Result<Vec<audio::session::AudioSessionInfo>, EngineError> {
+    audio::session::list_audio_sessions()
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Stop and remove every recorder whose tap is attached to `bus_id`.
@@ -1213,6 +1220,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_input_devices,
             list_output_devices,
+            list_audio_sessions,
             start_passthrough,
             stop_passthrough,
             get_passthrough_status,
