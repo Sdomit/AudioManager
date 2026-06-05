@@ -1,7 +1,12 @@
+pub mod config;
 pub mod dynamics;
 pub mod filter;
 pub mod gate;
 
+pub use config::{
+    BusDspConfig, CompressorConfig, DspConfig, EqBand, EqConfig, GateConfig, HpfConfig,
+    LimiterConfig, MAX_EQ_BANDS,
+};
 pub use dynamics::{Compressor, Limiter};
 pub use filter::BiquadFilter;
 pub use gate::NoiseGate;
