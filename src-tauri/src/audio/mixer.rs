@@ -14,6 +14,16 @@ use crate::audio::source::InputSourceSpec;
 // ~85 ms at 48 kHz stereo.
 const RING_SIZE: usize = 16384;
 
+/// Target input-ring backlog (ms, per channel) the mixer trims toward when it
+/// must resync a drifted ring. A healthy buffer against jitter while keeping
+/// latency low.
+const TARGET_LATENCY_MS: f32 = 30.0;
+
+/// High-water backlog (ms, per channel). Only when an input's post-read backlog
+/// would exceed this does the mixer discard samples to catch up — so steady-
+/// state playback is never trimmed and only sustained drift triggers a resync.
+const MAX_LATENCY_MS: f32 = 80.0;
+
 /// Maximum simultaneous inputs the output callback can mix without heap allocation.
 /// Enforced as a hard error in `start()` — no inputs are ever silently dropped.
 pub const MAX_INPUTS: usize = 8;
@@ -44,11 +54,12 @@ pub struct InputSlotShared {
     pub gain: AtomicU32, // f32 bits
     pub muted: AtomicBool,
     pub input_peak: AtomicU32, // f32 bits
-    /// Dropout telemetry. `overrun` counts samples discarded when this input's
-    /// ring was full at the producer (capture/input callback outran the mixer);
-    /// `underrun` counts samples zero-filled when the ring was empty at the
-    /// consumer (mixer outran capture). Both accumulate as plain sample counts
-    /// and reset to 0 on each meter poll (`read_and_reset_xruns`).
+    /// Dropout telemetry. `overrun` counts samples lost on the producer side —
+    /// either the ring was full when the capture/input callback tried to push,
+    /// or the mixer trimmed a drifted ring to bound latency (resync). `underrun`
+    /// counts samples zero-filled when the ring was empty at the consumer (mixer
+    /// outran capture). Both accumulate as plain sample counts and reset to 0 on
+    /// each meter poll (`read_and_reset_xruns`).
     pub overrun: AtomicU32,
     pub underrun: AtomicU32,
 }
@@ -215,6 +226,21 @@ pub(crate) fn store_max(target: &AtomicU32, value: f32) {
 
 fn take_peak(target: &AtomicU32) -> f32 {
     f32::from_bits(target.swap(0.0f32.to_bits(), Ordering::Relaxed))
+}
+
+/// Decide how many samples to discard from an input ring before reading this
+/// block, to bound latency. `fill` is the ring's current sample count, `need`
+/// is what this block will pop. Returns 0 unless the post-read backlog would
+/// exceed `max_backlog`, in which case it trims toward `target_backlog` (both in
+/// samples). Pure so the resync policy is unit-tested without running streams.
+#[inline]
+fn resync_drop(fill: usize, need: usize, target_backlog: usize, max_backlog: usize) -> usize {
+    let post_read = fill.saturating_sub(need);
+    if post_read > max_backlog {
+        post_read - target_backlog
+    } else {
+        0
+    }
 }
 
 pub fn start(
@@ -497,6 +523,13 @@ pub fn start(
             let mut input_scratch: Vec<Vec<f32>> =
                 consumers.iter().map(|_| vec![0.0f32; RING_SIZE]).collect();
 
+            // Latency-bounding backlog targets, in frames per channel. The output
+            // callback trims an input ring only when its backlog drifts past
+            // `max_backlog_frames`, bringing it toward `target_backlog_frames`.
+            let out_rate_hz = out_sample_rate.0 as f32;
+            let target_backlog_frames = (TARGET_LATENCY_MS / 1000.0 * out_rate_hz) as usize;
+            let max_backlog_frames = (MAX_LATENCY_MS / 1000.0 * out_rate_hz) as usize;
+
             let output_stream = output_device
                 .build_output_stream(
                     &out_stream_cfg,
@@ -559,6 +592,23 @@ pub fn start(
                         for i in 0..n {
                             let in_ch = consumers[i].1;
                             let need = (frames * in_ch).min(input_scratch[i].len());
+
+                            // Latency bound: when the backlog has drifted far above
+                            // target (producer outrunning the mixer), trim the ring
+                            // toward target before reading. Fires only on sustained
+                            // drift — steady state never trims. Discarded samples are
+                            // counted as overruns (lost audio, same as a full ring).
+                            let drop_n = resync_drop(
+                                consumers[i].0.len(),
+                                need,
+                                target_backlog_frames * in_ch,
+                                max_backlog_frames * in_ch,
+                            );
+                            if drop_n > 0 {
+                                let dropped = consumers[i].0.discard(drop_n);
+                                slots[i].overrun.fetch_add(dropped as u32, Ordering::Relaxed);
+                            }
+
                             let got = consumers[i].0.pop_slice(&mut input_scratch[i][..need]);
                             for s in input_scratch[i][got..need].iter_mut() {
                                 *s = 0.0;
@@ -890,6 +940,31 @@ mod tests {
         assert_eq!(input_peaks2, vec![0.0, 0.0]);
         assert_eq!(output_peak2, 0.0);
         assert!(!clipped2);
+    }
+
+    #[test]
+    fn resync_drop_zero_when_backlog_healthy() {
+        // post_read = 1000 - 200 = 800, below max 2000 → no trim.
+        assert_eq!(resync_drop(1000, 200, 600, 2000), 0);
+    }
+
+    #[test]
+    fn resync_drop_at_exactly_max_does_not_trim() {
+        // post_read == max is not "exceeds" → no trim (only > max fires).
+        assert_eq!(resync_drop(2200, 200, 600, 2000), 0);
+    }
+
+    #[test]
+    fn resync_drop_trims_to_target_when_above_max() {
+        // post_read = 5000 - 200 = 4800 > max 2000 → trim toward target 600.
+        // dropped = 4800 - 600 = 4200, leaving target backlog after the read.
+        assert_eq!(resync_drop(5000, 200, 600, 2000), 4200);
+    }
+
+    #[test]
+    fn resync_drop_saturates_when_need_exceeds_fill() {
+        // fill < need → post_read saturates to 0 → no trim, no underflow.
+        assert_eq!(resync_drop(100, 480, 600, 2000), 0);
     }
 
     #[test]
