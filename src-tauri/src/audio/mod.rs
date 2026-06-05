@@ -1,5 +1,6 @@
 pub mod bus;
 pub mod devices;
+pub mod dsp;
 pub mod graph;
 pub mod loopback;
 pub mod mixer;

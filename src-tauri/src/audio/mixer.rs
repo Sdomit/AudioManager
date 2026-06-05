@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
+use crate::audio::dsp::DspChain;
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::source::InputSourceSpec;
@@ -432,6 +433,11 @@ pub fn start(
             let mut active_taps: Vec<ActiveTap> = Vec::with_capacity(MAX_ACTIVE_TAPS);
             let tap_rx = tap_command_rx;
 
+            // One DSP chain per input. Empty by default — zero per-sample overhead.
+            // Push effects (gate, HPF, compressor, limiter) here before the stream starts.
+            let mut dsp_chains: Vec<DspChain> =
+                (0..consumers.len()).map(|_| DspChain::new()).collect();
+
             let output_stream = output_device
                 .build_output_stream(
                     &out_stream_cfg,
@@ -502,6 +508,16 @@ pub fn start(
                                 let s0 = consumers[i].0.pop().unwrap_or(0.0);
                                 let s1 =
                                     if in_ch == 2 { consumers[i].0.pop().unwrap_or(0.0) } else { s0 };
+
+                                // Apply per-input DSP chain (gate, HPF, compressor, …).
+                                // Chain is empty by default — iterates zero elements.
+                                // InputPre/Post taps see the post-DSP signal intentionally
+                                // (processed audio is what gets recorded and monitored).
+                                let (s0, s1) = {
+                                    let mut frame = [s0, s1];
+                                    dsp_chains[i].process(&mut frame, in_ch);
+                                    (frame[0], frame[1])
+                                };
 
                                 // Fan-out: InputPre / InputPost taps for input i.
                                 if !active_taps.is_empty() {

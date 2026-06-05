@@ -1,0 +1,149 @@
+use super::DspEffect;
+
+#[inline(always)]
+fn db_to_lin(db: f32) -> f32 { 10.0_f32.powf(db / 20.0) }
+
+#[inline(always)]
+fn lin_to_db(lin: f32) -> f32 { 20.0 * (lin + 1e-10_f32).log10() }
+
+#[inline(always)]
+fn ms_to_coeff(ms: f32, sr: f32) -> f32 {
+    if ms <= 0.0 { return 0.0; }
+    (-1.0 / (ms * 0.001 * sr)).exp()
+}
+
+/// Feed-forward VCA compressor with peak envelope detection.
+/// Hard knee. Attack/release on both envelope and gain smoothing.
+///
+/// Typical voice settings: threshold −18 dB, ratio 4:1, attack 5 ms,
+/// release 80 ms, makeup_db to taste (0–6 dB).
+pub struct Compressor {
+    threshold_db: f32,
+    ratio: f32,
+    makeup_lin: f32,
+    env_attack: f32,
+    env_release: f32,
+    gain_attack: f32,
+    gain_release: f32,
+    envelope: f32,
+    gain_db: f32,
+    enabled: bool,
+}
+
+impl Compressor {
+    pub fn new(
+        threshold_db: f32,
+        ratio: f32,
+        attack_ms: f32,
+        release_ms: f32,
+        makeup_db: f32,
+        sample_rate: f32,
+    ) -> Self {
+        Self {
+            threshold_db,
+            ratio: ratio.max(1.0),
+            makeup_lin: db_to_lin(makeup_db),
+            env_attack: ms_to_coeff(attack_ms, sample_rate),
+            env_release: ms_to_coeff(release_ms, sample_rate),
+            gain_attack: ms_to_coeff(attack_ms, sample_rate),
+            gain_release: ms_to_coeff(release_ms, sample_rate),
+            envelope: 0.0,
+            gain_db: 0.0,
+            enabled: true,
+        }
+    }
+
+    pub fn set_enabled(&mut self, v: bool) { self.enabled = v; }
+}
+
+impl DspEffect for Compressor {
+    #[inline(always)]
+    fn process(&mut self, buf: &mut [f32; 2], channels: usize) {
+        let peak = if channels == 2 {
+            buf[0].abs().max(buf[1].abs())
+        } else {
+            buf[0].abs()
+        };
+
+        // Peak envelope follower with separate attack / release.
+        let env_coeff = if peak > self.envelope { self.env_attack } else { self.env_release };
+        self.envelope = self.envelope * env_coeff + peak * (1.0 - env_coeff);
+
+        // Gain reduction in dB (hard knee).
+        let level_db = lin_to_db(self.envelope);
+        let target_gain_db = if level_db > self.threshold_db {
+            (self.threshold_db - level_db) * (1.0 - 1.0 / self.ratio)
+        } else {
+            0.0
+        };
+
+        // Smooth gain reduction changes (attack when reducing, release when recovering).
+        let g_coeff = if target_gain_db < self.gain_db { self.gain_attack } else { self.gain_release };
+        self.gain_db = self.gain_db * g_coeff + target_gain_db * (1.0 - g_coeff);
+
+        let gain = db_to_lin(self.gain_db) * self.makeup_lin;
+        buf[0] *= gain;
+        if channels == 2 { buf[1] *= gain; }
+    }
+
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+        self.gain_db = 0.0;
+    }
+
+    fn is_enabled(&self) -> bool { self.enabled }
+}
+
+/// Brick-wall peak limiter. Ratio = ∞, threshold settable.
+/// Place last in chain to catch inter-effect overshoots.
+///
+/// Default: threshold −0.3 dBFS, attack 0.5 ms, release 100 ms.
+pub struct Limiter {
+    threshold_lin: f32,
+    attack: f32,
+    release: f32,
+    envelope: f32,
+    enabled: bool,
+}
+
+impl Limiter {
+    pub fn new(threshold_db: f32, attack_ms: f32, release_ms: f32, sample_rate: f32) -> Self {
+        Self {
+            threshold_lin: db_to_lin(threshold_db),
+            attack: ms_to_coeff(attack_ms, sample_rate),
+            release: ms_to_coeff(release_ms, sample_rate),
+            envelope: 0.0,
+            enabled: true,
+        }
+    }
+
+    /// Typical output limiter at −0.3 dBFS.
+    pub fn output(sample_rate: f32) -> Self {
+        Self::new(-0.3, 0.5, 100.0, sample_rate)
+    }
+
+    pub fn set_enabled(&mut self, v: bool) { self.enabled = v; }
+}
+
+impl DspEffect for Limiter {
+    #[inline(always)]
+    fn process(&mut self, buf: &mut [f32; 2], channels: usize) {
+        let peak = if channels == 2 {
+            buf[0].abs().max(buf[1].abs())
+        } else {
+            buf[0].abs()
+        };
+
+        let coeff = if peak > self.envelope { self.attack } else { self.release };
+        self.envelope = self.envelope * coeff + peak * (1.0 - coeff);
+
+        if self.envelope > self.threshold_lin {
+            let gain = self.threshold_lin / self.envelope;
+            buf[0] *= gain;
+            if channels == 2 { buf[1] *= gain; }
+        }
+    }
+
+    fn reset(&mut self) { self.envelope = 0.0; }
+    fn is_enabled(&self) -> bool { self.enabled }
+}
