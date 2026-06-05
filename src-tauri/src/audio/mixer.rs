@@ -7,6 +7,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
+use crate::audio::source::InputSourceSpec;
 
 // ~85 ms at 48 kHz stereo.
 const RING_SIZE: usize = 16384;
@@ -42,14 +43,20 @@ pub struct InputSlotShared {
 }
 
 pub struct MixerInputInfo {
+    /// The input's `device_id` (canonical key). For loopback sources this is a
+    /// synthetic id (`sys:default`, `proc:<pid>`); for devices it is the name.
+    /// Kept named `device_name` so status readers that surface it are untouched.
     pub device_name: String,
+    /// Typed capture backend for this input.
+    pub source: InputSourceSpec,
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
 }
 
 /// Descriptor passed to `mixer::start` for each input.
 pub struct MixerInput {
-    pub device_name: String,
+    /// Typed capture backend, derived from the `device_id` by the caller.
+    pub source: InputSourceSpec,
     pub gain: f32,
     pub muted: bool,
 }
@@ -202,8 +209,8 @@ pub fn start(
     }
 
     let output_name = output_name.to_string();
-    let input_specs: Vec<(String, f32, bool)> =
-        inputs.iter().map(|i| (i.device_name.clone(), i.gain, i.muted)).collect();
+    let input_specs: Vec<(InputSourceSpec, f32, bool)> =
+        inputs.iter().map(|i| (i.source.clone(), i.gain, i.muted)).collect();
 
     let shared_slots: Vec<InputSlotShared> = input_specs
         .iter()
@@ -267,10 +274,31 @@ pub fn start(
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
 
-            for (i, (in_name, _, _)) in in_specs.iter().enumerate() {
+            for (i, (source, _, _)) in in_specs.iter().enumerate() {
+                let in_name = match source {
+                    InputSourceSpec::Device { name } => name.as_str(),
+                    // Loopback capture backends land in #15 (system) / #13 (process).
+                    // The seam is in place; the WASAPI body is wired here in #14.
+                    InputSourceSpec::SystemLoopback => {
+                        return Err(EngineError {
+                            message: "System loopback capture is not yet implemented \
+                                      (issue #15)."
+                                .to_string(),
+                        });
+                    }
+                    InputSourceSpec::Process { pid, .. } => {
+                        return Err(EngineError {
+                            message: format!(
+                                "Process loopback capture for PID {pid} is not yet \
+                                 implemented (issue #13)."
+                            ),
+                        });
+                    }
+                };
+
                 let input_device = host
                     .input_devices()?
-                    .find(|d| d.name().ok().as_deref() == Some(in_name.as_str()))
+                    .find(|d| d.name().ok().as_deref() == Some(in_name))
                     .ok_or_else(|| EngineError {
                         message: format!("Input device not found: {in_name}"),
                     })?;
@@ -520,8 +548,9 @@ pub fn start(
             inputs: input_specs
                 .into_iter()
                 .zip(info.input_channels.iter().copied())
-                .map(|((name, _, _), channels)| MixerInputInfo {
-                    device_name: name,
+                .map(|((source, _, _), channels)| MixerInputInfo {
+                    device_name: source.to_id(),
+                    source,
                     channels,
                 })
                 .collect(),
@@ -549,7 +578,7 @@ mod tests {
     fn fake_inputs(n: usize) -> Vec<MixerInput> {
         (0..n)
             .map(|i| MixerInput {
-                device_name: format!("fake_device_{i}"),
+                source: InputSourceSpec::Device { name: format!("fake_device_{i}") },
                 gain: 1.0,
                 muted: false,
             })
@@ -574,6 +603,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, _)| MixerInputInfo {
                     device_name: format!("fake_device_{i}"),
+                    source: InputSourceSpec::Device { name: format!("fake_device_{i}") },
                     channels: 2,
                 })
                 .collect(),
