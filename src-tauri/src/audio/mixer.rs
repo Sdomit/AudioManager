@@ -275,6 +275,19 @@ fn resync_drop(fill: usize, need: usize, target_backlog: usize, max_backlog: usi
     }
 }
 
+/// Per-input ring capacity (in f32 samples) for the given output rate and
+/// callback buffer. Sized to hold the maximum backlog the resync trim allows
+/// (`MAX_LATENCY_MS`) plus a few callback blocks of jitter headroom, ×2 for
+/// stereo. Floored at `RING_SIZE` so the default (driver-chosen buffer) path is
+/// byte-for-byte unchanged; grows for large fixed buffers so one big device
+/// block can never overrun the ring (and thus stays within `pop_slice` scratch).
+fn ring_size_for(out_rate: u32, buffer_frames: Option<u32>) -> usize {
+    let max_backlog_frames = (MAX_LATENCY_MS / 1000.0 * out_rate as f32) as usize;
+    let block_frames = buffer_frames.map(|f| f as usize).unwrap_or(1024);
+    let frames = max_backlog_frames + block_frames.max(512) * 3;
+    (frames * 2).max(RING_SIZE)
+}
+
 /// Optional fixed output-buffer size in frames. `None` lets the driver
 /// choose (CPAL `BufferSize::Default`). A fixed size such as 128 or 256
 /// sets a lower, more deterministic callback period at the cost of higher
@@ -371,6 +384,11 @@ pub fn start(
                 out_stream_cfg.buffer_size = cpal::BufferSize::Fixed(frames);
             }
 
+            // Per-input ring capacity scales with the callback buffer so a large
+            // fixed block can't overrun a fixed-size ring (#35). Default path
+            // keeps the historical RING_SIZE.
+            let ring_size = ring_size_for(out_sample_rate.0, buffer_size_frames);
+
             let mut input_streams = Vec::new();
             // Loopback subscriptions (system / per-app). Held on the engine
             // thread; dropping them on teardown detaches from the shared capture
@@ -414,12 +432,18 @@ pub fn start(
                             });
                         }
 
-                        let ring = RingBuffer::<f32>::new(RING_SIZE);
+                        let ring = RingBuffer::<f32>::new(ring_size);
                         let (producer, consumer) = ring.split();
                         consumers.push((consumer, in_channels));
                         input_channels_meta.push(in_channels as u16);
 
-                        let in_stream_cfg: StreamConfig = in_cfg.into();
+                        let mut in_stream_cfg: StreamConfig = in_cfg.into();
+                        // Match the output's fixed buffer size on the input stream
+                        // too, so device-callback latency is bounded on both ends
+                        // (#35). Loopback captures are unaffected (WASAPI shared).
+                        if let Some(frames) = buffer_size_frames {
+                            in_stream_cfg.buffer_size = cpal::BufferSize::Fixed(frames);
+                        }
                         let err_cb = move |e| eprintln!("[audio] input stream {i} error: {e}");
                         let mut fill_snap: Option<Arc<AtomicUsize>> = None;
                         let input_stream = if in_rate == out_rate {
@@ -605,7 +629,7 @@ pub fn start(
             // capacity so a block can never exceed it; reused across callbacks so
             // the realtime thread never allocates.
             let mut input_scratch: Vec<Vec<f32>> =
-                consumers.iter().map(|_| vec![0.0f32; RING_SIZE]).collect();
+                consumers.iter().map(|_| vec![0.0f32; ring_size]).collect();
 
             // Latency-bounding backlog targets, in frames per channel. The output
             // callback trims an input ring only when its backlog drifts past
@@ -1059,6 +1083,39 @@ mod tests {
     fn resync_drop_zero_when_backlog_healthy() {
         // post_read = 1000 - 200 = 800, below max 2000 → no trim.
         assert_eq!(resync_drop(1000, 200, 600, 2000), 0);
+    }
+
+    #[test]
+    fn ring_size_default_path_is_historical_floor() {
+        // No fixed buffer → driver-chosen; ring stays at the historical RING_SIZE.
+        assert_eq!(ring_size_for(48_000, None), RING_SIZE);
+        // A small fixed buffer is still dominated by the 80ms backlog floor.
+        assert_eq!(ring_size_for(48_000, Some(128)), RING_SIZE);
+    }
+
+    #[test]
+    fn ring_size_grows_for_large_fixed_buffer() {
+        // 8192-frame block: ring must exceed one block's worth (8192*2 samples)
+        // so a single device callback can't overrun the ring.
+        let rs = ring_size_for(48_000, Some(8192));
+        assert!(rs > RING_SIZE, "expected growth, got {rs}");
+        assert!(
+            rs >= 8192 * 2,
+            "ring {rs} must hold at least one stereo block (16384)"
+        );
+    }
+
+    #[test]
+    fn ring_size_always_holds_one_block_of_scratch() {
+        // The output drain needs `frames * in_ch` <= ring_size for every buffer.
+        for buf in [64u32, 128, 256, 480, 1024, 2048, 4096, 8192] {
+            let rs = ring_size_for(48_000, Some(buf));
+            let max_need = buf as usize * 2; // stereo
+            assert!(
+                rs >= max_need,
+                "buffer {buf}: ring {rs} < one stereo block {max_need}"
+            );
+        }
     }
 
     #[test]
