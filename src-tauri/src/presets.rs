@@ -68,6 +68,10 @@ pub struct PresetBusV2 {
     pub enabled: bool,
     #[serde(default)]
     pub dsp: BusDspConfig,
+    /// Output callback buffer size in frames. `None` = driver default (#35).
+    /// `serde(default)` so presets saved before #35 load as None.
+    #[serde(default)]
+    pub buffer_size_frames: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -621,6 +625,7 @@ fn build_preset_v2_with_maps(
             muted: runtime.config.muted,
             enabled: runtime.config.enabled,
             dsp: runtime.config.dsp.clone(),
+            buffer_size_frames: runtime.config.buffer_size_frames,
         });
     }
 
@@ -739,6 +744,7 @@ fn default_bus(id: BusId) -> PresetBusV2 {
         muted: false,
         enabled: false,
         dsp: BusDspConfig::default(),
+        buffer_size_frames: None,
     }
 }
 
@@ -871,6 +877,26 @@ mod tests {
             r#"{"id":"B1","name":"B1","output":null,"volume":1.0,"muted":false,"enabled":false}"#;
         let bus: PresetBusV2 = serde_json::from_str(json).unwrap();
         assert_eq!(bus.dsp, BusDspConfig::default());
+        // Pre-#35 presets have no buffer key → driver default.
+        assert_eq!(bus.buffer_size_frames, None);
+    }
+
+    #[test]
+    fn preset_bus_v2_round_trips_buffer_size() {
+        let bus = PresetBusV2 {
+            id: BusId::A1,
+            name: "A1".to_string(),
+            output: None,
+            volume: 1.0,
+            muted: false,
+            enabled: false,
+            dsp: BusDspConfig::default(),
+            buffer_size_frames: Some(256),
+        };
+        let json = serde_json::to_string(&bus).unwrap();
+        let back: PresetBusV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.buffer_size_frames, Some(256));
+        assert_eq!(back, bus);
     }
 
     #[test]
@@ -954,6 +980,7 @@ mod tests {
                 muted: false,
                 enabled: true,
                 dsp: BusDspConfig::default(),
+                buffer_size_frames: None,
             }],
             inputs: vec![PresetInputV2 {
                 device: PresetDeviceRef { id: " mic ".to_string(), name: "".to_string() },

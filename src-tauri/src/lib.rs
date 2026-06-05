@@ -278,6 +278,11 @@ fn apply_preset_state(
         let mut bus_dsp = bus_preset.dsp.clone();
         bus_dsp.clamp();
         bus.config.dsp = bus_dsp;
+        // Clamp the persisted buffer size to the same [32, 8192] range the live
+        // command enforces; an out-of-range value falls back to driver default.
+        bus.config.buffer_size_frames = bus_preset
+            .buffer_size_frames
+            .filter(|f| (32..=8192).contains(f));
         bus.last_error = None;
     }
 
@@ -1249,6 +1254,7 @@ mod tests {
             muted: false,
             enabled: false,
             dsp: Default::default(),
+            buffer_size_frames: None,
         }
     }
 
