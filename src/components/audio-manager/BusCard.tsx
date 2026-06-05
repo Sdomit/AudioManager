@@ -1,3 +1,4 @@
+import { BusDeviceDropdown } from "./BusDeviceDropdown";
 import { iconForBusRole, AlertIcon, MuteIcon, MoreIcon, PowerIcon } from "./Icon";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
@@ -11,7 +12,8 @@ interface BusCardProps {
   onToggleEnabled: () => void;
   onToggleMuted: () => void;
   onVolumeChange: (v: number) => void;
-  onPickDevice: () => void;
+  /** Assign/change/unassign the bus output device inline. Pass null to unassign. */
+  onSelectDevice: (deviceId: string | null) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   meterWidth?: number;
 }
@@ -35,7 +37,7 @@ export function BusCard({
   onToggleEnabled,
   onToggleMuted,
   onVolumeChange,
-  onPickDevice,
+  onSelectDevice,
   onContextMenu,
   meterWidth = 260,
 }: BusCardProps) {
@@ -74,19 +76,14 @@ export function BusCard({
         <StatePill state={bus.state} />
       </div>
 
-      {/* Device row */}
-      <button
-        className={styles.deviceButton}
-        onClick={(e) => {
-          e.stopPropagation();
-          onPickDevice();
-        }}
-        title={bus.device ?? "Pick an output device"}
-      >
-        <span className={bus.device ? styles.deviceName : styles.deviceMissing}>
-          {bus.device ?? "Click to pick a device"}
-        </span>
-      </button>
+      {/* Device row — inline dropdown to select/change the output device */}
+      <div className={styles.deviceRow} onClick={(e) => e.stopPropagation()}>
+        <BusDeviceDropdown
+          busLabel={bus.label}
+          currentDevice={bus.device}
+          onSelect={onSelectDevice}
+        />
+      </div>
 
       {/* Meter + dB */}
       <div className={styles.meterRow}>
@@ -103,15 +100,6 @@ export function BusCard({
         <div className={styles.errorRow}>
           <AlertIcon size={14} />
           <span>{bus.error ?? "Device error"}</span>
-          <button
-            className={styles.errorAction}
-            onClick={(e) => {
-              e.stopPropagation();
-              onPickDevice();
-            }}
-          >
-            Re-pick device
-          </button>
         </div>
       )}
 
@@ -132,30 +120,20 @@ export function BusCard({
           className={`${styles.actionBtn} ${bus.enabled ? styles.actionActive : ""}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (bus.state === "unconfigured") {
-              onPickDevice();
-              return;
-            }
             onToggleEnabled();
           }}
-          disabled={bus.state === "error"}
+          disabled={bus.state === "error" || bus.state === "unconfigured"}
           aria-pressed={bus.enabled}
           title={
             bus.state === "unconfigured"
-              ? "Pick an output device first"
+              ? "Select an output device first"
               : bus.enabled
                 ? "Disable bus"
                 : "Enable bus"
           }
         >
           <PowerIcon size={14} />
-          <span>
-            {bus.state === "unconfigured"
-              ? "Pick device"
-              : bus.enabled
-                ? "Enabled"
-                : "Enable"}
-          </span>
+          <span>{bus.enabled ? "Enabled" : "Enable"}</span>
         </button>
         <button
           className={`${styles.actionBtn} ${bus.muted ? styles.actionMuted : ""}`}

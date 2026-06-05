@@ -358,7 +358,7 @@ export function AudioManager() {
           am.setBusMuted(id, !bus.muted);
         }}
         onVolumeChange={am.setBusVolume}
-        onPickDevice={(id) => setBusPickerFor(id)}
+        onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
       />
 

@@ -97,23 +97,10 @@
   letter-spacing: 0.05em;
 }
 
-/* ── Device button ──────────────────────────────────────────────────── */
-.deviceButton {
-  text-align: left;
-  font-size: var(--am-text-12);
-  color: var(--am-text-secondary);
-  padding: 2px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-.deviceButton:hover .deviceName,
-.deviceButton:hover .deviceMissing {
-  color: var(--am-text-primary);
-  text-decoration: underline;
-  text-decoration-color: var(--am-border-strong);
-  text-underline-offset: 3px;
+/* ── Device row (inline output-device dropdown) ─────────────────────── */
+.deviceRow {
+  display: flex;
+  min-width: 0;
 }
 
 .deviceName { color: inherit; }
