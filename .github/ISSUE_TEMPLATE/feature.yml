@@ -1,0 +1,35 @@
+name: Feature / enhancement
+description: A scoped unit of work, ideally one PR.
+labels: [enhancement]
+body:
+  - type: input
+    id: track
+    attributes:
+      label: Track
+      description: Plan track / milestone, if any (e.g. "C1 — keystone", "F1").
+      placeholder: "—"
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What outcome this delivers and why.
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      description: Checklist that must hold before this closes.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: smoke
+    attributes:
+      label: Smoke test
+      description: Manual steps to confirm the behavior (esp. audio paths).
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / risks

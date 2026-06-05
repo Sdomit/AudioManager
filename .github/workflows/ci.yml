@@ -1,0 +1,61 @@
+name: CI
+
+# Validation pipeline for the process-loopback work and the rest of the app.
+# The Rust job runs on windows-latest so the `#[cfg(windows)]` WASAPI loopback
+# and session-enumeration modules are actually compiled and tested.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (tsc + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # No lockfile is committed yet; `npm install` resolves from package.json.
+      # Commit a lockfile and switch to `npm ci` for reproducible installs.
+      - run: npm install
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npm test
+
+  rust:
+    name: Rust (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build
+        run: cargo check --all-targets
+      - name: Tests
+        run: cargo test
+      # fmt/clippy are informational until the repo is brought to a single
+      # rustfmt/clippy baseline (the tree currently predates the pinned
+      # toolchain). Flip continue-on-error off once that lands.
+      - name: Format
+        run: cargo fmt -- --check
+        continue-on-error: true
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
