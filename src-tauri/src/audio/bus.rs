@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::audio::dsp::BusDspConfig;
 use crate::audio::mixer::MixerEngine;
 
 /// Stable, hashable identifier for the four fixed output buses.
@@ -61,6 +62,10 @@ pub struct BusConfig {
     /// User toggle. Engine only starts when `enabled` AND `output_device_id`
     /// is set AND there is at least one active input routed to the device.
     pub enabled: bool,
+    /// Per-bus DSP chain (final limiter in #32). `serde(default)` so configs
+    /// saved before #32 deserialize as a bypassed chain.
+    #[serde(default)]
+    pub dsp: BusDspConfig,
 }
 
 impl BusConfig {
@@ -73,6 +78,7 @@ impl BusConfig {
             volume: 1.0,
             muted: false,
             enabled: false,
+            dsp: BusDspConfig::default(),
         }
     }
 
@@ -100,6 +106,8 @@ pub struct BusStatus {
     pub output_peak: f32,
     pub clipped_recently: bool,
     pub last_error: Option<String>,
+    /// Per-bus DSP chain, surfaced so the frontend can render bus effect state.
+    pub dsp: BusDspConfig,
 }
 
 /// Per-bus runtime state owned by `AppInner`.
@@ -158,6 +166,7 @@ impl BusRuntime {
             output_peak,
             clipped_recently,
             last_error: self.last_error.clone(),
+            dsp: self.config.dsp.clone(),
         }
     }
 }
@@ -217,6 +226,22 @@ mod tests {
         assert!(status.output_device.is_none());
         assert!((status.output_peak - 0.0).abs() < f32::EPSILON);
         assert!(!status.clipped_recently);
+    }
+
+    #[test]
+    fn bus_config_deserializes_without_dsp_field() {
+        // Config saved before #32 has no `dsp` key.
+        let json = r#"{"id":"B1","name":"B1 Stream","output_device_id":null,
+            "volume":1.0,"muted":false,"enabled":false}"#;
+        let cfg: BusConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.dsp, BusDspConfig::default());
+    }
+
+    #[test]
+    fn bus_status_exposes_dsp() {
+        let bus = BusRuntime::new(BusId::B1);
+        let json = serde_json::to_value(bus.read_status()).unwrap();
+        assert!(json.get("dsp").is_some());
     }
 
     #[test]
