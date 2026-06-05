@@ -64,6 +64,7 @@ impl InputSourceSpec {
     }
 
     /// True for loopback-backed sources (process or system), false for devices.
+    #[allow(dead_code)] // consumed by IPC/UI in #17–#19
     pub fn is_loopback(&self) -> bool {
         matches!(
             self,
@@ -72,6 +73,7 @@ impl InputSourceSpec {
     }
 
     /// Frontend source-kind tag (`InputSourceKind` in `src/types/engine.ts`).
+    #[allow(dead_code)] // surfaced through the status IPC in #18
     pub fn kind_str(&self) -> &'static str {
         match self {
             InputSourceSpec::Device { .. } => "device",
@@ -81,6 +83,7 @@ impl InputSourceSpec {
     }
 
     /// Human label fallback when no richer metadata (app name) is available.
+    #[allow(dead_code)] // surfaced through the status IPC in #18
     pub fn label(&self) -> String {
         match self {
             InputSourceSpec::Device { name } => name.clone(),

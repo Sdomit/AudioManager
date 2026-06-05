@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
+use crate::audio::loopback::{self, LoopbackCapture};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::source::InputSourceSpec;
 
@@ -47,7 +48,9 @@ pub struct MixerInputInfo {
     /// synthetic id (`sys:default`, `proc:<pid>`); for devices it is the name.
     /// Kept named `device_name` so status readers that surface it are untouched.
     pub device_name: String,
-    /// Typed capture backend for this input.
+    /// Typed capture backend for this input. Surfaced through the status IPC
+    /// in #18 (source metadata end-to-end).
+    #[allow(dead_code)]
     pub source: InputSourceSpec,
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
@@ -160,7 +163,7 @@ impl Drop for MixerEngine {
     }
 }
 
-fn store_max(target: &AtomicU32, value: f32) {
+pub(crate) fn store_max(target: &AtomicU32, value: f32) {
     if !value.is_finite() || value <= 0.0 {
         return;
     }
@@ -270,94 +273,114 @@ pub fn start(
             let out_stream_cfg: StreamConfig = out_cfg.into();
 
             let mut input_streams = Vec::new();
+            // Loopback capture threads (system / per-app). Held on the engine
+            // thread so they drop — and join — alongside the cpal streams.
+            let mut loopback_caps: Vec<LoopbackCapture> = Vec::new();
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
 
             for (i, (source, _, _)) in in_specs.iter().enumerate() {
-                let in_name = match source {
-                    InputSourceSpec::Device { name } => name.as_str(),
-                    // Loopback capture backends land in #15 (system) / #13 (process).
-                    // The seam is in place; the WASAPI body is wired here in #14.
+                match source {
+                    InputSourceSpec::Device { name } => {
+                        let in_name = name.as_str();
+                        let input_device = host
+                            .input_devices()?
+                            .find(|d| d.name().ok().as_deref() == Some(in_name))
+                            .ok_or_else(|| EngineError {
+                                message: format!("Input device not found: {in_name}"),
+                            })?;
+
+                        let in_cfg = input_device.default_input_config()?;
+
+                        if in_cfg.sample_rate() != out_sample_rate {
+                            return Err(EngineError {
+                                message: format!(
+                                    "Sample rate mismatch: input '{in_name}' @ {} Hz vs output \
+                                     '{out_name}' @ {} Hz. Set both devices to the same rate in \
+                                     Windows Sound settings.",
+                                    in_cfg.sample_rate().0,
+                                    out_sample_rate.0
+                                ),
+                            });
+                        }
+
+                        let in_channels = in_cfg.channels() as usize;
+
+                        // Phase 4 supports only mono (1ch) and stereo (2ch) inputs.
+                        // Any combination of {1,2} × {1,2} is valid; > 2 is rejected.
+                        if in_channels > 2 {
+                            return Err(EngineError {
+                                message: format!(
+                                    "Unsupported channel mapping: input '{in_name}' has \
+                                     {in_channels}ch, output '{out_name}' has {out_channels}ch. \
+                                     Phase 4 supports mono/stereo only."
+                                ),
+                            });
+                        }
+
+                        let ring = RingBuffer::<f32>::new(RING_SIZE);
+                        let (mut producer, consumer) = ring.split();
+                        consumers.push((consumer, in_channels));
+                        input_channels_meta.push(in_channels as u16);
+
+                        let in_stream_cfg: StreamConfig = in_cfg.into();
+                        let input_peak_slots = Arc::clone(&shared_for_thread);
+                        let input_stream = input_device
+                            .build_input_stream(
+                                &in_stream_cfg,
+                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    let mut block_peak = 0.0f32;
+                                    for &s in data {
+                                        let abs = s.abs();
+                                        if abs > block_peak {
+                                            block_peak = abs;
+                                        }
+                                        let _ = producer.push(s);
+                                    }
+                                    store_max(&input_peak_slots[i].input_peak, block_peak);
+                                },
+                                move |e| eprintln!("[audio] input stream {i} error: {e}"),
+                                None,
+                            )
+                            .map_err(|e| EngineError { message: e.to_string() })?;
+
+                        input_streams.push(input_stream);
+                    }
+
+                    // Loopback sources fill the same source-blind ring from a
+                    // WASAPI capture thread. `autoconvert` delivers stereo f32 at
+                    // the bus rate, so there is no rate gate and no channel check.
                     InputSourceSpec::SystemLoopback => {
-                        return Err(EngineError {
-                            message: "System loopback capture is not yet implemented \
-                                      (issue #15)."
-                                .to_string(),
-                        });
+                        let ring = RingBuffer::<f32>::new(RING_SIZE);
+                        let (producer, consumer) = ring.split();
+                        let cap = loopback::start_system_loopback(
+                            out_sample_rate.0,
+                            producer,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, loopback::LOOPBACK_CHANNELS as usize));
+                        input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
+                        loopback_caps.push(cap);
                     }
-                    InputSourceSpec::Process { pid, .. } => {
-                        return Err(EngineError {
-                            message: format!(
-                                "Process loopback capture for PID {pid} is not yet \
-                                 implemented (issue #13)."
-                            ),
-                        });
+
+                    InputSourceSpec::Process { pid, include_tree } => {
+                        let ring = RingBuffer::<f32>::new(RING_SIZE);
+                        let (producer, consumer) = ring.split();
+                        let cap = loopback::start_process_loopback(
+                            *pid,
+                            *include_tree,
+                            out_sample_rate.0,
+                            producer,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, loopback::LOOPBACK_CHANNELS as usize));
+                        input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
+                        loopback_caps.push(cap);
                     }
-                };
-
-                let input_device = host
-                    .input_devices()?
-                    .find(|d| d.name().ok().as_deref() == Some(in_name))
-                    .ok_or_else(|| EngineError {
-                        message: format!("Input device not found: {in_name}"),
-                    })?;
-
-                let in_cfg = input_device.default_input_config()?;
-
-                if in_cfg.sample_rate() != out_sample_rate {
-                    return Err(EngineError {
-                        message: format!(
-                            "Sample rate mismatch: input '{in_name}' @ {} Hz vs output \
-                             '{out_name}' @ {} Hz. Set both devices to the same rate in \
-                             Windows Sound settings.",
-                            in_cfg.sample_rate().0,
-                            out_sample_rate.0
-                        ),
-                    });
                 }
-
-                let in_channels = in_cfg.channels() as usize;
-
-                // Phase 4 supports only mono (1ch) and stereo (2ch) inputs.
-                // Any combination of {1,2} × {1,2} is valid; anything > 2 is rejected.
-                if in_channels > 2 {
-                    return Err(EngineError {
-                        message: format!(
-                            "Unsupported channel mapping: input '{in_name}' has {in_channels}ch, \
-                             output '{out_name}' has {out_channels}ch. \
-                             Phase 4 supports mono/stereo only."
-                        ),
-                    });
-                }
-
-                let ring = RingBuffer::<f32>::new(RING_SIZE);
-                let (mut producer, consumer) = ring.split();
-                consumers.push((consumer, in_channels));
-                input_channels_meta.push(in_channels as u16);
-
-                let in_stream_cfg: StreamConfig = in_cfg.into();
-                let input_peak_slots = Arc::clone(&shared_for_thread);
-                let input_stream = input_device
-                    .build_input_stream(
-                        &in_stream_cfg,
-                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                            let mut block_peak = 0.0f32;
-                            for &s in data {
-                                let abs = s.abs();
-                                if abs > block_peak {
-                                    block_peak = abs;
-                                }
-                                let _ = producer.push(s);
-                            }
-                            store_max(&input_peak_slots[i].input_peak, block_peak);
-                        },
-                        move |e| eprintln!("[audio] input stream {i} error: {e}"),
-                        None,
-                    )
-                    .map_err(|e| EngineError { message: e.to_string() })?;
-
-                input_streams.push(input_stream);
             }
 
             let slots = Arc::clone(&shared_for_thread);
@@ -518,6 +541,7 @@ pub fn start(
 
             Ok((
                 input_streams,
+                loopback_caps,
                 output_stream,
                 StartInfo {
                     out_channels: out_channels as u16,
@@ -528,13 +552,16 @@ pub fn start(
         })();
 
         match outcome {
-            Ok((input_streams, output_stream, info)) => {
+            Ok((input_streams, loopback_caps, output_stream, info)) => {
                 let _ = result_tx.send(Ok(info));
                 drop(result_tx);
                 let _ = stop_rx.recv();
-                // Streams dropped on this thread — WASAPI handles released here.
-                drop(input_streams);
+                // Stop the realtime callback first, then drop the producers:
+                // cpal streams and loopback capture threads release their
+                // WASAPI handles on this thread (loopback joins its threads).
                 drop(output_stream);
+                drop(input_streams);
+                drop(loopback_caps);
             }
             Err(e) => {
                 let _ = result_tx.send(Err(e));
