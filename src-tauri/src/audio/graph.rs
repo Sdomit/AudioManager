@@ -183,7 +183,7 @@ impl AudioGraph {
         Some((gain, input.muted || send.muted, send.enabled))
     }
 
-    pub fn effective_inputs_for_bus(&self, bus_id: BusId) -> Vec<(String, f32, bool)> {
+    pub fn effective_inputs_for_bus(&self, bus_id: BusId) -> Vec<(String, f32, bool, DspConfig)> {
         self.inputs
             .iter()
             .filter_map(|input| {
@@ -198,7 +198,7 @@ impl AudioGraph {
                     1.0
                 };
                 let muted = input.muted || send.muted;
-                Some((input.device_id.clone(), gain, muted))
+                Some((input.device_id.clone(), gain, muted, input.dsp.clone()))
             })
             .collect()
     }

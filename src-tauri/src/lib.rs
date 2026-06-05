@@ -11,6 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::devices::{DeviceInfo, DeviceListError};
+use audio::dsp::DspConfig;
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
 use audio::source::InputSourceSpec;
@@ -136,10 +137,11 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
 
     let mixer_inputs: Vec<MixerInput> = active_inputs
         .into_iter()
-        .map(|(id, vol, muted)| MixerInput {
+        .map(|(id, vol, muted, dsp)| MixerInput {
             source: InputSourceSpec::parse(&id),
             gain: vol,
             muted,
+            dsp,
         })
         .collect();
 
@@ -913,6 +915,40 @@ fn set_bus_buffer_size(
     Ok(bus.read_status())
 }
 
+/// Update a running engine's DSP parameters for one input, live. Stores the
+/// clamped config in the graph (so rebuild picks it up later) and publishes to
+/// the engine's seqlock if the engine is running — the audio callback reloads
+/// on the next block without a restart.
+///
+/// `device_id` is the canonical input id (device name, "sys:default", etc.).
+/// Returns an error if `bus_id` or `device_id` is not found.
+#[tauri::command]
+fn update_input_dsp(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    device_id: String,
+    config: DspConfig,
+) -> Result<(), EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_input_dsp(&device_id, config.clone()) {
+        return Err(EngineError {
+            message: format!("Unknown input: {device_id}"),
+        });
+    }
+    // Live-publish if the engine is running. The engine's input order matches
+    // effective_inputs_for_bus, so find the slot index by device_id.
+    if let Some(engine) = inner.buses.get(&bus_id).and_then(|b| b.engine.as_ref()) {
+        if let Some(idx) = engine
+            .inputs
+            .iter()
+            .position(|info| info.device_name == device_id)
+        {
+            engine.update_input_dsp(idx, &config);
+        }
+    }
+    Ok(())
+}
+
 // ── Recording ─────────────────────────────────────────────────────────────────
 
 /// Resolve target engine + callback tap kind + WAV header info for a spec.
@@ -1292,6 +1328,7 @@ pub fn run() {
             set_bus_enabled,
             rename_bus,
             set_bus_buffer_size,
+            update_input_dsp,
             start_recording,
             start_master_recording,
             stop_recording,

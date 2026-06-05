@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
-use crate::audio::dsp::DspChain;
+use crate::audio::dsp::{
+    live::{InputDspShared, InputDspSlots},
+    DspConfig,
+};
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::source::InputSourceSpec;
@@ -79,6 +82,9 @@ pub struct MixerInput {
     pub source: InputSourceSpec,
     pub gain: f32,
     pub muted: bool,
+    /// Initial DSP config seeded into `InputDspShared` when the engine starts.
+    /// Defaults to a fully-bypassed chain when omitted (preset/test callers).
+    pub dsp: DspConfig,
 }
 
 struct MixerSharedMeters {
@@ -103,6 +109,9 @@ pub struct MixerEngine {
     /// Shared atomics; index i corresponds to `inputs[i]`.
     pub shared: Arc<Vec<InputSlotShared>>,
     meters: Arc<MixerSharedMeters>,
+    /// Per-input DSP seqlock blocks. IPC calls `publish()` on these to update
+    /// parameters live; the audio callback calls `reload_if_changed()`.
+    pub dsp_shared: Vec<Arc<InputDspShared>>,
     /// Channel into the output callback. IPC sends `Add`/`Remove` to wire
     /// recording taps in/out without restarting the engine.
     pub tap_command_tx: mpsc::Sender<TapCommand>,
@@ -122,6 +131,10 @@ struct StartInfo {
     out_channels: u16,
     sample_rate: u32,
     input_channels: Vec<u16>,
+    /// IPC-writable DSP shared blocks, one per input, seeded at engine start.
+    /// Sent back to the main thread so `MixerEngine::update_input_dsp` can
+    /// publish live parameter changes without restarting the engine.
+    dsp_shared: Vec<Arc<InputDspShared>>,
 }
 
 impl MixerEngine {
@@ -174,6 +187,15 @@ impl MixerEngine {
         let output_peak = take_peak(&self.meters.output_peak);
         let clipped = self.meters.clipped.swap(false, Ordering::Relaxed);
         (input_peaks, output_peak, clipped)
+    }
+
+    /// Publish new DSP parameters for input at `index`. Lock-free: the audio
+    /// callback picks up the change on its next block via `reload_if_changed`.
+    /// No-op if `index` is out of range (engine may have fewer inputs).
+    pub fn update_input_dsp(&self, index: usize, cfg: &DspConfig) {
+        if let Some(shared) = self.dsp_shared.get(index) {
+            shared.publish(cfg, self.sample_rate as f32);
+        }
     }
 
     /// Read and reset the dropout counters, aggregated across all inputs.
@@ -271,14 +293,14 @@ pub fn start(
     }
 
     let output_name = output_name.to_string();
-    let input_specs: Vec<(InputSourceSpec, f32, bool)> = inputs
+    let input_specs: Vec<(InputSourceSpec, f32, bool, DspConfig)> = inputs
         .iter()
-        .map(|i| (i.source.clone(), i.gain, i.muted))
+        .map(|i| (i.source.clone(), i.gain, i.muted, i.dsp.clone()))
         .collect();
 
     let shared_slots: Vec<InputSlotShared> = input_specs
         .iter()
-        .map(|(_, gain, muted)| InputSlotShared {
+        .map(|(_, gain, muted, _)| InputSlotShared {
             gain: AtomicU32::new(gain.to_bits()),
             muted: AtomicBool::new(*muted),
             input_peak: AtomicU32::new(0.0f32.to_bits()),
@@ -353,7 +375,7 @@ pub fn start(
             // from the wrong thread.
             let mut fill_snapshots: Vec<Option<Arc<AtomicUsize>>> = Vec::new();
 
-            for (i, (source, _, _)) in in_specs.iter().enumerate() {
+            for (i, (source, _, _, _)) in in_specs.iter().enumerate() {
                 match source {
                     InputSourceSpec::Device { name } => {
                         let in_name = name.as_str();
@@ -545,10 +567,21 @@ pub fn start(
             let mut active_taps: Vec<ActiveTap> = Vec::with_capacity(MAX_ACTIVE_TAPS);
             let tap_rx = tap_command_rx;
 
-            // One DSP chain per input. Empty by default — zero per-sample overhead.
-            // Push effects (gate, HPF, compressor, limiter) here before the stream starts.
-            let mut dsp_chains: Vec<DspChain> =
-                (0..consumers.len()).map(|_| DspChain::new()).collect();
+            // Per-input DSP: shared blocks (IPC side) + local slots (audio side).
+            // Shared blocks are seeded from the initial DspConfig and sent back
+            // to the engine handle so IPC can call publish() live. Slots stay in
+            // the closure and call reload_if_changed + process_block each block.
+            let sr = out_sample_rate.0 as f32;
+            let dsp_shared_arcs: Vec<Arc<InputDspShared>> = in_specs
+                .iter()
+                .map(|(_, _, _, dsp)| Arc::new(InputDspShared::new(dsp, sr)))
+                .collect();
+            let mut dsp_slots: Vec<InputDspSlots> = in_specs
+                .iter()
+                .map(|_| InputDspSlots::new(sr))
+                .collect();
+            let dsp_shared_cb: Vec<Arc<InputDspShared>> =
+                dsp_shared_arcs.iter().map(Arc::clone).collect();
 
             // Per-input scratch for bulk ring reads: one `pop_slice` per input per
             // block instead of one atomic `pop()` per sample. Sized to the ring
@@ -660,6 +693,17 @@ pub fn start(
                                     .underrun
                                     .fetch_add((need - got) as u32, Ordering::Relaxed);
                             }
+
+                            // Reload DSP params if IPC published a new config, then
+                            // process the whole drained block in one pass. Each effect's
+                            // is_enabled check is hoisted; inner loop has no dispatch.
+                            dsp_shared_cb[i].reload_if_changed(&mut dsp_slots[i]);
+                            if need > 0 {
+                                dsp_slots[i].process_block(
+                                    &mut input_scratch[i][..need],
+                                    in_ch,
+                                );
+                            }
                         }
 
                         for f in 0..frames {
@@ -682,15 +726,8 @@ pub fn start(
                                     s0
                                 };
 
-                                // Apply per-input DSP chain (gate, HPF, compressor, …).
-                                // Chain is empty by default — iterates zero elements.
-                                // InputPre/Post taps see the post-DSP signal intentionally
-                                // (processed audio is what gets recorded and monitored).
-                                let (s0, s1) = {
-                                    let mut frame = [s0, s1];
-                                    dsp_chains[i].process(&mut frame, in_ch);
-                                    (frame[0], frame[1])
-                                };
+                                // DSP already applied block-wide above (process_block).
+                                // s0/s1 read from the processed scratch buffer.
 
                                 // Fan-out: InputPre / InputPost taps for input i.
                                 if !active_taps.is_empty() {
@@ -790,6 +827,7 @@ pub fn start(
                     out_channels: out_channels as u16,
                     sample_rate: out_sample_rate.0,
                     input_channels: input_channels_meta,
+                    dsp_shared: dsp_shared_arcs,
                 },
             ))
         })();
@@ -819,13 +857,14 @@ pub fn start(
             inputs: input_specs
                 .into_iter()
                 .zip(info.input_channels.iter().copied())
-                .map(|((source, _, _), channels)| MixerInputInfo {
+                .map(|((source, _, _, _), channels)| MixerInputInfo {
                     device_name: source.to_id(),
                     channels,
                 })
                 .collect(),
             shared,
             meters,
+            dsp_shared: info.dsp_shared,
             tap_command_tx,
             out_channels: info.out_channels,
             sample_rate: info.sample_rate,
@@ -853,6 +892,7 @@ mod tests {
                 },
                 gain: 1.0,
                 muted: false,
+                dsp: DspConfig::default(),
             })
             .collect()
     }
@@ -887,6 +927,7 @@ mod tests {
                 bus_volume: AtomicU32::new(1.0f32.to_bits()),
                 bus_muted: AtomicBool::new(false),
             }),
+            dsp_shared: vec![],
             tap_command_tx: tap_tx,
             out_channels: 2,
             sample_rate: 48000,
