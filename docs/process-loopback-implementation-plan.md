@@ -8,6 +8,38 @@
 > Verified against current `main`: `graph.rs:31`, `mixer.rs:271`, `mixer.rs:411` still hold;
 > `ensure_input_name` moved `lib.rs:158 → :159`. Re-confirm all refs at execution time.
 
+## Implementation status — 2026-06-05 (branch `feature/process-loopback-input`)
+
+**Delivered — MVP-A + MVP-B complete.** Verified: `cargo test` (68 lib tests),
+`npx tsc --noEmit`, `npm test` (105 tests). Built against the `wasapi` 0.23
+crate (system loopback + per-process via `new_application_loopback_client`);
+shared-mode `autoconvert` delivers stereo f32 at the bus rate, so **no rate gate
+and no resampler are needed for loopback** (the surround/rate guards apply only
+to cpal device inputs).
+
+| Issues | What landed |
+|---|---|
+| #11 | `InputSourceSpec` seam; `ensure_input_source` accepts synthetic ids |
+| #12,#13,#14,#15 | `audio::loopback` — system + per-process WASAPI capture, wired into `mixer::start`, dropped/joined with the engine |
+| #16,#17,#18 | `audio::session` enumeration, `list_audio_sessions` IPC + TS, frontend source-kind/name derivation |
+| #19 | input DevicePicker offers "System sound" + live apps (`includeLoopbackSources`) |
+| #21 | stable `app:<image>` ids resolved to a live PID at build time |
+| #7,#8,#23 | CI (windows-latest Rust + Linux frontend), repo templates/labels, macOS/Linux research |
+
+**Deferred — optional / post-MVP / tangential (not blocking the feature):**
+- **#20 resampler** — affects only cpal *device* inputs at a mismatched rate
+  (loopback is unaffected via `autoconvert`). RT-sensitive; warrants hardware
+  verification. Current behavior: a clear `EngineError` on mismatch.
+- **#22 shared capture per source** — pure efficiency (two buses capturing the
+  same source open two WASAPI clients, which works today). A capture-manager
+  refactor of the working ownership path; deferred to avoid unverifiable churn.
+- **#9 / #10 virtual-cable app-labeling + guided setup** — largely superseded by
+  direct loopback; the existing AMVC/CableNotice UI already covers cable setup.
+
+**Not yet done:** a live-audio smoke test (`npm run tauri dev` on Windows with
+playback) — the capture paths are compile- and unit-verified but not yet
+exercised against real device audio.
+
 ## Purpose
 
 Capture audio from a **specific Windows application** (Chrome tab, game, Discord) directly,
