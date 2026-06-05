@@ -11,7 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::devices::{DeviceInfo, DeviceListError};
-use audio::dsp::DspConfig;
+use audio::dsp::{BusDspConfig, DspConfig};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
 use audio::source::InputSourceSpec;
@@ -110,7 +110,7 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
     // Centralized teardown: stops recorders first, then drops the engine
     // so WASAPI handles are released before the restart attempt.
     tear_down_engine(inner, bus_id);
-    let (enabled, output_id, bus_vol, bus_muted, buffer_size_frames) = {
+    let (enabled, output_id, bus_vol, bus_muted, bus_dsp, buffer_size_frames) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
         })?;
@@ -119,6 +119,7 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
             bus.config.output_device_id.clone(),
             bus.config.volume,
             bus.config.muted,
+            bus.config.dsp.clone(),
             bus.config.buffer_size_frames,
         )
     };
@@ -145,7 +146,14 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
         })
         .collect();
 
-    match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted, buffer_size_frames) {
+    match audio::mixer::start(
+        &output_id,
+        &mixer_inputs,
+        bus_vol,
+        bus_muted,
+        bus_dsp,
+        buffer_size_frames,
+    ) {
         Ok(engine) => {
             let bus = inner.buses.get_mut(&bus_id).expect("bus exists");
             bus.engine = Some(engine);
@@ -949,6 +957,28 @@ fn update_input_dsp(
     Ok(())
 }
 
+/// Update a running bus's DSP (final limiter), live. Stores the clamped config
+/// in `BusConfig` (survives rebuild) and publishes to the engine's seqlock if
+/// running — the audio callback reloads on the next block without a restart.
+#[tauri::command]
+fn update_bus_dsp(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    config: BusDspConfig,
+) -> Result<BusStatus, EngineError> {
+    let mut config = config;
+    config.clamp();
+    let mut inner = state.inner.lock().unwrap();
+    let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
+        message: format!("Unknown bus: {bus_id:?}"),
+    })?;
+    bus.config.dsp = config.clone();
+    if let Some(engine) = bus.engine.as_ref() {
+        engine.update_bus_dsp(&config);
+    }
+    Ok(bus.read_status())
+}
+
 // ── Recording ─────────────────────────────────────────────────────────────────
 
 /// Resolve target engine + callback tap kind + WAV header info for a spec.
@@ -1329,6 +1359,7 @@ pub fn run() {
             rename_bus,
             set_bus_buffer_size,
             update_input_dsp,
+            update_bus_dsp,
             start_recording,
             start_master_recording,
             stop_recording,

@@ -2,9 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AmvcQueryResult,
   AudioSessionInfo,
+  BusDspConfig,
   BusId,
   BusStatus,
   DeviceInfo,
+  DspConfig,
   EngineStatus,
   InputChannel,
   PresetLoadResult,
@@ -230,3 +232,11 @@ export const updateInputDsp = (
   config: DspConfig,
 ): Promise<void> =>
   invoke<void>("update_input_dsp", { busId, deviceId, config });
+
+/** Update a running bus's DSP (final limiter) live. Stores to BusConfig and
+ *  publishes to the engine seqlock — audio callback picks up next block. */
+export const updateBusDsp = (
+  busId: BusId,
+  config: BusDspConfig,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("update_bus_dsp", { busId, config });

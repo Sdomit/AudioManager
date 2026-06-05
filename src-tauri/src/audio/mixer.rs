@@ -7,8 +7,8 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 
 use crate::audio::dsp::{
-    live::{InputDspShared, InputDspSlots},
-    DspConfig,
+    live::{BusDspShared, BusDspSlots, InputDspShared, InputDspSlots},
+    BusDspConfig, DspConfig,
 };
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
@@ -112,6 +112,8 @@ pub struct MixerEngine {
     /// Per-input DSP seqlock blocks. IPC calls `publish()` on these to update
     /// parameters live; the audio callback calls `reload_if_changed()`.
     pub dsp_shared: Vec<Arc<InputDspShared>>,
+    /// Bus DSP seqlock block (final limiter). Live-updatable, same as inputs.
+    pub bus_dsp_shared: Arc<BusDspShared>,
     /// Channel into the output callback. IPC sends `Add`/`Remove` to wire
     /// recording taps in/out without restarting the engine.
     pub tap_command_tx: mpsc::Sender<TapCommand>,
@@ -135,6 +137,8 @@ struct StartInfo {
     /// Sent back to the main thread so `MixerEngine::update_input_dsp` can
     /// publish live parameter changes without restarting the engine.
     dsp_shared: Vec<Arc<InputDspShared>>,
+    /// IPC-writable bus DSP shared block (limiter). Live-updatable like inputs.
+    bus_dsp_shared: Arc<BusDspShared>,
 }
 
 impl MixerEngine {
@@ -196,6 +200,12 @@ impl MixerEngine {
         if let Some(shared) = self.dsp_shared.get(index) {
             shared.publish(cfg, self.sample_rate as f32);
         }
+    }
+
+    /// Publish new bus DSP (limiter) parameters. Lock-free; applied on the
+    /// audio callback's next block via `reload_if_changed`.
+    pub fn update_bus_dsp(&self, cfg: &BusDspConfig) {
+        self.bus_dsp_shared.publish(cfg, self.sample_rate as f32);
     }
 
     /// Read and reset the dropout counters, aggregated across all inputs.
@@ -274,6 +284,7 @@ pub fn start(
     inputs: &[MixerInput],
     bus_volume: f32,
     bus_muted: bool,
+    bus_dsp: BusDspConfig,
     buffer_size_frames: Option<u32>,
 ) -> Result<MixerEngine, EngineError> {
     if inputs.is_empty() {
@@ -583,6 +594,12 @@ pub fn start(
             let dsp_shared_cb: Vec<Arc<InputDspShared>> =
                 dsp_shared_arcs.iter().map(Arc::clone).collect();
 
+            // Bus DSP (final limiter): one shared block seeded from bus_dsp, one
+            // local slot in the closure. Same live-update pattern as inputs.
+            let bus_dsp_shared_arc = Arc::new(BusDspShared::new(&bus_dsp, sr));
+            let bus_dsp_shared_cb = Arc::clone(&bus_dsp_shared_arc);
+            let mut bus_dsp_slots = BusDspSlots::new(sr);
+
             // Per-input scratch for bulk ring reads: one `pop_slice` per input per
             // block instead of one atomic `pop()` per sample. Sized to the ring
             // capacity so a block can never exceed it; reused across callbacks so
@@ -706,6 +723,10 @@ pub fn start(
                             }
                         }
 
+                        // Reload bus DSP (limiter) once per block; applied per
+                        // frame post-sum below. Cheap no-op when unchanged.
+                        bus_dsp_shared_cb.reload_if_changed(&mut bus_dsp_slots);
+
                         for f in 0..frames {
                             // Stack-allocated accumulator. out_channels is 1 or 2
                             // (validated before stream creation).
@@ -771,10 +792,18 @@ pub fn start(
                                 }
                             }
 
-                            // Apply bus gain post-sum, pre-clip, fan-out BusOut taps.
+                            // Bus gain post-sum, then bus DSP (limiter) pre-clip.
+                            let mut bus_frame = [0.0f32; 2];
+                            for ch in 0..out_channels {
+                                bus_frame[ch] = mix[ch] * bus_vol;
+                            }
+                            bus_dsp_slots.process(&mut bus_frame, out_channels);
+
+                            // Clip detect on the limited signal, hard-clamp, write,
+                            // track peak, fan-out BusOut taps.
                             let mut clamped_frame = [0.0f32; 2];
                             for ch in 0..out_channels {
-                                let raw = mix[ch] * bus_vol;
+                                let raw = bus_frame[ch];
                                 if raw < -1.0 || raw > 1.0 {
                                     block_clipped = true;
                                 }
@@ -828,6 +857,7 @@ pub fn start(
                     sample_rate: out_sample_rate.0,
                     input_channels: input_channels_meta,
                     dsp_shared: dsp_shared_arcs,
+                    bus_dsp_shared: bus_dsp_shared_arc,
                 },
             ))
         })();
@@ -865,6 +895,7 @@ pub fn start(
             shared,
             meters,
             dsp_shared: info.dsp_shared,
+            bus_dsp_shared: info.bus_dsp_shared,
             tap_command_tx,
             out_channels: info.out_channels,
             sample_rate: info.sample_rate,
@@ -928,6 +959,7 @@ mod tests {
                 bus_muted: AtomicBool::new(false),
             }),
             dsp_shared: vec![],
+            bus_dsp_shared: Arc::new(BusDspShared::new(&BusDspConfig::default(), 48_000.0)),
             tap_command_tx: tap_tx,
             out_channels: 2,
             sample_rate: 48000,
@@ -938,7 +970,7 @@ mod tests {
 
     #[test]
     fn start_rejects_empty_inputs() {
-        let result = start("fake_output", &[], 1.0, false, None);
+        let result = start("fake_output", &[], 1.0, false, BusDspConfig::default(), None);
         assert!(result.is_err());
         assert!(result.err().unwrap().message.contains("No inputs"));
     }
@@ -947,7 +979,7 @@ mod tests {
     fn start_rejects_more_than_max_inputs() {
         // MAX_INPUTS + 1 inputs — must fail before any CPAL call.
         let inputs = fake_inputs(MAX_INPUTS + 1);
-        let result = start("fake_output", &inputs, 1.0, false, None);
+        let result = start("fake_output", &inputs, 1.0, false, BusDspConfig::default(), None);
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         assert!(
@@ -961,7 +993,7 @@ mod tests {
         // MAX_INPUTS inputs must pass the limit check and fail on the CPAL
         // device lookup ("fake_output" not found), not on the limit guard.
         let inputs = fake_inputs(MAX_INPUTS);
-        let result = start("fake_output", &inputs, 1.0, false, None);
+        let result = start("fake_output", &inputs, 1.0, false, BusDspConfig::default(), None);
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         // Must NOT be the limit error — should be a device-not-found error.
