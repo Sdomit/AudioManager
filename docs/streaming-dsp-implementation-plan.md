@@ -222,25 +222,39 @@ Each step is one focused commit; run the validation suite before each.
 1. **Config model** — `dsp/config.rs`: `DspConfig`, `BusDspConfig`, sub-configs,
    `Default`, `clamp()`. Unit tests for clamping. (Rust only, no wiring.)
    **— delivered `b49a600` + review fixups (4 bands, ±24 dB makeup); 11 tests.**
-2. **Shared atomics + RT apply** — `InputDspShared` / `BusDspShared` with the
-   **seqlock publish protocol** (odd/even `generation`, `Release`/`Acquire`),
-   off-thread coefficient precompute, **in-place effect setters**, fixed-slot
-   chain build in `mixer::start`, per-block generation-gated reload with
-   Nyquist-clamped frequencies. Replace empty `dsp_chains`. Engine
-   `update_input_dsp` / `update_bus_dsp`. Tests for the seqlock (no torn reads)
-   and atomic store/generation.
-3. **Server storage + IPC** — `dsp` on `InputChannel` + bus config;
-   `set_input_dsp` / `set_bus_dsp` commands; seed atomics on `rebuild_bus`;
-   register handlers. Command-behavior tests.
-4. **TS types + wrappers** — `engine.ts` types, `setInputDsp` / `setBusDsp`.
-5. **UI** — `DspPanel` in `InputDetail` + `BusDetail`, debounced.
-6. **Presets** — `serde(default)` dsp fields, write/apply, old-file-loads test.
+2. Split because Codex was live-editing `mixer.rs` (bulk `pop_slice` rework):
+   - **2a — effect setters** — in-place `set_coeffs` on the four effects +
+     off-thread `*::compute` coefficient helpers, state-preserving.
+     **— delivered `feda015`; 9 tests.**
+   - **2b-core — seqlock module** — `dsp/live.rs`: `InputDspShared` /
+     `BusDspShared` (seqlock publish), `InputDspSlots` / `BusDspSlots`
+     (fixed-slot chains), Nyquist-clamped publish, reload-on-change with
+     reset-on-reenable. **— delivered `324e719`; 6 tests incl. concurrent
+     no-tear stress.**
+   - **2b-wiring — GATED on `mixer.rs`** — construct the shared `Arc` + slots in
+     `mixer::start`, call `reload_if_changed` + `process` in the callback,
+     engine `update_input_dsp` / `update_bus_dsp`. Waits for Codex's bulk-drain
+     change to land so it rebases on top.
+3. **Server storage** (`dsp` on `InputChannel` + `BusConfig`/`BusStatus`,
+   `AudioGraph::set_input_dsp`) **— delivered `df3611b`; 7 tests.**
+   **IPC commands** (`set_input_dsp` / `set_bus_dsp`, seed atomics on
+   `rebuild_bus`, register handlers) **— GATED**: they call the engine
+   `update_*_dsp` methods from 2b-wiring.
+4. **TS types** (`engine.ts`) **— delivered `e276ea6`.** Invoke wrappers
+   (`setInputDsp` / `setBusDsp`) wait on the step-3 commands.
+5. **UI** — `DspPanel` in `InputDetail` + `BusDetail`, debounced. Waits on the
+   step-3 commands + step-4 wrappers.
+6. **Presets** — `serde(default)` dsp fields, build/apply, old-file-loads test.
+   **— delivered `c6c08a5`; 3 tests.**
 7. **Docs + verification** — update this file's status, `cargo test` / `tsc` /
    `npm test` counts, manual `npm run tauri dev` smoke (audible effect change
    with no dropout).
 
 Steps 1–3 are the backend foundation #33/#34 build on; 4–6 complete the
 end-to-end criteria; 7 closes the issue.
+
+**Delivered (collision-free):** 1, 2a, 2b-core, 3-storage, 4-types, 6.
+**Gated on Codex committing `mixer.rs`:** 2b-wiring → 3-IPC → 4-wrappers → 5-UI → 7.
 
 ## Testing and validation commands
 
