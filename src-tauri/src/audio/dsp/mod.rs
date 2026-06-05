@@ -2,6 +2,7 @@ pub mod config;
 pub mod dynamics;
 pub mod filter;
 pub mod gate;
+pub mod live;
 
 pub use config::{
     BusDspConfig, CompressorConfig, DspConfig, EqBand, EqConfig, GateConfig, HpfConfig,
@@ -18,7 +19,9 @@ pub use gate::NoiseGate;
 pub trait DspEffect: Send {
     fn process(&mut self, buf: &mut [f32; 2], channels: usize);
     fn reset(&mut self) {}
-    fn is_enabled(&self) -> bool { true }
+    fn is_enabled(&self) -> bool {
+        true
+    }
 }
 
 /// Ordered chain of effects applied per input bus.
@@ -29,7 +32,9 @@ pub struct DspChain {
 
 impl DspChain {
     pub fn new() -> Self {
-        Self { effects: Vec::new() }
+        Self {
+            effects: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, effect: impl DspEffect + 'static) {
