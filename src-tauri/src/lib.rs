@@ -264,6 +264,9 @@ fn apply_preset_state(
         bus.config.volume = BusConfig::clamp_volume(bus_preset.volume);
         bus.config.muted = bus_preset.muted;
         bus.config.enabled = bus_preset.enabled;
+        let mut bus_dsp = bus_preset.dsp.clone();
+        bus_dsp.clamp();
+        bus.config.dsp = bus_dsp;
         bus.last_error = None;
     }
 
@@ -280,6 +283,10 @@ fn apply_preset_state(
                 message: format!("Failed to apply preset input '{}'", input_preset.device.id),
             });
         }
+
+        inner
+            .graph
+            .set_input_dsp(&input_preset.device.id, input_preset.dsp.clone());
 
         for send in &input_preset.sends {
             if !inner.graph.set_send(&input_preset.device.id, send.bus_id, send.enabled) {
@@ -1138,6 +1145,7 @@ mod tests {
             volume: 1.0,
             muted: false,
             enabled: false,
+            dsp: Default::default(),
         }
     }
 
@@ -1193,6 +1201,7 @@ mod tests {
                         muted: false,
                     },
                 ],
+                dsp: Default::default(),
             }],
         };
 
