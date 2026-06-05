@@ -31,7 +31,9 @@ pub struct EngineError {
 
 impl<E: std::fmt::Display> From<E> for EngineError {
     fn from(e: E) -> Self {
-        Self { message: e.to_string() }
+        Self {
+            message: e.to_string(),
+        }
     }
 }
 
@@ -42,6 +44,13 @@ pub struct InputSlotShared {
     pub gain: AtomicU32, // f32 bits
     pub muted: AtomicBool,
     pub input_peak: AtomicU32, // f32 bits
+    /// Dropout telemetry. `overrun` counts samples discarded when this input's
+    /// ring was full at the producer (capture/input callback outran the mixer);
+    /// `underrun` counts samples zero-filled when the ring was empty at the
+    /// consumer (mixer outran capture). Both accumulate as plain sample counts
+    /// and reset to 0 on each meter poll (`read_and_reset_xruns`).
+    pub overrun: AtomicU32,
+    pub underrun: AtomicU32,
 }
 
 pub struct MixerInputInfo {
@@ -123,7 +132,11 @@ impl MixerEngine {
     /// Update gain/mute for one input without restarting the engine.
     /// No-op if the device is not in this engine's input list.
     pub fn update_gain(&self, device_name: &str, volume: f32, muted: bool) {
-        if let Some(idx) = self.inputs.iter().position(|i| i.device_name == device_name) {
+        if let Some(idx) = self
+            .inputs
+            .iter()
+            .position(|i| i.device_name == device_name)
+        {
             if let Some(slot) = self.shared.get(idx) {
                 slot.gain.store(volume.to_bits(), Ordering::Relaxed);
                 slot.muted.store(muted, Ordering::Relaxed);
@@ -134,7 +147,9 @@ impl MixerEngine {
     /// Atomically update bus-level volume and mute. Lock-free; the audio
     /// thread reads these atomics once per output block.
     pub fn update_bus_volume(&self, volume: f32, muted: bool) {
-        self.meters.bus_volume.store(volume.to_bits(), Ordering::Relaxed);
+        self.meters
+            .bus_volume
+            .store(volume.to_bits(), Ordering::Relaxed);
         self.meters.bus_muted.store(muted, Ordering::Relaxed);
     }
 
@@ -148,6 +163,20 @@ impl MixerEngine {
         let output_peak = take_peak(&self.meters.output_peak);
         let clipped = self.meters.clipped.swap(false, Ordering::Relaxed);
         (input_peaks, output_peak, clipped)
+    }
+
+    /// Read and reset the dropout counters, aggregated across all inputs.
+    /// Returns `(underrun_samples, overrun_samples)` since the last poll.
+    /// Sustained nonzero values mean the buffer is too small or the input and
+    /// output clocks are drifting (see #35/#36).
+    pub fn read_and_reset_xruns(&self) -> (u64, u64) {
+        let mut underrun = 0u64;
+        let mut overrun = 0u64;
+        for slot in self.shared.iter() {
+            underrun += slot.underrun.swap(0, Ordering::Relaxed) as u64;
+            overrun += slot.overrun.swap(0, Ordering::Relaxed) as u64;
+        }
+        (underrun, overrun)
     }
 }
 
@@ -195,7 +224,9 @@ pub fn start(
     bus_muted: bool,
 ) -> Result<MixerEngine, EngineError> {
     if inputs.is_empty() {
-        return Err(EngineError { message: "No inputs provided to mixer".to_string() });
+        return Err(EngineError {
+            message: "No inputs provided to mixer".to_string(),
+        });
     }
 
     // Enforce the limit before creating any streams — never silently drop inputs.
@@ -209,8 +240,10 @@ pub fn start(
     }
 
     let output_name = output_name.to_string();
-    let input_specs: Vec<(InputSourceSpec, f32, bool)> =
-        inputs.iter().map(|i| (i.source.clone(), i.gain, i.muted)).collect();
+    let input_specs: Vec<(InputSourceSpec, f32, bool)> = inputs
+        .iter()
+        .map(|i| (i.source.clone(), i.gain, i.muted))
+        .collect();
 
     let shared_slots: Vec<InputSlotShared> = input_specs
         .iter()
@@ -218,6 +251,8 @@ pub fn start(
             gain: AtomicU32::new(gain.to_bits()),
             muted: AtomicBool::new(*muted),
             input_peak: AtomicU32::new(0.0f32.to_bits()),
+            overrun: AtomicU32::new(0),
+            underrun: AtomicU32::new(0),
         })
         .collect();
     let shared = Arc::new(shared_slots);
@@ -321,14 +356,20 @@ pub fn start(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
+                                    let mut over = 0u32;
                                     for &s in data {
                                         let abs = s.abs();
                                         if abs > block_peak {
                                             block_peak = abs;
                                         }
-                                        let _ = producer.push(s);
+                                        if producer.push(s).is_err() {
+                                            over += 1;
+                                        }
                                     }
                                     store_max(&peak[i].input_peak, block_peak);
+                                    if over > 0 {
+                                        peak[i].overrun.fetch_add(over, Ordering::Relaxed);
+                                    }
                                 },
                                 err_cb,
                                 None,
@@ -346,6 +387,7 @@ pub fn start(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
+                                    let mut over = 0u32;
                                     let frames = data.len() / in_channels;
                                     for fi in 0..frames {
                                         let frame =
@@ -358,17 +400,24 @@ pub fn start(
                                         }
                                         resampler.process_frame(frame, |out| {
                                             for &s in &out[..in_channels] {
-                                                let _ = producer.push(s);
+                                                if producer.push(s).is_err() {
+                                                    over += 1;
+                                                }
                                             }
                                         });
                                     }
                                     store_max(&peak[i].input_peak, block_peak);
+                                    if over > 0 {
+                                        peak[i].overrun.fetch_add(over, Ordering::Relaxed);
+                                    }
                                 },
                                 err_cb,
                                 None,
                             )
                         }
-                        .map_err(|e| EngineError { message: e.to_string() })?;
+                        .map_err(|e| EngineError {
+                            message: e.to_string(),
+                        })?;
 
                         input_streams.push(input_stream);
                     }
@@ -402,7 +451,10 @@ pub fn start(
 
                     // Stable app id: resolve the image name to a live PID now,
                     // then subscribe exactly like the Process arm.
-                    InputSourceSpec::ProcessByName { image_name, include_tree } => {
+                    InputSourceSpec::ProcessByName {
+                        image_name,
+                        include_tree,
+                    } => {
                         let pid = crate::audio::session::resolve_pid_for_image(image_name)?
                             .ok_or_else(|| EngineError {
                                 message: format!(
@@ -438,6 +490,13 @@ pub fn start(
             let mut dsp_chains: Vec<DspChain> =
                 (0..consumers.len()).map(|_| DspChain::new()).collect();
 
+            // Per-input scratch for bulk ring reads: one `pop_slice` per input per
+            // block instead of one atomic `pop()` per sample. Sized to the ring
+            // capacity so a block can never exceed it; reused across callbacks so
+            // the realtime thread never allocates.
+            let mut input_scratch: Vec<Vec<f32>> =
+                consumers.iter().map(|_| vec![0.0f32; RING_SIZE]).collect();
+
             let output_stream = output_device
                 .build_output_stream(
                     &out_stream_cfg,
@@ -458,9 +517,7 @@ pub fn start(
                                     // swap_remove is O(1); tap order is irrelevant
                                     // because every per-frame fan-out iterates the
                                     // whole vec anyway.
-                                    if let Some(pos) =
-                                        active_taps.iter().position(|t| t.id == id)
-                                    {
+                                    if let Some(pos) = active_taps.iter().position(|t| t.id == id) {
                                         active_taps.swap_remove(pos);
                                     }
                                 }
@@ -474,25 +531,46 @@ pub fn start(
                         let mut gains = [0.0f32; MAX_INPUTS];
                         let mut muted = [false; MAX_INPUTS];
                         for i in 0..n {
-                            gains[i] =
-                                f32::from_bits(slots[i].gain.load(Ordering::Relaxed));
+                            gains[i] = f32::from_bits(slots[i].gain.load(Ordering::Relaxed));
                             muted[i] = slots[i].muted.load(Ordering::Relaxed);
                         }
 
                         // Bus-level controls loaded once per block. Treat mute
                         // as bus_vol == 0 so the per-frame math stays branch-free.
-                        let bus_muted_now =
-                            shared_meters.bus_muted.load(Ordering::Relaxed);
+                        let bus_muted_now = shared_meters.bus_muted.load(Ordering::Relaxed);
                         let bus_vol = if bus_muted_now {
                             0.0
                         } else {
                             f32::from_bits(shared_meters.bus_volume.load(Ordering::Relaxed))
                         };
 
-                        let frames =
-                            if out_channels > 0 { data.len() / out_channels } else { 0 };
+                        let frames = if out_channels > 0 {
+                            data.len() / out_channels
+                        } else {
+                            0
+                        };
                         let mut block_output_peak = 0.0f32;
                         let mut block_clipped = false;
+
+                        // Bulk-drain each input ring once per block. pop_slice is a
+                        // single head-index update vs one atomic per sample; the tail
+                        // beyond what was available is zero-filled (underrun = silence).
+                        // Muted inputs are drained too, preserving overflow protection.
+                        for i in 0..n {
+                            let in_ch = consumers[i].1;
+                            let need = (frames * in_ch).min(input_scratch[i].len());
+                            let got = consumers[i].0.pop_slice(&mut input_scratch[i][..need]);
+                            for s in input_scratch[i][got..need].iter_mut() {
+                                *s = 0.0;
+                            }
+                            // Underrun: the ring ran dry, so `need - got` samples
+                            // were zero-filled. Record it for dropout telemetry.
+                            if got < need {
+                                slots[i]
+                                    .underrun
+                                    .fetch_add((need - got) as u32, Ordering::Relaxed);
+                            }
+                        }
 
                         for f in 0..frames {
                             // Stack-allocated accumulator. out_channels is 1 or 2
@@ -500,14 +578,19 @@ pub fn start(
                             let mut mix = [0.0f32; 2];
 
                             for i in 0..n {
-                                // When muted, gain is 0 — ring still drains to prevent overflow.
+                                // When muted, gain is 0; the ring was already drained
+                                // in bulk above, so overflow protection is preserved.
                                 let g = if muted[i] { 0.0 } else { gains[i] };
                                 let in_ch = consumers[i].1; // 1 or 2 (validated)
 
-                                // Read one input frame. in_ch is 1 or 2.
-                                let s0 = consumers[i].0.pop().unwrap_or(0.0);
-                                let s1 =
-                                    if in_ch == 2 { consumers[i].0.pop().unwrap_or(0.0) } else { s0 };
+                                // Read one input frame from the pre-drained scratch.
+                                let base = f * in_ch;
+                                let s0 = input_scratch[i][base];
+                                let s1 = if in_ch == 2 {
+                                    input_scratch[i][base + 1]
+                                } else {
+                                    s0
+                                };
 
                                 // Apply per-input DSP chain (gate, HPF, compressor, …).
                                 // Chain is empty by default — iterates zero elements.
@@ -523,17 +606,19 @@ pub fn start(
                                 if !active_taps.is_empty() {
                                     for tap in active_taps.iter_mut() {
                                         match tap.kind {
-                                            CallbackTapKind::InputPre { input_index, channels }
-                                                if input_index == i =>
-                                            {
+                                            CallbackTapKind::InputPre {
+                                                input_index,
+                                                channels,
+                                            } if input_index == i => {
                                                 tap.push(s0);
                                                 if channels == 2 {
                                                     tap.push(s1);
                                                 }
                                             }
-                                            CallbackTapKind::InputPost { input_index, channels }
-                                                if input_index == i =>
-                                            {
+                                            CallbackTapKind::InputPost {
+                                                input_index,
+                                                channels,
+                                            } if input_index == i => {
                                                 tap.push(s0 * g);
                                                 if channels == 2 {
                                                     tap.push(s1 * g);
@@ -546,9 +631,15 @@ pub fn start(
 
                                 match (in_ch, out_channels) {
                                     (1, 1) => mix[0] += s0 * g,
-                                    (1, 2) => { mix[0] += s0 * g; mix[1] += s0 * g; }
+                                    (1, 2) => {
+                                        mix[0] += s0 * g;
+                                        mix[1] += s0 * g;
+                                    }
                                     (2, 1) => mix[0] += (s0 + s1) * 0.5 * g,
-                                    (2, 2) => { mix[0] += s0 * g; mix[1] += s1 * g; }
+                                    (2, 2) => {
+                                        mix[0] += s0 * g;
+                                        mix[1] += s1 * g;
+                                    }
                                     _ => {} // unreachable — validated above
                                 }
                             }
@@ -588,12 +679,18 @@ pub fn start(
                     |e| eprintln!("[audio] output stream error: {e}"),
                     None,
                 )
-                .map_err(|e| EngineError { message: e.to_string() })?;
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?;
 
             for stream in &input_streams {
-                stream.play().map_err(|e| EngineError { message: e.to_string() })?;
+                stream.play().map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?;
             }
-            output_stream.play().map_err(|e| EngineError { message: e.to_string() })?;
+            output_stream.play().map_err(|e| EngineError {
+                message: e.to_string(),
+            })?;
 
             Ok((
                 input_streams,
@@ -661,7 +758,9 @@ mod tests {
     fn fake_inputs(n: usize) -> Vec<MixerInput> {
         (0..n)
             .map(|i| MixerInput {
-                source: InputSourceSpec::Device { name: format!("fake_device_{i}") },
+                source: InputSourceSpec::Device {
+                    name: format!("fake_device_{i}"),
+                },
                 gain: 1.0,
                 muted: false,
             })
@@ -677,6 +776,8 @@ mod tests {
                 gain: AtomicU32::new(1.0f32.to_bits()),
                 muted: AtomicBool::new(false),
                 input_peak: AtomicU32::new(peak.to_bits()),
+                overrun: AtomicU32::new(0),
+                underrun: AtomicU32::new(0),
             })
             .collect();
         MixerEngine {
@@ -743,8 +844,7 @@ mod tests {
     fn update_bus_volume_stores_atomically() {
         let engine = test_engine(&[0.1], 0.0, false);
         engine.update_bus_volume(0.25, true);
-        let stored_vol =
-            f32::from_bits(engine.meters.bus_volume.load(Ordering::Relaxed));
+        let stored_vol = f32::from_bits(engine.meters.bus_volume.load(Ordering::Relaxed));
         let stored_muted = engine.meters.bus_muted.load(Ordering::Relaxed);
         assert!((stored_vol - 0.25).abs() < f32::EPSILON);
         assert!(stored_muted);
@@ -790,5 +890,22 @@ mod tests {
         assert_eq!(input_peaks2, vec![0.0, 0.0]);
         assert_eq!(output_peak2, 0.0);
         assert!(!clipped2);
+    }
+
+    #[test]
+    fn read_and_reset_xruns_aggregates_across_inputs_and_resets() {
+        let engine = test_engine(&[0.0, 0.0, 0.0], 0.0, false);
+        engine.shared[0].underrun.store(10, Ordering::Relaxed);
+        engine.shared[1].underrun.store(5, Ordering::Relaxed);
+        engine.shared[2].overrun.store(7, Ordering::Relaxed);
+
+        let (under, over) = engine.read_and_reset_xruns();
+        assert_eq!(under, 15);
+        assert_eq!(over, 7);
+
+        // Second read returns zero — counters reset on read.
+        let (under2, over2) = engine.read_and_reset_xruns();
+        assert_eq!(under2, 0);
+        assert_eq!(over2, 0);
     }
 }

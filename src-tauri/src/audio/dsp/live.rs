@@ -424,6 +424,30 @@ fn apply_biquad(f: &mut BiquadFilter, enabled: bool, coeffs: [f32; 5]) {
     }
 }
 
+/// Drive one concrete effect across a whole interleaved block. Generic over the
+/// concrete type so `process` is monomorphized and inlined — the inner loop
+/// carries zero per-sample dispatch. The caller hoists the `is_enabled` check
+/// out to once per block. Equivalent to running the effect per frame in order:
+/// each effect completes the block before the next reads it, and every effect
+/// still sees frames in index order, so the output matches per-frame processing.
+#[inline(always)]
+fn process_block_effect<E: DspEffect>(effect: &mut E, interleaved: &mut [f32], channels: usize) {
+    if channels == 2 {
+        for frame in interleaved.chunks_exact_mut(2) {
+            let mut b = [frame[0], frame[1]];
+            effect.process(&mut b, 2);
+            frame[0] = b[0];
+            frame[1] = b[1];
+        }
+    } else {
+        for s in interleaved.iter_mut() {
+            let mut b = [*s, 0.0];
+            effect.process(&mut b, 1);
+            *s = b[0];
+        }
+    }
+}
+
 /// Fixed per-input effect chain in processing order HPF → Gate → EQ → Comp →
 /// Limiter. Allocated once before the stream starts; effects are toggled and
 /// retuned in place via [`InputDspShared::reload_if_changed`], never rebuilt.
@@ -531,6 +555,33 @@ impl InputDspSlots {
             self.limiter.process(buf, channels);
         }
     }
+
+    /// Block form of [`Self::process`]: same chain order (HPF → Gate → EQ →
+    /// Comp → Limiter) and identical output, but each enabled effect's
+    /// `is_enabled` check is hoisted out of the per-sample loop and its
+    /// `process` is monomorphized (no dispatch per sample). `channels` is
+    /// 1 (mono) or 2 (`[L, R, …]`). `interleaved.len()` must be a multiple of
+    /// `channels`.
+    #[inline]
+    pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
+        if self.hpf.is_enabled() {
+            process_block_effect(&mut self.hpf, interleaved, channels);
+        }
+        if self.gate.is_enabled() {
+            process_block_effect(&mut self.gate, interleaved, channels);
+        }
+        for band in &mut self.eq {
+            if band.is_enabled() {
+                process_block_effect(band, interleaved, channels);
+            }
+        }
+        if self.comp.is_enabled() {
+            process_block_effect(&mut self.comp, interleaved, channels);
+        }
+        if self.limiter.is_enabled() {
+            process_block_effect(&mut self.limiter, interleaved, channels);
+        }
+    }
 }
 
 /// Fixed per-bus effect chain (limiter only in #32), processed post-sum/pre-clip.
@@ -568,6 +619,14 @@ impl BusDspSlots {
     pub fn process(&mut self, buf: &mut [f32; 2], channels: usize) {
         if self.limiter.is_enabled() {
             self.limiter.process(buf, channels);
+        }
+    }
+
+    /// Block form of [`Self::process`] (bus limiter only in #32).
+    #[inline]
+    pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
+        if self.limiter.is_enabled() {
+            process_block_effect(&mut self.limiter, interleaved, channels);
         }
     }
 }
@@ -700,5 +759,72 @@ mod tests {
             }
         }
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn process_block_matches_per_frame_process() {
+        // With several stateful effects enabled, block processing must produce
+        // the same output as the per-frame loop: each effect runs the whole
+        // block before the next, but every effect still sees frames in order.
+        let mut c = DspConfig::default();
+        c.hpf.enabled = true;
+        c.gate.enabled = true;
+        c.compressor.enabled = true;
+        c.compressor.ratio = 4.0;
+        c.limiter.enabled = true;
+        c.limiter.threshold_db = -3.0;
+        c.clamp();
+
+        let shared = InputDspShared::new(&c, SR);
+        let mut per_frame = InputDspSlots::new(SR);
+        let mut block = InputDspSlots::new(SR);
+        assert!(shared.reload_if_changed(&mut per_frame));
+        assert!(shared.reload_if_changed(&mut block));
+
+        let n = 512usize;
+        let mut a: Vec<f32> = (0..n * 2)
+            .map(|i| ((i as f32) * 0.013).sin() * 0.6)
+            .collect();
+        let mut b = a.clone();
+
+        for frame in a.chunks_exact_mut(2) {
+            let mut f = [frame[0], frame[1]];
+            per_frame.process(&mut f, 2);
+            frame[0] = f[0];
+            frame[1] = f[1];
+        }
+        block.process_block(&mut b, 2);
+
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-6, "block != per-frame: {x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn process_block_mono_matches_per_frame() {
+        let mut c = DspConfig::default();
+        c.hpf.enabled = true;
+        c.compressor.enabled = true;
+        c.clamp();
+        let shared = InputDspShared::new(&c, SR);
+        let mut per_frame = InputDspSlots::new(SR);
+        let mut block = InputDspSlots::new(SR);
+        assert!(shared.reload_if_changed(&mut per_frame));
+        assert!(shared.reload_if_changed(&mut block));
+
+        let n = 256usize;
+        let mut a: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.021).sin() * 0.5).collect();
+        let mut b = a.clone();
+
+        for s in a.iter_mut() {
+            let mut f = [*s, 0.0];
+            per_frame.process(&mut f, 1);
+            *s = f[0];
+        }
+        block.process_block(&mut b, 1);
+
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-6, "mono block != per-frame: {x} vs {y}");
+        }
     }
 }
