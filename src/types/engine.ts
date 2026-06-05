@@ -148,6 +148,9 @@ export interface BusStatus {
   last_error: string | null;
   /** Per-bus DSP chain. Optional for back-compat with pre-#32 payloads. */
   dsp?: BusDspConfig;
+  /** Dropout counters since last poll. 0 when no engine or no dropouts. */
+  underruns?: number;
+  overruns?: number;
 }
 
 export interface SystemStatus {

@@ -760,7 +760,7 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let mut buses = Vec::with_capacity(inner.buses.len());
 
     for bus in inner.buses.values() {
-        let (output_peak, clipped_recently) = match bus.engine.as_ref() {
+        let (output_peak, clipped_recently, underruns, overruns) = match bus.engine.as_ref() {
             Some(engine) => {
                 let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
                 for (idx, info) in engine.inputs.iter().enumerate() {
@@ -774,11 +774,15 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
                         })
                         .or_insert(peak);
                 }
-                (output_peak, clipped_recently)
+                let (un, ov) = engine.read_and_reset_xruns();
+                (output_peak, clipped_recently, un, ov)
             }
-            None => (0.0, false),
+            None => (0.0, false, 0, 0),
         };
-        buses.push(bus.status_from_meters(output_peak, clipped_recently));
+        let mut status = bus.status_from_meters(output_peak, clipped_recently);
+        status.underruns = underruns;
+        status.overruns = overruns;
+        buses.push(status);
     }
 
     let input_peaks = input_peaks_by_device

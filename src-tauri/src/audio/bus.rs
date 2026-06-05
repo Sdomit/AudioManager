@@ -108,6 +108,12 @@ pub struct BusStatus {
     pub last_error: Option<String>,
     /// Per-bus DSP chain, surfaced so the frontend can render bus effect state.
     pub dsp: BusDspConfig,
+    /// Dropout counters since the last poll. Underrun = mixer outran capture
+    /// (silence inserted); overrun = capture outran mixer or resync trim fired
+    /// (samples lost). Both reset to 0 on each `read_status` / `get_system_status`
+    /// call so the frontend sees per-interval counts, not lifetime totals.
+    pub underruns: u64,
+    pub overruns: u64,
 }
 
 /// Per-bus runtime state owned by `AppInner`.
@@ -143,15 +149,19 @@ impl BusRuntime {
     /// Reads and resets the engine's meter atomics if an engine is present —
     /// matches the existing `get_engine_status` polling contract.
     pub fn read_status(&self) -> BusStatus {
-        let (output_peak, clipped_recently) = match self.engine.as_ref() {
+        let (output_peak, clipped_recently, underruns, overruns) = match self.engine.as_ref() {
             Some(eng) => {
                 let (_input_peaks, peak, clipped) = eng.read_and_reset_meters();
-                (peak, clipped)
+                let (un, ov) = eng.read_and_reset_xruns();
+                (peak, clipped, un, ov)
             }
-            None => (0.0, false),
+            None => (0.0, false, 0, 0),
         };
 
-        self.status_from_meters(output_peak, clipped_recently)
+        let mut status = self.status_from_meters(output_peak, clipped_recently);
+        status.underruns = underruns;
+        status.overruns = overruns;
+        status
     }
 
     pub fn status_from_meters(&self, output_peak: f32, clipped_recently: bool) -> BusStatus {
@@ -167,6 +177,8 @@ impl BusRuntime {
             clipped_recently,
             last_error: self.last_error.clone(),
             dsp: self.config.dsp.clone(),
+            underruns: 0,
+            overruns: 0,
         }
     }
 }
