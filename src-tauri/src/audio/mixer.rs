@@ -2,7 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use ringbuf::RingBuffer;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
@@ -338,6 +338,12 @@ pub fn start(
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
+            // Per-input fill snapshot for drift-aware SRC. Set only for
+            // rate-mismatched device inputs; None for matched-rate and loopback.
+            // Output callback writes consumer.len() here before each drain so the
+            // input callback can call nudge_ratio without accessing the consumer
+            // from the wrong thread.
+            let mut fill_snapshots: Vec<Option<Arc<AtomicUsize>>> = Vec::new();
 
             for (i, (source, _, _)) in in_specs.iter().enumerate() {
                 match source {
@@ -374,6 +380,7 @@ pub fn start(
 
                         let in_stream_cfg: StreamConfig = in_cfg.into();
                         let err_cb = move |e| eprintln!("[audio] input stream {i} error: {e}");
+                        let mut fill_snap: Option<Arc<AtomicUsize>> = None;
                         let input_stream = if in_rate == out_rate {
                             // Matched rate: push raw samples straight to the ring.
                             let mut producer = producer;
@@ -402,6 +409,14 @@ pub fn start(
                             )
                         } else {
                             // Rate mismatch: linear-resample to the bus rate (#20).
+                            // Share a fill-snapshot atomic with the output callback so
+                            // nudge_ratio can steer the ring backlog toward target
+                            // without glitching (drift-aware SRC, #36).
+                            let fill_atom = Arc::new(AtomicUsize::new(0));
+                            fill_snap = Some(Arc::clone(&fill_atom));
+                            let target_for_nudge =
+                                (TARGET_LATENCY_MS / 1000.0 * out_rate as f32) as usize
+                                    * in_channels;
                             let mut producer = producer;
                             let peak = Arc::clone(&shared_for_thread);
                             let mut resampler = crate::audio::resampler::LinearResampler::new(
@@ -412,6 +427,13 @@ pub fn start(
                             input_device.build_input_stream(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    // Nudge the ratio once per input block using the
+                                    // fill snapshot the output callback published last
+                                    // block. Corrects gradual clock drift glitch-free.
+                                    resampler.nudge_ratio(
+                                        fill_atom.load(Ordering::Relaxed),
+                                        target_for_nudge,
+                                    );
                                     let mut block_peak = 0.0f32;
                                     let mut over = 0u32;
                                     let frames = data.len() / in_channels;
@@ -446,6 +468,7 @@ pub fn start(
                         })?;
 
                         input_streams.push(input_stream);
+                        fill_snapshots.push(fill_snap);
                     }
 
                     // Loopback sources fill the same source-blind ring from a
@@ -460,6 +483,7 @@ pub fn start(
                         consumers.push((consumer, ch as usize));
                         input_channels_meta.push(ch);
                         subscriptions.push(sub);
+                        fill_snapshots.push(None);
                     }
 
                     InputSourceSpec::Process { pid, include_tree } => {
@@ -473,6 +497,7 @@ pub fn start(
                         consumers.push((consumer, ch as usize));
                         input_channels_meta.push(ch);
                         subscriptions.push(sub);
+                        fill_snapshots.push(None);
                     }
 
                     // Stable app id: resolve the image name to a live PID now,
@@ -498,6 +523,7 @@ pub fn start(
                         consumers.push((consumer, ch as usize));
                         input_channels_meta.push(ch);
                         subscriptions.push(sub);
+                        fill_snapshots.push(None);
                     }
                 }
             }
@@ -592,6 +618,12 @@ pub fn start(
                         for i in 0..n {
                             let in_ch = consumers[i].1;
                             let need = (frames * in_ch).min(input_scratch[i].len());
+
+                            // Publish current fill so the resampler's nudge_ratio can
+                            // steer the ring toward target between output blocks (#36).
+                            if let Some(snap) = &fill_snapshots[i] {
+                                snap.store(consumers[i].0.len(), Ordering::Relaxed);
+                            }
 
                             // Latency bound: when the backlog has drifted far above
                             // target (producer outrunning the mixer), trim the ring
