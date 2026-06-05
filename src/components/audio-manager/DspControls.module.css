@@ -1,0 +1,131 @@
+.chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-2);
+}
+
+/* ── Effect block ───────────────────────────────────────────────── */
+.effect {
+  border: 1px solid var(--am-border-subtle);
+  border-radius: var(--am-radius-md);
+  background: var(--am-surface-2);
+  padding: var(--am-space-2) var(--am-space-3);
+}
+.effect[data-on] {
+  border-color: var(--am-border-default);
+  background: var(--am-surface-3);
+}
+
+.effectHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--am-space-2);
+}
+.effectTitle {
+  font-size: var(--am-text-12);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+}
+.effect[data-on] .effectTitle {
+  color: var(--am-text-primary);
+}
+
+.params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-1);
+  margin-top: var(--am-space-2);
+  padding-top: var(--am-space-2);
+  border-top: 1px solid var(--am-border-subtle);
+}
+
+/* ── One labelled slider ────────────────────────────────────────── */
+.param {
+  display: grid;
+  grid-template-columns: 64px 1fr 58px;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+.param[data-disabled] {
+  opacity: 0.45;
+}
+.paramLabel {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: var(--am-tracking-wide);
+  white-space: nowrap;
+}
+.slider {
+  width: 100%;
+  accent-color: var(--am-accent);
+}
+.paramValue {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  text-align: right;
+  white-space: nowrap;
+}
+.unit {
+  color: var(--am-text-tertiary);
+  margin-left: 2px;
+}
+
+/* ── EQ band sub-block ──────────────────────────────────────────── */
+.band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-1);
+  padding: var(--am-space-2) 0;
+  border-bottom: 1px dashed var(--am-border-subtle);
+}
+.band:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.bandHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.bandLabel {
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  color: var(--am-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: var(--am-tracking-wide);
+}
+
+/* ── Toggle switch ──────────────────────────────────────────────── */
+.toggle {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--am-border-default);
+  background: var(--am-surface-1);
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  transition: background var(--am-dur-fast), border-color var(--am-dur-fast);
+}
+.toggle[data-on] {
+  background: var(--am-accent);
+  border-color: var(--am-accent);
+}
+.toggleKnob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--am-text-primary);
+  transition: transform var(--am-dur-fast);
+}
+.toggle[data-on] .toggleKnob {
+  transform: translateX(14px);
+  background: #fff;
+}

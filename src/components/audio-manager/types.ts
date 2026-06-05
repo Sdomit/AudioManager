@@ -5,6 +5,10 @@
  * shapes returned by your Rust backend. Adapt in tauriCommands.ts when wiring.
  */
 
+import type { DspConfig, LimiterConfig } from "../../types/engine";
+
+export type { DspConfig, LimiterConfig } from "../../types/engine";
+
 export type BusId = "A1" | "A2" | "B1" | "B2";
 
 export type BusRole = "monitor" | "speakers" | "stream" | "record";
@@ -33,6 +37,13 @@ export interface Bus {
   clipUntil: number | null;
   /** Error message if state === "error" */
   error: string | null;
+  /** Output callback buffer size in frames. null = driver default (#35). */
+  bufferSizeFrames: number | null;
+  /** Dropout sample counts since the last poll (#35/#36 telemetry). */
+  underruns: number;
+  overruns: number;
+  /** Per-bus final limiter (#32). */
+  limiter: LimiterConfig;
 }
 
 export type InputSourceKind =
@@ -52,6 +63,8 @@ export interface AudioInput {
   muted: boolean;
   /** Current input meter level 0..1.2 */
   level: number;
+  /** Per-input effect chain HPF→Gate→EQ→Comp→Limiter (#32). */
+  dsp: DspConfig;
 }
 
 export interface Send {
@@ -134,6 +147,13 @@ export interface AudioManagerActions {
   /** Rename a bus (label only — id stays A1/A2/B1/B2). */
   renameBus: (id: BusId, name: string) => void;
   /**
+   * Set the bus output buffer size in frames (#35). null = driver default.
+   * Triggers an engine rebuild, so it is not throttled.
+   */
+  setBusBufferSize: (id: BusId, frames: number | null) => void;
+  /** Update the per-bus final limiter (#32). Live, no restart. */
+  setBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
+  /**
    * Override the bus visual role (icon + accent color). Stored
    * client-side in localStorage, not in the backend or preset.
    * Pass null to revert to the default role for the bus id.
@@ -142,6 +162,8 @@ export interface AudioManagerActions {
 
   setInputGain: (id: string, gain: number) => void;
   setInputMuted: (id: string, muted: boolean) => void;
+  /** Update the per-input DSP chain (#32). Live, no restart. */
+  setInputDsp: (id: string, dsp: DspConfig) => void;
   removeInput: (id: string) => void;
   /**
    * Add an input. AudioManager opens the input device picker and calls

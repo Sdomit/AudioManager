@@ -17,6 +17,7 @@ import type {
   PresetSummary,
 } from "../../types/engine";
 import { isLikelyVirtualAudioDevice } from "../../utils/devices";
+import { defaultDspConfig, defaultLimiter } from "./dspDefaults";
 import type {
   AudioInput,
   Bus,
@@ -76,6 +77,10 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
     level: Math.max(0, b.output_peak),
     clipUntil: b.clipped_recently ? Date.now() + 2400 : null,
     error: b.last_error,
+    bufferSizeFrames: b.buffer_size_frames ?? null,
+    underruns: b.underruns ?? 0,
+    overruns: b.overruns ?? 0,
+    limiter: b.dsp?.limiter ?? defaultLimiter(),
   };
 }
 
@@ -119,6 +124,7 @@ export function adaptInput(
     gain: backendVolumeToUi(ch.gain),
     muted: ch.muted,
     level: Math.max(0, peak),
+    dsp: ch.dsp ?? defaultDspConfig(),
   };
 }
 

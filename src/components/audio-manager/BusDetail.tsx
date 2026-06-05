@@ -6,10 +6,19 @@ import {
   PowerIcon,
   ChevronRightIcon,
 } from "./Icon";
+import { BusLimiterControls } from "./DspControls";
+import { BUFFER_SIZE_OPTIONS } from "./dspDefaults";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
 import { RecordButton } from "./RecordButton";
-import type { ActiveRecording, AudioInput, Bus, Send, TapSpec } from "./types";
+import type {
+  ActiveRecording,
+  AudioInput,
+  Bus,
+  LimiterConfig,
+  Send,
+  TapSpec,
+} from "./types";
 import { gainToDb, levelToDb, volumeToDb } from "./units";
 import styles from "./BusDetail.module.css";
 
@@ -22,6 +31,8 @@ interface BusDetailProps {
   onToggleMuted: () => void;
   onPickDevice: () => void;
   onSelectInput: (id: string) => void;
+  onBufferSizeChange: (frames: number | null) => void;
+  onLimiterChange: (limiter: LimiterConfig) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
 }
@@ -45,6 +56,8 @@ export function BusDetail({
   onToggleMuted,
   onPickDevice,
   onSelectInput,
+  onBufferSizeChange,
+  onLimiterChange,
   onStartRecording,
   onStopRecording,
 }: BusDetailProps) {
@@ -151,6 +164,40 @@ export function BusDetail({
             size={14}
           />
         </div>
+      </section>
+
+      {/* Processing — buffer size, dropout telemetry, final limiter */}
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Processing</div>
+        <div className={styles.procRow}>
+          <span className={styles.procLabel}>Buffer size</span>
+          <select
+            className={styles.procSelect}
+            value={bus.bufferSizeFrames ?? ""}
+            onChange={(e) =>
+              onBufferSizeChange(e.target.value === "" ? null : Number(e.target.value))
+            }
+            aria-label="Output buffer size"
+          >
+            {BUFFER_SIZE_OPTIONS.map((opt) => (
+              <option key={opt.label} value={opt.value ?? ""}>
+                {opt.label}
+                {opt.value !== null ? " frames" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.procRow}>
+          <span className={styles.procLabel}>Dropouts</span>
+          <span
+            className={styles.procStat}
+            data-warn={bus.underruns + bus.overruns > 0 ? "" : undefined}
+            title="Underruns (mixer outran capture) / overruns (capture outran mixer). Resets each poll."
+          >
+            {bus.underruns} under · {bus.overruns} over
+          </span>
+        </div>
+        <BusLimiterControls limiter={bus.limiter} onChange={onLimiterChange} />
       </section>
 
       {/* Routed inputs */}

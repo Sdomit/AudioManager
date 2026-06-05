@@ -399,7 +399,10 @@ export function AudioManager() {
           onBusVolumeChange={am.setBusVolume}
         />
 
-        {state.routingView !== "nodes" && (
+        {/* Detail panel: always present in matrix/flow; in the nodes canvas it
+            appears only when a bus/input is selected, so per-bus/per-input
+            settings (DSP, buffer size, limiter) are reachable from every view. */}
+        {(state.routingView !== "nodes" || state.selection.kind !== "none") && (
           <DetailPanel
             selection={state.selection}
             buses={state.buses}
@@ -412,6 +415,7 @@ export function AudioManager() {
               if (!input) return;
               am.setInputMuted(id, !input.muted);
             }}
+            onInputDsp={am.setInputDsp}
             onRemoveInput={am.removeInput}
             onToggleSend={am.toggleSend}
             onSendGainChange={am.setSendGain}
@@ -427,6 +431,8 @@ export function AudioManager() {
               if (!bus) return;
               am.setBusMuted(id, !bus.muted);
             }}
+            onBusBufferSizeChange={am.setBusBufferSize}
+            onBusLimiterChange={am.setBusLimiter}
             onPickDevice={(id) => setBusPickerFor(id)}
             onSelectInputContext={(id) =>
               am.setSelection({ kind: "input", inputId: id })

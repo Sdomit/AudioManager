@@ -5,6 +5,7 @@ import {
   XIcon,
   PlusIcon,
 } from "./Icon";
+import { InputDspControls } from "./DspControls";
 import { MeterCanvas } from "./MeterCanvas";
 import { RecordButton } from "./RecordButton";
 import type {
@@ -12,6 +13,7 @@ import type {
   AudioInput,
   Bus,
   BusId,
+  DspConfig,
   Send,
   TapSpec,
 } from "./types";
@@ -29,6 +31,7 @@ interface InputDetailProps {
   onToggleSend: (busId: BusId) => void;
   onSendGainChange: (busId: BusId, v: number) => void;
   onSendMuted: (busId: BusId, muted: boolean) => void;
+  onDspChange: (dsp: DspConfig) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
 }
@@ -53,6 +56,7 @@ export function InputDetail({
   onToggleSend,
   onSendGainChange,
   onSendMuted,
+  onDspChange,
   onStartRecording,
   onStopRecording,
 }: InputDetailProps) {
@@ -141,6 +145,12 @@ export function InputDetail({
             size={14}
           />
         </div>
+      </section>
+
+      {/* DSP chain */}
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Processing (DSP)</div>
+        <InputDspControls dsp={input.dsp} onChange={onDspChange} />
       </section>
 
       {/* Sends */}

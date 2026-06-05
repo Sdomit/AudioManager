@@ -152,6 +152,36 @@
   border-radius: var(--am-radius-sm);
 }
 
+/* ── Processing (buffer / dropouts) ─────────────────────────────── */
+.procRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--am-space-2);
+}
+.procLabel {
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+}
+.procSelect {
+  font-size: var(--am-text-12);
+  font-family: var(--am-font-mono);
+  padding: 4px 8px;
+  background: var(--am-surface-2);
+  color: var(--am-text-primary);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm);
+  cursor: pointer;
+}
+.procStat {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-12);
+  color: var(--am-text-tertiary);
+}
+.procStat[data-warn] {
+  color: var(--am-warning);
+}
+
 /* ── Volume ─────────────────────────────────────────────────────── */
 .volumeRow {
   display: grid;

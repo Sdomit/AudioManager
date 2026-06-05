@@ -1,0 +1,89 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+
+import { BusLimiterControls, InputDspControls } from "./DspControls";
+import { defaultDspConfig, defaultLimiter } from "./dspDefaults";
+
+afterEach(cleanup);
+
+describe("InputDspControls", () => {
+  it("renders every effect in the chain", () => {
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
+    for (const title of ["High-pass", "Noise gate", "EQ", "Compressor", "Limiter"]) {
+      expect(screen.getByText(title)).toBeTruthy();
+    }
+  });
+
+  it("toggling an effect emits the full config with that effect enabled", () => {
+    const onChange = vi.fn();
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+
+    fireEvent.click(screen.getByLabelText("High-pass off"));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0];
+    expect(next.hpf.enabled).toBe(true);
+    // Untouched effects are preserved.
+    expect(next.gate.enabled).toBe(false);
+    expect(next.compressor.ratio).toBe(4);
+  });
+
+  it("hides params until the effect is enabled, shows them once on", () => {
+    const dsp = defaultDspConfig();
+    const { rerender } = render(
+      <InputDspControls dsp={dsp} onChange={() => {}} />,
+    );
+    // Gate off → its Threshold slider is not rendered.
+    expect(screen.queryByText("Threshold")).toBeNull();
+
+    rerender(
+      <InputDspControls
+        dsp={{ ...dsp, gate: { ...dsp.gate, enabled: true } }}
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByText("Threshold")).toBeTruthy();
+  });
+
+  it("editing a slider emits the changed value", () => {
+    const onChange = vi.fn();
+    const dsp = { ...defaultDspConfig(), hpf: { enabled: true, freq_hz: 80 } };
+    render(<InputDspControls dsp={dsp} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("Freq"), { target: { value: "120" } });
+
+    expect(onChange).toHaveBeenCalled();
+    const next = onChange.mock.calls.at(-1)![0];
+    expect(next.hpf.freq_hz).toBe(120);
+  });
+});
+
+describe("BusLimiterControls", () => {
+  it("toggles the limiter on", () => {
+    const onChange = vi.fn();
+    render(<BusLimiterControls limiter={defaultLimiter()} onChange={onChange} />);
+
+    fireEvent.click(screen.getByLabelText("Limiter off"));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].enabled).toBe(true);
+  });
+
+  it("shows ceiling/attack/release only when enabled", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <BusLimiterControls limiter={defaultLimiter()} onChange={onChange} />,
+    );
+    expect(screen.queryByText("Ceiling")).toBeNull();
+
+    rerender(
+      <BusLimiterControls
+        limiter={{ ...defaultLimiter(), enabled: true }}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.getByText("Ceiling")).toBeTruthy();
+    expect(screen.getByText("Release")).toBeTruthy();
+  });
+});

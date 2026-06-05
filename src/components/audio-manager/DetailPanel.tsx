@@ -7,6 +7,8 @@ import type {
   Bus,
   BusId,
   DetailSelection,
+  DspConfig,
+  LimiterConfig,
   Send,
   TapSpec,
 } from "./types";
@@ -20,6 +22,7 @@ interface DetailPanelProps {
   activeRecordings: ActiveRecording[];
   onInputGainChange: (id: string, v: number) => void;
   onInputMuted: (id: string) => void;
+  onInputDsp: (id: string, dsp: DspConfig) => void;
   onRemoveInput: (id: string) => void;
   onToggleSend: (inputId: string, busId: BusId) => void;
   onSendGainChange: (inputId: string, busId: BusId, v: number) => void;
@@ -27,6 +30,8 @@ interface DetailPanelProps {
   onBusVolumeChange: (id: BusId, v: number) => void;
   onBusEnabledChange: (id: BusId) => void;
   onBusMutedChange: (id: BusId) => void;
+  onBusBufferSizeChange: (id: BusId, frames: number | null) => void;
+  onBusLimiterChange: (id: BusId, limiter: LimiterConfig) => void;
   onPickDevice: (id: BusId) => void;
   onSelectInputContext: (id: string) => void;
   onStartRecording: (spec: TapSpec) => void;
@@ -64,6 +69,7 @@ export function DetailPanel(props: DetailPanelProps) {
           onToggleSend={(busId) => props.onToggleSend(input.id, busId)}
           onSendGainChange={(busId, v) => props.onSendGainChange(input.id, busId, v)}
           onSendMuted={(busId, muted) => props.onSendMuted(input.id, busId, muted)}
+          onDspChange={(dsp) => props.onInputDsp(input.id, dsp)}
           onStartRecording={props.onStartRecording}
           onStopRecording={props.onStopRecording}
         />
@@ -93,6 +99,8 @@ export function DetailPanel(props: DetailPanelProps) {
         onToggleMuted={() => props.onBusMutedChange(bus.id)}
         onPickDevice={() => props.onPickDevice(bus.id)}
         onSelectInput={props.onSelectInputContext}
+        onBufferSizeChange={(frames) => props.onBusBufferSizeChange(bus.id, frames)}
+        onLimiterChange={(limiter) => props.onBusLimiterChange(bus.id, limiter)}
         onStartRecording={props.onStartRecording}
         onStopRecording={props.onStopRecording}
       />
