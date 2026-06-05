@@ -288,19 +288,8 @@ pub fn start(
                             })?;
 
                         let in_cfg = input_device.default_input_config()?;
-
-                        if in_cfg.sample_rate() != out_sample_rate {
-                            return Err(EngineError {
-                                message: format!(
-                                    "Sample rate mismatch: input '{in_name}' @ {} Hz vs output \
-                                     '{out_name}' @ {} Hz. Set both devices to the same rate in \
-                                     Windows Sound settings.",
-                                    in_cfg.sample_rate().0,
-                                    out_sample_rate.0
-                                ),
-                            });
-                        }
-
+                        let in_rate = in_cfg.sample_rate().0;
+                        let out_rate = out_sample_rate.0;
                         let in_channels = in_cfg.channels() as usize;
 
                         // Phase 4 supports only mono (1ch) and stereo (2ch) inputs.
@@ -316,14 +305,17 @@ pub fn start(
                         }
 
                         let ring = RingBuffer::<f32>::new(RING_SIZE);
-                        let (mut producer, consumer) = ring.split();
+                        let (producer, consumer) = ring.split();
                         consumers.push((consumer, in_channels));
                         input_channels_meta.push(in_channels as u16);
 
                         let in_stream_cfg: StreamConfig = in_cfg.into();
-                        let input_peak_slots = Arc::clone(&shared_for_thread);
-                        let input_stream = input_device
-                            .build_input_stream(
+                        let err_cb = move |e| eprintln!("[audio] input stream {i} error: {e}");
+                        let input_stream = if in_rate == out_rate {
+                            // Matched rate: push raw samples straight to the ring.
+                            let mut producer = producer;
+                            let peak = Arc::clone(&shared_for_thread);
+                            input_device.build_input_stream(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
@@ -334,12 +326,47 @@ pub fn start(
                                         }
                                         let _ = producer.push(s);
                                     }
-                                    store_max(&input_peak_slots[i].input_peak, block_peak);
+                                    store_max(&peak[i].input_peak, block_peak);
                                 },
-                                move |e| eprintln!("[audio] input stream {i} error: {e}"),
+                                err_cb,
                                 None,
                             )
-                            .map_err(|e| EngineError { message: e.to_string() })?;
+                        } else {
+                            // Rate mismatch: linear-resample to the bus rate (#20).
+                            let mut producer = producer;
+                            let peak = Arc::clone(&shared_for_thread);
+                            let mut resampler = crate::audio::resampler::LinearResampler::new(
+                                in_rate,
+                                out_rate,
+                                in_channels,
+                            );
+                            input_device.build_input_stream(
+                                &in_stream_cfg,
+                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    let mut block_peak = 0.0f32;
+                                    let frames = data.len() / in_channels;
+                                    for fi in 0..frames {
+                                        let frame =
+                                            &data[fi * in_channels..fi * in_channels + in_channels];
+                                        for &s in frame {
+                                            let abs = s.abs();
+                                            if abs > block_peak {
+                                                block_peak = abs;
+                                            }
+                                        }
+                                        resampler.process_frame(frame, |out| {
+                                            for &s in &out[..in_channels] {
+                                                let _ = producer.push(s);
+                                            }
+                                        });
+                                    }
+                                    store_max(&peak[i].input_peak, block_peak);
+                                },
+                                err_cb,
+                                None,
+                            )
+                        }
+                        .map_err(|e| EngineError { message: e.to_string() })?;
 
                         input_streams.push(input_stream);
                     }
