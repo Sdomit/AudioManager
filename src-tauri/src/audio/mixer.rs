@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
-use crate::audio::loopback::{self, LoopbackCapture};
+use crate::audio::loopback::{self, Subscription};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::source::InputSourceSpec;
 
@@ -269,9 +269,10 @@ pub fn start(
             let out_stream_cfg: StreamConfig = out_cfg.into();
 
             let mut input_streams = Vec::new();
-            // Loopback capture threads (system / per-app). Held on the engine
-            // thread so they drop — and join — alongside the cpal streams.
-            let mut loopback_caps: Vec<LoopbackCapture> = Vec::new();
+            // Loopback subscriptions (system / per-app). Held on the engine
+            // thread; dropping them on teardown detaches from the shared capture
+            // and stops it when this was the last subscriber.
+            let mut subscriptions: Vec<Subscription> = Vec::new();
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
@@ -375,37 +376,31 @@ pub fn start(
                     // WASAPI capture thread. `autoconvert` delivers stereo f32 at
                     // the bus rate, so there is no rate gate and no channel check.
                     InputSourceSpec::SystemLoopback => {
-                        let ring = RingBuffer::<f32>::new(RING_SIZE);
-                        let (producer, consumer) = ring.split();
-                        let cap = loopback::start_system_loopback(
+                        let (consumer, ch, sub) = loopback::subscribe_system(
                             out_sample_rate.0,
-                            producer,
                             Arc::clone(&shared_for_thread),
                             i,
                         )?;
-                        consumers.push((consumer, loopback::LOOPBACK_CHANNELS as usize));
-                        input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
-                        loopback_caps.push(cap);
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        subscriptions.push(sub);
                     }
 
                     InputSourceSpec::Process { pid, include_tree } => {
-                        let ring = RingBuffer::<f32>::new(RING_SIZE);
-                        let (producer, consumer) = ring.split();
-                        let cap = loopback::start_process_loopback(
+                        let (consumer, ch, sub) = loopback::subscribe_process(
                             *pid,
                             *include_tree,
                             out_sample_rate.0,
-                            producer,
                             Arc::clone(&shared_for_thread),
                             i,
                         )?;
-                        consumers.push((consumer, loopback::LOOPBACK_CHANNELS as usize));
-                        input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
-                        loopback_caps.push(cap);
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        subscriptions.push(sub);
                     }
 
                     // Stable app id: resolve the image name to a live PID now,
-                    // then capture exactly like the Process arm.
+                    // then subscribe exactly like the Process arm.
                     InputSourceSpec::ProcessByName { image_name, include_tree } => {
                         let pid = crate::audio::session::resolve_pid_for_image(image_name)?
                             .ok_or_else(|| EngineError {
@@ -414,19 +409,16 @@ pub fn start(
                                      Start playback in the app, then enable this input."
                                 ),
                             })?;
-                        let ring = RingBuffer::<f32>::new(RING_SIZE);
-                        let (producer, consumer) = ring.split();
-                        let cap = loopback::start_process_loopback(
+                        let (consumer, ch, sub) = loopback::subscribe_process(
                             pid,
                             *include_tree,
                             out_sample_rate.0,
-                            producer,
                             Arc::clone(&shared_for_thread),
                             i,
                         )?;
-                        consumers.push((consumer, loopback::LOOPBACK_CHANNELS as usize));
-                        input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
-                        loopback_caps.push(cap);
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        subscriptions.push(sub);
                     }
                 }
             }
@@ -589,7 +581,7 @@ pub fn start(
 
             Ok((
                 input_streams,
-                loopback_caps,
+                subscriptions,
                 output_stream,
                 StartInfo {
                     out_channels: out_channels as u16,
@@ -600,16 +592,17 @@ pub fn start(
         })();
 
         match outcome {
-            Ok((input_streams, loopback_caps, output_stream, info)) => {
+            Ok((input_streams, subscriptions, output_stream, info)) => {
                 let _ = result_tx.send(Ok(info));
                 drop(result_tx);
                 let _ = stop_rx.recv();
                 // Stop the realtime callback first, then drop the producers:
-                // cpal streams and loopback capture threads release their
-                // WASAPI handles on this thread (loopback joins its threads).
+                // cpal streams release their WASAPI handles here; dropping each
+                // loopback Subscription detaches it and stops the shared capture
+                // when it was the last subscriber.
                 drop(output_stream);
                 drop(input_streams);
-                drop(loopback_caps);
+                drop(subscriptions);
             }
             Err(e) => {
                 let _ = result_tx.send(Err(e));
