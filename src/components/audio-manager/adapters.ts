@@ -82,10 +82,13 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
 /** Synthetic id scheme shared with the Rust `audio::source` module. */
 const SYS_LOOPBACK_ID = "sys:default";
 const PROC_PREFIX = "proc:";
+const APP_PREFIX = "app:";
 
 function inputKindFor(deviceId: string): InputSourceKind {
   if (deviceId === SYS_LOOPBACK_ID) return "system";
-  if (deviceId.startsWith(PROC_PREFIX)) return "app";
+  if (deviceId.startsWith(PROC_PREFIX) || deviceId.startsWith(APP_PREFIX)) {
+    return "app";
+  }
   return isLikelyVirtualAudioDevice(deviceId) ? "virtual" : "microphone";
 }
 
@@ -96,6 +99,7 @@ function inputKindFor(deviceId: string): InputSourceKind {
  */
 function inputNameFor(deviceId: string): string {
   if (deviceId === SYS_LOOPBACK_ID) return "System sound";
+  if (deviceId.startsWith(APP_PREFIX)) return deviceId.slice(APP_PREFIX.length);
   if (deviceId.startsWith(PROC_PREFIX)) {
     return `App (PID ${deviceId.slice(PROC_PREFIX.length)})`;
   }

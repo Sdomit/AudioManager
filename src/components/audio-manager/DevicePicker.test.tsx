@@ -15,7 +15,7 @@ const INPUTS: DeviceInfo[] = [
   { id: "amvc-cap-1", name: "AudioManager Cable 1 Recording", default_sample_rate: 48000, channels: 2, is_default: false },
 ];
 
-const SESSIONS = [{ pid: 4242, name: "chrome.exe", source_id: "proc:4242" }];
+const SESSIONS = [{ pid: 4242, name: "chrome.exe", source_id: "app:chrome.exe" }];
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string) => {
@@ -184,7 +184,7 @@ describe("DevicePicker (input, loopback sources)", () => {
     // App session resolved from list_audio_sessions.
     const app = await screen.findByText("chrome.exe");
     fireEvent.click(app.closest("button")!);
-    expect(onPick).toHaveBeenCalledWith("proc:4242");
+    expect(onPick).toHaveBeenCalledWith("app:chrome.exe");
 
     // "System sound" is a static loopback entry mapped to sys:default.
     const sys = screen.getByText("System sound");

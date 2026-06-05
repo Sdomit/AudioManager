@@ -376,6 +376,31 @@ pub fn start(
                         input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
                         loopback_caps.push(cap);
                     }
+
+                    // Stable app id: resolve the image name to a live PID now,
+                    // then capture exactly like the Process arm.
+                    InputSourceSpec::ProcessByName { image_name, include_tree } => {
+                        let pid = crate::audio::session::resolve_pid_for_image(image_name)?
+                            .ok_or_else(|| EngineError {
+                                message: format!(
+                                    "App '{image_name}' is not currently playing audio. \
+                                     Start playback in the app, then enable this input."
+                                ),
+                            })?;
+                        let ring = RingBuffer::<f32>::new(RING_SIZE);
+                        let (producer, consumer) = ring.split();
+                        let cap = loopback::start_process_loopback(
+                            pid,
+                            *include_tree,
+                            out_sample_rate.0,
+                            producer,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, loopback::LOOPBACK_CHANNELS as usize));
+                        input_channels_meta.push(loopback::LOOPBACK_CHANNELS);
+                        loopback_caps.push(cap);
+                    }
                 }
             }
 

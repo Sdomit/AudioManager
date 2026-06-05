@@ -197,9 +197,9 @@ fn ensure_input_source(device_id: &str) -> Result<(), EngineError> {
                 Err(EngineError { message: format!("Input device not found: {name}") })
             }
         }
-        InputSourceSpec::SystemLoopback | InputSourceSpec::Process { .. } => {
-            ensure_loopback_supported()
-        }
+        InputSourceSpec::SystemLoopback
+        | InputSourceSpec::Process { .. }
+        | InputSourceSpec::ProcessByName { .. } => ensure_loopback_supported(),
     }
 }
 
