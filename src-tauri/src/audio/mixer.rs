@@ -243,11 +243,16 @@ fn resync_drop(fill: usize, need: usize, target_backlog: usize, max_backlog: usi
     }
 }
 
+/// Optional fixed output-buffer size in frames. `None` lets the driver
+/// choose (CPAL `BufferSize::Default`). A fixed size such as 128 or 256
+/// sets a lower, more deterministic callback period at the cost of higher
+/// CPU overhead and potential glitching on slow machines (#35).
 pub fn start(
     output_name: &str,
     inputs: &[MixerInput],
     bus_volume: f32,
     bus_muted: bool,
+    buffer_size_frames: Option<u32>,
 ) -> Result<MixerEngine, EngineError> {
     if inputs.is_empty() {
         return Err(EngineError {
@@ -328,7 +333,10 @@ pub fn start(
                 });
             }
 
-            let out_stream_cfg: StreamConfig = out_cfg.into();
+            let mut out_stream_cfg: StreamConfig = out_cfg.into();
+            if let Some(frames) = buffer_size_frames {
+                out_stream_cfg.buffer_size = cpal::BufferSize::Fixed(frames);
+            }
 
             let mut input_streams = Vec::new();
             // Loopback subscriptions (system / per-app). Held on the engine
@@ -889,7 +897,7 @@ mod tests {
 
     #[test]
     fn start_rejects_empty_inputs() {
-        let result = start("fake_output", &[], 1.0, false);
+        let result = start("fake_output", &[], 1.0, false, None);
         assert!(result.is_err());
         assert!(result.err().unwrap().message.contains("No inputs"));
     }
@@ -898,7 +906,7 @@ mod tests {
     fn start_rejects_more_than_max_inputs() {
         // MAX_INPUTS + 1 inputs — must fail before any CPAL call.
         let inputs = fake_inputs(MAX_INPUTS + 1);
-        let result = start("fake_output", &inputs, 1.0, false);
+        let result = start("fake_output", &inputs, 1.0, false, None);
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         assert!(
@@ -912,7 +920,7 @@ mod tests {
         // MAX_INPUTS inputs must pass the limit check and fail on the CPAL
         // device lookup ("fake_output" not found), not on the limit guard.
         let inputs = fake_inputs(MAX_INPUTS);
-        let result = start("fake_output", &inputs, 1.0, false);
+        let result = start("fake_output", &inputs, 1.0, false, None);
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         // Must NOT be the limit error — should be a device-not-found error.

@@ -151,6 +151,8 @@ export interface BusStatus {
   /** Dropout counters since last poll. 0 when no engine or no dropouts. */
   underruns?: number;
   overruns?: number;
+  /** Output callback buffer size in frames. null = driver default (#35). */
+  buffer_size_frames?: number | null;
 }
 
 export interface SystemStatus {

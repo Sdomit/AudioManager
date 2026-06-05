@@ -66,6 +66,11 @@ pub struct BusConfig {
     /// saved before #32 deserialize as a bypassed chain.
     #[serde(default)]
     pub dsp: BusDspConfig,
+    /// Output callback buffer size in frames. `None` = CPAL default (driver
+    /// chooses). Set to e.g. 128 or 256 for lower device-callback latency (#35).
+    /// `serde(default)` so pre-#35 configs load as None (driver default).
+    #[serde(default)]
+    pub buffer_size_frames: Option<u32>,
 }
 
 impl BusConfig {
@@ -79,6 +84,7 @@ impl BusConfig {
             muted: false,
             enabled: false,
             dsp: BusDspConfig::default(),
+            buffer_size_frames: None,
         }
     }
 
@@ -114,6 +120,9 @@ pub struct BusStatus {
     /// call so the frontend sees per-interval counts, not lifetime totals.
     pub underruns: u64,
     pub overruns: u64,
+    /// Current output buffer size setting, mirrored from `BusConfig`. `None`
+    /// means the driver default is in use.
+    pub buffer_size_frames: Option<u32>,
 }
 
 /// Per-bus runtime state owned by `AppInner`.
@@ -179,6 +188,7 @@ impl BusRuntime {
             dsp: self.config.dsp.clone(),
             underruns: 0,
             overruns: 0,
+            buffer_size_frames: self.config.buffer_size_frames,
         }
     }
 }

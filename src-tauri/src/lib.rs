@@ -109,7 +109,7 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
     // Centralized teardown: stops recorders first, then drops the engine
     // so WASAPI handles are released before the restart attempt.
     tear_down_engine(inner, bus_id);
-    let (enabled, output_id, bus_vol, bus_muted) = {
+    let (enabled, output_id, bus_vol, bus_muted, buffer_size_frames) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
         })?;
@@ -118,6 +118,7 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
             bus.config.output_device_id.clone(),
             bus.config.volume,
             bus.config.muted,
+            bus.config.buffer_size_frames,
         )
     };
 
@@ -142,7 +143,7 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
         })
         .collect();
 
-    match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted) {
+    match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted, buffer_size_frames) {
         Ok(engine) => {
             let bus = inner.buses.get_mut(&bus_id).expect("bus exists");
             bus.engine = Some(engine);
@@ -880,6 +881,38 @@ fn rename_bus(
     Ok(bus.read_status())
 }
 
+/// Set the output callback buffer size in frames. `None` reverts to the driver
+/// default. Changes take effect on the next engine start (i.e. this triggers a
+/// rebuild when the bus is running). Accepted range: 32–8192 frames (#35).
+#[tauri::command]
+fn set_bus_buffer_size(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    frames: Option<u32>,
+) -> Result<BusStatus, EngineError> {
+    if let Some(f) = frames {
+        if !(32..=8192).contains(&f) {
+            return Err(EngineError {
+                message: format!("buffer_size_frames must be in [32, 8192], got {f}"),
+            });
+        }
+    }
+    let mut inner = state.inner.lock().unwrap();
+    {
+        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
+            message: format!("Unknown bus: {bus_id:?}"),
+        })?;
+        bus.config.buffer_size_frames = frames;
+    }
+    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+        let _ = store_last_error(&mut inner, err.clone());
+        let bus = inner.buses.get(&bus_id).expect("bus exists");
+        return Ok(bus.read_status());
+    }
+    let bus = inner.buses.get(&bus_id).expect("bus exists");
+    Ok(bus.read_status())
+}
+
 // ── Recording ─────────────────────────────────────────────────────────────────
 
 /// Resolve target engine + callback tap kind + WAV header info for a spec.
@@ -1258,6 +1291,7 @@ pub fn run() {
             set_bus_volume,
             set_bus_enabled,
             rename_bus,
+            set_bus_buffer_size,
             start_recording,
             start_master_recording,
             stop_recording,

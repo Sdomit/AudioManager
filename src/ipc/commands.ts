@@ -204,3 +204,20 @@ export const queryAmvcHelper = (): Promise<AmvcQueryResult> =>
 /** Spawn the amvc-helper installer in the background. */
 export const launchAmvcInstaller = (): Promise<void> =>
   invoke<void>("launch_amvc_installer");
+
+/** Rename the four AMVC render endpoints to match AudioManager bus names. */
+export const amvcRenameToBusNames = (
+  a1: string,
+  a2: string,
+  b1: string,
+  b2: string,
+): Promise<void> =>
+  invoke<void>("amvc_rename_to_bus_names", { a1, a2, b1, b2 });
+
+/** Set the output callback buffer size in frames for a bus. null = driver
+ *  default. Valid range: 32–8192. Triggers an engine rebuild if running. */
+export const setBusBufferSize = (
+  busId: BusId,
+  frames: number | null,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_buffer_size", { busId, frames });
