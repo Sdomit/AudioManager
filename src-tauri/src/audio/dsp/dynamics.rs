@@ -1,15 +1,55 @@
 use super::DspEffect;
 
 #[inline(always)]
-fn db_to_lin(db: f32) -> f32 { 10.0_f32.powf(db / 20.0) }
+fn db_to_lin(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
 
 #[inline(always)]
-fn lin_to_db(lin: f32) -> f32 { 20.0 * (lin + 1e-10_f32).log10() }
+fn lin_to_db(lin: f32) -> f32 {
+    20.0 * (lin + 1e-10_f32).log10()
+}
 
 #[inline(always)]
 fn ms_to_coeff(ms: f32, sr: f32) -> f32 {
-    if ms <= 0.0 { return 0.0; }
+    if ms <= 0.0 {
+        return 0.0;
+    }
     (-1.0 / (ms * 0.001 * sr)).exp()
+}
+
+/// Compressor coefficients precomputed on the IPC thread so the realtime
+/// callback retunes via [`Compressor::set_coeffs`] without running `exp`/`powf`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompressorCoeffs {
+    pub threshold_db: f32,
+    pub ratio: f32,
+    pub makeup_lin: f32,
+    pub env_attack: f32,
+    pub env_release: f32,
+    pub gain_attack: f32,
+    pub gain_release: f32,
+}
+
+impl CompressorCoeffs {
+    pub fn compute(
+        threshold_db: f32,
+        ratio: f32,
+        attack_ms: f32,
+        release_ms: f32,
+        makeup_db: f32,
+        sample_rate: f32,
+    ) -> Self {
+        Self {
+            threshold_db,
+            ratio: ratio.max(1.0),
+            makeup_lin: db_to_lin(makeup_db),
+            env_attack: ms_to_coeff(attack_ms, sample_rate),
+            env_release: ms_to_coeff(release_ms, sample_rate),
+            gain_attack: ms_to_coeff(attack_ms, sample_rate),
+            gain_release: ms_to_coeff(release_ms, sample_rate),
+        }
+    }
 }
 
 /// Feed-forward VCA compressor with peak envelope detection.
@@ -53,7 +93,21 @@ impl Compressor {
         }
     }
 
-    pub fn set_enabled(&mut self, v: bool) { self.enabled = v; }
+    pub fn set_enabled(&mut self, v: bool) {
+        self.enabled = v;
+    }
+
+    /// Retune from precomputed coefficients in place, preserving the envelope
+    /// and current gain reduction so a live parameter change does not pop.
+    pub fn set_coeffs(&mut self, c: CompressorCoeffs) {
+        self.threshold_db = c.threshold_db;
+        self.ratio = c.ratio;
+        self.makeup_lin = c.makeup_lin;
+        self.env_attack = c.env_attack;
+        self.env_release = c.env_release;
+        self.gain_attack = c.gain_attack;
+        self.gain_release = c.gain_release;
+    }
 }
 
 impl DspEffect for Compressor {
@@ -66,7 +120,11 @@ impl DspEffect for Compressor {
         };
 
         // Peak envelope follower with separate attack / release.
-        let env_coeff = if peak > self.envelope { self.env_attack } else { self.env_release };
+        let env_coeff = if peak > self.envelope {
+            self.env_attack
+        } else {
+            self.env_release
+        };
         self.envelope = self.envelope * env_coeff + peak * (1.0 - env_coeff);
 
         // Gain reduction in dB (hard knee).
@@ -78,12 +136,18 @@ impl DspEffect for Compressor {
         };
 
         // Smooth gain reduction changes (attack when reducing, release when recovering).
-        let g_coeff = if target_gain_db < self.gain_db { self.gain_attack } else { self.gain_release };
+        let g_coeff = if target_gain_db < self.gain_db {
+            self.gain_attack
+        } else {
+            self.gain_release
+        };
         self.gain_db = self.gain_db * g_coeff + target_gain_db * (1.0 - g_coeff);
 
         let gain = db_to_lin(self.gain_db) * self.makeup_lin;
         buf[0] *= gain;
-        if channels == 2 { buf[1] *= gain; }
+        if channels == 2 {
+            buf[1] *= gain;
+        }
     }
 
     fn reset(&mut self) {
@@ -91,7 +155,9 @@ impl DspEffect for Compressor {
         self.gain_db = 0.0;
     }
 
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 }
 
 /// Brick-wall peak limiter. Ratio = ∞, threshold settable.
@@ -104,6 +170,24 @@ pub struct Limiter {
     release: f32,
     envelope: f32,
     enabled: bool,
+}
+
+/// Limiter coefficients precomputed on the IPC thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LimiterCoeffs {
+    pub threshold_lin: f32,
+    pub attack: f32,
+    pub release: f32,
+}
+
+impl LimiterCoeffs {
+    pub fn compute(threshold_db: f32, attack_ms: f32, release_ms: f32, sample_rate: f32) -> Self {
+        Self {
+            threshold_lin: db_to_lin(threshold_db),
+            attack: ms_to_coeff(attack_ms, sample_rate),
+            release: ms_to_coeff(release_ms, sample_rate),
+        }
+    }
 }
 
 impl Limiter {
@@ -122,7 +206,16 @@ impl Limiter {
         Self::new(-0.3, 0.5, 100.0, sample_rate)
     }
 
-    pub fn set_enabled(&mut self, v: bool) { self.enabled = v; }
+    pub fn set_enabled(&mut self, v: bool) {
+        self.enabled = v;
+    }
+
+    /// Retune from precomputed coefficients in place, preserving the envelope.
+    pub fn set_coeffs(&mut self, c: LimiterCoeffs) {
+        self.threshold_lin = c.threshold_lin;
+        self.attack = c.attack;
+        self.release = c.release;
+    }
 }
 
 impl DspEffect for Limiter {
@@ -134,16 +227,76 @@ impl DspEffect for Limiter {
             buf[0].abs()
         };
 
-        let coeff = if peak > self.envelope { self.attack } else { self.release };
+        let coeff = if peak > self.envelope {
+            self.attack
+        } else {
+            self.release
+        };
         self.envelope = self.envelope * coeff + peak * (1.0 - coeff);
 
         if self.envelope > self.threshold_lin {
             let gain = self.threshold_lin / self.envelope;
             buf[0] *= gain;
-            if channels == 2 { buf[1] *= gain; }
+            if channels == 2 {
+                buf[1] *= gain;
+            }
         }
     }
 
-    fn reset(&mut self) { self.envelope = 0.0; }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comp_compute_matches_new() {
+        let c = CompressorCoeffs::compute(-18.0, 4.0, 5.0, 80.0, 0.0, 48_000.0);
+        let r = Compressor::new(-18.0, 4.0, 5.0, 80.0, 0.0, 48_000.0);
+        assert_eq!(c.threshold_db, r.threshold_db);
+        assert_eq!(c.ratio, r.ratio);
+        assert!((c.makeup_lin - r.makeup_lin).abs() < 1e-9);
+        assert!((c.env_attack - r.env_attack).abs() < 1e-9);
+        assert!((c.gain_release - r.gain_release).abs() < 1e-9);
+    }
+
+    #[test]
+    fn comp_compute_clamps_ratio() {
+        let c = CompressorCoeffs::compute(-18.0, 0.1, 5.0, 80.0, 0.0, 48_000.0);
+        assert_eq!(c.ratio, 1.0);
+    }
+
+    #[test]
+    fn comp_set_coeffs_preserves_envelope() {
+        let mut comp = Compressor::new(-18.0, 4.0, 5.0, 80.0, 0.0, 48_000.0);
+        for _ in 0..64 {
+            comp.process(&mut [0.9, 0.9], 2);
+        }
+        let saved = (comp.envelope, comp.gain_db);
+        comp.set_coeffs(CompressorCoeffs::compute(
+            -24.0, 8.0, 2.0, 120.0, 3.0, 48_000.0,
+        ));
+        assert_eq!((comp.envelope, comp.gain_db), saved);
+        assert_eq!(comp.ratio, 8.0);
+    }
+
+    #[test]
+    fn limiter_compute_and_set_preserves_envelope() {
+        let lc = LimiterCoeffs::compute(-1.0, 0.5, 100.0, 48_000.0);
+        assert!((lc.threshold_lin - db_to_lin(-1.0)).abs() < 1e-9);
+        let mut lim = Limiter::output(48_000.0);
+        for _ in 0..64 {
+            lim.process(&mut [0.95, 0.95], 2);
+        }
+        let env = lim.envelope;
+        lim.set_coeffs(lc);
+        assert_eq!(lim.envelope, env);
+        assert!((lim.threshold_lin - db_to_lin(-1.0)).abs() < 1e-9);
+    }
 }
