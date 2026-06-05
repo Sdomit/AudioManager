@@ -71,6 +71,69 @@ export interface PresetLoadResult {
 /** Fixed bus identifier. Serialized as a plain string by the backend. */
 export type BusId = "A1" | "A2" | "B1" | "B2";
 
+// ── DSP chain config (mirrors src-tauri/src/audio/dsp/config.rs) ─────────────
+
+/** High-pass filter. */
+export interface HpfConfig {
+  enabled: boolean;
+  freq_hz: number;
+}
+
+/** Noise gate / downward expander. */
+export interface GateConfig {
+  enabled: boolean;
+  threshold_db: number;
+  attack_ms: number;
+  release_ms: number;
+  hold_ms: number;
+}
+
+/** One parametric (peaking) EQ band. */
+export interface EqBand {
+  enabled: boolean;
+  freq_hz: number;
+  q: number;
+  gain_db: number;
+}
+
+/** Fixed-band parametric EQ (backend normalizes to MAX_EQ_BANDS = 4). */
+export interface EqConfig {
+  enabled: boolean;
+  bands: EqBand[];
+}
+
+/** Feed-forward compressor. `makeup_db` is a ±24 dB trim. */
+export interface CompressorConfig {
+  enabled: boolean;
+  threshold_db: number;
+  ratio: number;
+  attack_ms: number;
+  release_ms: number;
+  makeup_db: number;
+}
+
+/** Brick-wall peak limiter. */
+export interface LimiterConfig {
+  enabled: boolean;
+  threshold_db: number;
+  attack_ms: number;
+  release_ms: number;
+}
+
+/** Per-input effect chain: HPF -> Gate -> EQ -> Compressor -> Limiter. */
+export interface DspConfig {
+  hpf: HpfConfig;
+  gate: GateConfig;
+  eq: EqConfig;
+  compressor: CompressorConfig;
+  limiter: LimiterConfig;
+}
+
+/** Per-bus effect chain (final limiter in #32). */
+export interface BusDspConfig {
+  limiter: LimiterConfig;
+}
+
 export interface BusStatus {
   id: BusId;
   name: string;
@@ -83,6 +146,8 @@ export interface BusStatus {
   output_peak: number;
   clipped_recently: boolean;
   last_error: string | null;
+  /** Per-bus DSP chain. Optional for back-compat with pre-#32 payloads. */
+  dsp?: BusDspConfig;
 }
 
 export interface SystemStatus {
@@ -104,6 +169,8 @@ export interface InputChannel {
   gain: number;
   muted: boolean;
   sends: InputSend[];
+  /** Per-input DSP chain. Optional for back-compat with pre-#32 payloads. */
+  dsp?: DspConfig;
 }
 
 export interface InputPeakStatus {
