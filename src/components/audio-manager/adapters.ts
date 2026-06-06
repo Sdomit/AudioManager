@@ -17,7 +17,7 @@ import type {
   PresetSummary,
 } from "../../types/engine";
 import { isLikelyVirtualAudioDevice } from "../../utils/devices";
-import { defaultDspConfig, defaultLimiter } from "./dspDefaults";
+import { defaultDspConfig, defaultEq, defaultLimiter } from "./dspDefaults";
 import type {
   AudioInput,
   Bus,
@@ -80,6 +80,7 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
     bufferSizeFrames: b.buffer_size_frames ?? null,
     underruns: b.underruns ?? 0,
     overruns: b.overruns ?? 0,
+    eq: b.dsp?.eq ?? defaultEq(),
     limiter: b.dsp?.limiter ?? defaultLimiter(),
   };
 }

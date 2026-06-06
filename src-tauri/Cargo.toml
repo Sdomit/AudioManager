@@ -27,6 +27,9 @@ ringbuf = "0.2"
 hound = "3.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# RNNoise neural denoiser (pure-Rust port). Library only — `default-features
+# = false` drops the CLI `bin`/`dasp` deps (clap, hound, anyhow). #37
+nnnoiseless = { version = "0.5.2", default-features = false }
 
 # WASAPI loopback capture (system + per-process). Windows-only; pulls in the
 # `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).

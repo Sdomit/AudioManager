@@ -88,13 +88,18 @@ export function CablePanel({ open }: CablePanelProps) {
   } else if (result?.kind === "ok") {
     const { status, found, expected } = result;
 
-    // Device explicitly disabled: driver is installed but endpoints are hidden.
-    // evaluate() returns needs-repair in this case (found=0, in_store=true),
-    // so check device_enabled before the status switch.
+    // Device marked disabled (ConfigFlags bit 0 set). evaluate() returns
+    // needs-repair when found=0, so check device_enabled before the status switch.
+    // Distinguish pre-reboot (endpoints still running) from post-reboot (gone).
     if (result.device_enabled === false && result.driver_in_store) {
       tone = "warn";
-      headline = "Disabled";
-      detail = "Driver installed — endpoints hidden from Windows Sound settings.";
+      if (result.found > 0) {
+        headline = "Disable pending reboot";
+        detail = "Endpoints will be hidden from Windows Sound after next reboot.";
+      } else {
+        headline = "Disabled";
+        detail = "Driver installed — endpoints hidden from Windows Sound settings.";
+      }
     } else {
       switch (status) {
         case "installed-healthy":
@@ -164,7 +169,7 @@ export function CablePanel({ open }: CablePanelProps) {
             className={styles.secondaryBtn}
             onClick={() => void toggleDevice(false)}
             disabled={togglingDevice || checking}
-            title="Hide all AMVC endpoints from Windows Sound settings"
+            title="Hide all AMVC endpoints from Windows Sound settings (requires reboot to apply)"
           >
             {togglingDevice ? "Disabling…" : "Disable from Windows"}
           </button>

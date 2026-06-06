@@ -5,9 +5,9 @@
  * shapes returned by your Rust backend. Adapt in tauriCommands.ts when wiring.
  */
 
-import type { DspConfig, LimiterConfig } from "../../types/engine";
+import type { DspConfig, EqConfig, LimiterConfig } from "../../types/engine";
 
-export type { DspConfig, LimiterConfig } from "../../types/engine";
+export type { DspConfig, EqConfig, LimiterConfig } from "../../types/engine";
 
 export type BusId = "A1" | "A2" | "B1" | "B2";
 
@@ -42,6 +42,8 @@ export interface Bus {
   /** Dropout sample counts since the last poll (#35/#36 telemetry). */
   underruns: number;
   overruns: number;
+  /** Per-bus parametric EQ (post-sum). */
+  eq: EqConfig;
   /** Per-bus final limiter (#32). */
   limiter: LimiterConfig;
 }
@@ -153,6 +155,7 @@ export interface AudioManagerActions {
   setBusBufferSize: (id: BusId, frames: number | null) => void;
   /** Update the per-bus final limiter (#32). Live, no restart. */
   setBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
+  setBusEq: (id: BusId, eq: EqConfig) => void;
   /**
    * Override the bus visual role (icon + accent color). Stored
    * client-side in localStorage, not in the backend or preset.

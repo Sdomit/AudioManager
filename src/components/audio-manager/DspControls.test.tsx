@@ -10,9 +10,31 @@ afterEach(cleanup);
 describe("InputDspControls", () => {
   it("renders every effect in the chain", () => {
     render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
-    for (const title of ["High-pass", "Noise gate", "EQ", "Compressor", "Limiter"]) {
+    for (const title of [
+      "Noise suppression (AI)",
+      "High-pass",
+      "Noise gate",
+      "EQ",
+      "Compressor",
+      "Limiter",
+    ]) {
       expect(screen.getByText(title)).toBeTruthy();
     }
+  });
+
+  it("toggling the AI denoiser emits denoise.enabled, preserving the chain", () => {
+    const onChange = vi.fn();
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+
+    fireEvent.click(screen.getByLabelText("Noise suppression (AI) off"));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0];
+    expect(next.denoise.enabled).toBe(true);
+    expect(next.denoise.backend).toBe("rnnoise");
+    // Untouched effects preserved.
+    expect(next.hpf.enabled).toBe(false);
+    expect(next.limiter.threshold_db).toBe(-1);
   });
 
   it("toggling an effect emits the full config with that effect enabled", () => {
@@ -54,7 +76,8 @@ describe("InputDspControls", () => {
     fireEvent.change(screen.getByLabelText("Freq"), { target: { value: "120" } });
 
     expect(onChange).toHaveBeenCalled();
-    const next = onChange.mock.calls.at(-1)![0];
+    const calls = onChange.mock.calls;
+    const next = calls[calls.length - 1][0];
     expect(next.hpf.freq_hz).toBe(120);
   });
 });

@@ -17,7 +17,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import * as ipc from "../../ipc/commands";
 import { busRoleFor, uiVolumeToBackend } from "./adapters";
-import { defaultDspConfig, defaultLimiter } from "./dspDefaults";
+import { defaultDspConfig, defaultEq, defaultLimiter } from "./dspDefaults";
 import { mockStreamSetupSteps } from "./mockData";
 import {
   hydrate as fetchHydrate,
@@ -37,6 +37,7 @@ import type {
   Density,
   DetailSelection,
   DspConfig,
+  EqConfig,
   LimiterConfig,
   Preset,
   RecordingFile,
@@ -138,6 +139,7 @@ type Action =
   | { type: "set_bus_role"; id: BusId; role: BusRole | null }
   | { type: "set_bus_buffer_size"; id: BusId; frames: number | null }
   | { type: "set_bus_limiter"; id: BusId; limiter: LimiterConfig }
+  | { type: "set_bus_eq"; id: BusId; eq: EqConfig }
   | { type: "set_input_gain"; id: string; gain: number }
   | { type: "set_input_muted"; id: string; muted: boolean }
   | { type: "set_input_dsp"; id: string; dsp: DspConfig }
@@ -234,6 +236,9 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
 
     case "set_bus_limiter":
       return updateBus(state, action.id, (b) => ({ ...b, limiter: action.limiter }));
+
+    case "set_bus_eq":
+      return updateBus(state, action.id, (b) => ({ ...b, eq: action.eq }));
 
     case "set_input_gain":
       return updateInput(state, action.id, (i) => ({ ...i, gain: clamp01(action.gain) }));
@@ -393,6 +398,7 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
               bufferSizeFrames: null,
               underruns: 0,
               overruns: 0,
+              eq: defaultEq(),
               limiter: defaultLimiter(),
             };
         return {
@@ -847,10 +853,22 @@ export function useAudioManager(): UseAudioManager {
   const setBusLimiter = useCallback(
     (id: BusId, limiter: LimiterConfig) => {
       dispatch({ type: "set_bus_limiter", id, limiter });
-      scheduleWrite(`bus-limiter:${id}`, () => {
+      scheduleWrite(`bus-dsp:${id}`, () => {
         const bus = getBus(id);
         if (!bus) return Promise.resolve();
-        return ipc.updateBusDsp(id, { limiter: bus.limiter });
+        return ipc.updateBusDsp(id, { eq: bus.eq, limiter: bus.limiter });
+      });
+    },
+    [getBus, scheduleWrite],
+  );
+
+  const setBusEq = useCallback(
+    (id: BusId, eq: EqConfig) => {
+      dispatch({ type: "set_bus_eq", id, eq });
+      scheduleWrite(`bus-dsp:${id}`, () => {
+        const bus = getBus(id);
+        if (!bus) return Promise.resolve();
+        return ipc.updateBusDsp(id, { eq: bus.eq, limiter: bus.limiter });
       });
     },
     [getBus, scheduleWrite],
@@ -1314,6 +1332,7 @@ export function useAudioManager(): UseAudioManager {
     setBusRoleOverride,
     setBusBufferSize,
     setBusLimiter,
+    setBusEq,
     startRecording,
     startMasterRecording,
     stopRecording,

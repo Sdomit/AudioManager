@@ -9,7 +9,9 @@
  */
 
 import type {
+  BandKind,
   CompressorConfig,
+  DenoiseConfig,
   DspConfig,
   EqBand,
   EqConfig,
@@ -19,6 +21,35 @@ import type {
 } from "../../types/engine";
 
 export const MAX_EQ_BANDS = 4;
+
+/** Selectable EQ band shapes, in menu order. */
+export const BAND_KINDS: ReadonlyArray<{ value: BandKind; label: string }> = [
+  { value: "peaking", label: "Bell" },
+  { value: "low_shelf", label: "Low shelf" },
+  { value: "high_shelf", label: "High shelf" },
+  { value: "low_pass", label: "Low pass" },
+  { value: "high_pass", label: "High pass" },
+  { value: "notch", label: "Notch" },
+];
+
+/** Whether a band shape uses the gain control (peaking + shelves). */
+export function bandUsesGain(kind: BandKind): boolean {
+  return kind === "peaking" || kind === "low_shelf" || kind === "high_shelf";
+}
+
+/** Whether a band shape uses the Q control (peaking + cuts + notch). */
+export function bandUsesQ(kind: BandKind): boolean {
+  return (
+    kind === "peaking" ||
+    kind === "low_pass" ||
+    kind === "high_pass" ||
+    kind === "notch"
+  );
+}
+
+export function defaultDenoise(): DenoiseConfig {
+  return { enabled: false, backend: "rnnoise" };
+}
 
 export function defaultHpf(): HpfConfig {
   return { enabled: false, freq_hz: 80 };
@@ -35,11 +66,12 @@ export function defaultGate(): GateConfig {
 }
 
 export function defaultEqBands(): EqBand[] {
+  // Console-style layout: low shelf, two sweepable bells, high shelf.
   return [
-    { enabled: false, freq_hz: 100, q: 0.9, gain_db: 0 },
-    { enabled: false, freq_hz: 400, q: 1.0, gain_db: 0 },
-    { enabled: false, freq_hz: 3000, q: 1.0, gain_db: 0 },
-    { enabled: false, freq_hz: 8000, q: 0.9, gain_db: 0 },
+    { enabled: false, kind: "low_shelf", freq_hz: 100, q: 0.9, gain_db: 0 },
+    { enabled: false, kind: "peaking", freq_hz: 400, q: 1.0, gain_db: 0 },
+    { enabled: false, kind: "peaking", freq_hz: 3000, q: 1.0, gain_db: 0 },
+    { enabled: false, kind: "high_shelf", freq_hz: 8000, q: 0.9, gain_db: 0 },
   ];
 }
 
@@ -64,6 +96,7 @@ export function defaultLimiter(): LimiterConfig {
 
 export function defaultDspConfig(): DspConfig {
   return {
+    denoise: defaultDenoise(),
     hpf: defaultHpf(),
     gate: defaultGate(),
     eq: defaultEq(),

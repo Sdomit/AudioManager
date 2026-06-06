@@ -45,7 +45,9 @@ pub enum AmvcQueryResult {
 /// to a safe value (0 for counts, false for flags, [] for lists) so a helper
 /// that omits a field still yields a usable `Ok` result. This matches the
 /// lenient TypeScript parser in `src/utils/amvc.ts`.
-fn default_expected() -> u32 { 6 }
+fn default_expected() -> u32 {
+    6
+}
 
 #[derive(serde::Deserialize)]
 struct HelperOutput {
@@ -193,7 +195,11 @@ pub async fn launch_amvc_installer() -> Result<(), String> {
 /// Returns an error string if the helper is absent or the operation fails.
 #[tauri::command]
 pub async fn amvc_set_device_enabled(enabled: bool) -> Result<(), String> {
-    let op = if enabled { "enable-device" } else { "disable-device" };
+    let op = if enabled {
+        "enable-device"
+    } else {
+        "disable-device"
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let out = std::process::Command::new("amvc-helper")
             .args([op, "--execute"])
@@ -254,14 +260,23 @@ mod tests {
             "missing": []
         }"#;
         match parse(json) {
-            AmvcQueryResult::Ok { status, found, expected, detected, missing, .. } => {
+            AmvcQueryResult::Ok {
+                status,
+                found,
+                expected,
+                detected,
+                missing,
+                ..
+            } => {
                 assert_eq!(status, "installed-healthy");
                 assert_eq!(found, 6);
                 assert_eq!(expected, 6);
                 assert_eq!(detected.len(), 6);
                 assert!(missing.is_empty());
             }
-            AmvcQueryResult::Unavailable { reason } => panic!("expected Ok, got Unavailable: {reason}"),
+            AmvcQueryResult::Unavailable { reason } => {
+                panic!("expected Ok, got Unavailable: {reason}")
+            }
         }
     }
 
@@ -284,7 +299,12 @@ mod tests {
             ]
         }"#;
         match parse(json) {
-            AmvcQueryResult::Ok { status, found, missing, .. } => {
+            AmvcQueryResult::Ok {
+                status,
+                found,
+                missing,
+                ..
+            } => {
                 assert_eq!(status, "not-installed");
                 assert_eq!(found, 0);
                 assert_eq!(missing.len(), 6);
@@ -314,7 +334,17 @@ mod tests {
         // Only `status` is required. Everything else falls back to safe defaults
         // (matches the lenient TypeScript parser).
         match parse(r#"{"status": "not-installed"}"#) {
-            AmvcQueryResult::Ok { status, found, expected, driver_in_store, reboot_pending, names_aligned, detected, missing } => {
+            AmvcQueryResult::Ok {
+                status,
+                found,
+                expected,
+                driver_in_store,
+                reboot_pending,
+                names_aligned,
+                detected,
+                missing,
+                device_enabled,
+            } => {
                 assert_eq!(status, "not-installed");
                 assert_eq!(found, 0);
                 assert_eq!(expected, 6);
@@ -323,6 +353,7 @@ mod tests {
                 assert!(!names_aligned);
                 assert!(detected.is_empty());
                 assert!(missing.is_empty());
+                assert!(device_enabled.is_none());
             }
             AmvcQueryResult::Unavailable { reason } => {
                 panic!("expected Ok with defaults, got Unavailable: {reason}")

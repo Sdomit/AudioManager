@@ -917,6 +917,48 @@ mod tests {
     }
 
     #[test]
+    fn preset_round_trips_eq_band_kind_and_bus_eq() {
+        use crate::audio::dsp::BandKind;
+        // Input EQ with a non-default band shape.
+        let mut dsp = DspConfig::default();
+        dsp.eq.enabled = true;
+        dsp.eq.bands[3].enabled = true;
+        dsp.eq.bands[3].kind = BandKind::HighShelf;
+        dsp.eq.bands[3].gain_db = -3.0;
+        // Bus EQ enabled with a low-pass band.
+        let mut bus_dsp = BusDspConfig::default();
+        bus_dsp.eq.enabled = true;
+        bus_dsp.eq.bands[2].enabled = true;
+        bus_dsp.eq.bands[2].kind = BandKind::LowPass;
+
+        let input = PresetInputV2 {
+            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            gain: 1.0,
+            muted: false,
+            sends: default_sends(),
+            dsp: dsp.clone(),
+        };
+        let bus = PresetBusV2 {
+            id: BusId::A1,
+            name: "A1".to_string(),
+            output: None,
+            volume: 1.0,
+            muted: false,
+            enabled: false,
+            dsp: bus_dsp.clone(),
+            buffer_size_frames: None,
+        };
+        let input_back: PresetInputV2 =
+            serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
+        let bus_back: PresetBusV2 =
+            serde_json::from_str(&serde_json::to_string(&bus).unwrap()).unwrap();
+        assert_eq!(input_back.dsp, dsp);
+        assert_eq!(bus_back.dsp, bus_dsp);
+        assert_eq!(input_back.dsp.eq.bands[3].kind, BandKind::HighShelf);
+        assert_eq!(bus_back.dsp.eq.bands[2].kind, BandKind::LowPass);
+    }
+
+    #[test]
     fn validate_v2_rejects_duplicate_input_ids() {
         let mut preset = PresetFileV2 {
             schema_version: SCHEMA_VERSION_V2,

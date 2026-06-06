@@ -6,7 +6,7 @@
  * replace useAudioManager()'s internal state with calls to tauriCommands.
  */
 
-import { defaultDspConfig, defaultLimiter } from "./dspDefaults";
+import { defaultDspConfig, defaultEq, defaultLimiter } from "./dspDefaults";
 import type {
   AudioInput,
   Bus,
@@ -18,7 +18,7 @@ import type {
 
 const rawBuses: Omit<
   Bus,
-  "bufferSizeFrames" | "underruns" | "overruns" | "limiter"
+  "bufferSizeFrames" | "underruns" | "overruns" | "limiter" | "eq"
 >[] = [
   {
     id: "A1",
@@ -79,6 +79,7 @@ export const mockBuses: Bus[] = rawBuses.map((b) => ({
   bufferSizeFrames: null,
   underruns: 0,
   overruns: 0,
+  eq: defaultEq(),
   limiter: defaultLimiter(),
 }));
 

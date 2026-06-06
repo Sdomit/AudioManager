@@ -88,10 +88,30 @@ impl GateConfig {
     }
 }
 
-/// One parametric (peaking) EQ band. Maps to `BiquadFilter::peaking`.
+/// Filter shape for one EQ band. The realtime path is shape-agnostic (it applies
+/// precomputed biquad coefficients); this only selects which coefficient formula
+/// the IPC thread runs. `#[serde(default)]` on the band field keeps presets that
+/// predate per-band shapes deserializing as `Peaking`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BandKind {
+    #[default]
+    Peaking,
+    LowShelf,
+    HighShelf,
+    LowPass,
+    HighPass,
+    Notch,
+}
+
+/// One parametric EQ band. `kind` selects the filter shape; `gain_db` is used by
+/// peaking/shelf shapes, `q` by peaking/cut/notch shapes (ignored params are
+/// harmless — the coefficient formula simply does not read them).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct EqBand {
     pub enabled: bool,
+    #[serde(default)]
+    pub kind: BandKind,
     pub freq_hz: f32,
     pub q: f32,
     pub gain_db: f32,
@@ -117,29 +137,32 @@ impl Default for EqConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            // Broadcast-voice band layout: mud cut, box/nasal cut, presence
-            // boost, harshness/sibilance shaping.
+            // Console-style layout: low shelf, two sweepable bells, high shelf.
             bands: vec![
                 EqBand {
                     enabled: false,
+                    kind: BandKind::LowShelf,
                     freq_hz: 100.0,
                     q: 0.9,
                     gain_db: 0.0,
                 },
                 EqBand {
                     enabled: false,
+                    kind: BandKind::Peaking,
                     freq_hz: 400.0,
                     q: 1.0,
                     gain_db: 0.0,
                 },
                 EqBand {
                     enabled: false,
+                    kind: BandKind::Peaking,
                     freq_hz: 3_000.0,
                     q: 1.0,
                     gain_db: 0.0,
                 },
                 EqBand {
                     enabled: false,
+                    kind: BandKind::HighShelf,
                     freq_hz: 8_000.0,
                     q: 0.9,
                     gain_db: 0.0,
@@ -233,10 +256,48 @@ impl LimiterConfig {
     }
 }
 
+/// Neural denoiser backend. Only `Rnnoise` is wired in #37; `DeepFilterNet`
+/// is reserved for the phase-2 upgrade and currently behaves like `Rnnoise`
+/// until its engine lands, so saved configs that name it stay forward-valid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DenoiseBackend {
+    #[default]
+    Rnnoise,
+    DeepFilterNet,
+}
+
+/// Neural noise suppression placed first in the chain (pre-HPF). RNNoise runs
+/// at 48 kHz mono only and adds ~10 ms of latency; the realtime layer bypasses
+/// it when the engine is not at 48 kHz.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct DenoiseConfig {
+    pub enabled: bool,
+    #[serde(default)]
+    pub backend: DenoiseBackend,
+}
+
+impl Default for DenoiseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: DenoiseBackend::Rnnoise,
+        }
+    }
+}
+
+impl DenoiseConfig {
+    pub fn clamp(&mut self) {
+        // No numeric params yet; backend is an enum so it cannot be invalid.
+    }
+}
+
 /// Full per-input effect chain, in processing order:
-/// HPF → Gate → EQ → Compressor → Limiter.
+/// Denoise → HPF → Gate → EQ → Compressor → Limiter.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DspConfig {
+    #[serde(default)]
+    pub denoise: DenoiseConfig,
     #[serde(default)]
     pub hpf: HpfConfig,
     #[serde(default)]
@@ -254,6 +315,7 @@ impl DspConfig {
     /// before publishing to the realtime atomics, so the audio callback only
     /// ever sees valid values.
     pub fn clamp(&mut self) {
+        self.denoise.clamp();
         self.hpf.clamp();
         self.gate.clamp();
         self.eq.clamp();
@@ -262,16 +324,18 @@ impl DspConfig {
     }
 }
 
-/// Per-bus effect chain. Limited to a final limiter in #32; the struct leaves
-/// room for #33's B1 protection options.
+/// Per-bus effect chain, processed post-sum/pre-clip in order EQ → Limiter.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct BusDspConfig {
+    #[serde(default)]
+    pub eq: EqConfig,
     #[serde(default)]
     pub limiter: LimiterConfig,
 }
 
 impl BusDspConfig {
     pub fn clamp(&mut self) {
+        self.eq.clamp();
         self.limiter.clamp();
     }
 }
@@ -335,6 +399,7 @@ mod tests {
     fn eq_clamp_truncates_long_band_list() {
         let extra = EqBand {
             enabled: true,
+            kind: BandKind::Peaking,
             freq_hz: 500.0,
             q: 1.0,
             gain_db: 3.0,
@@ -351,6 +416,7 @@ mod tests {
     fn eq_band_clamp_bounds_q_and_gain() {
         let mut band = EqBand {
             enabled: true,
+            kind: BandKind::Peaking,
             freq_hz: 1_000.0,
             q: 100.0,
             gain_db: 99.0,
@@ -358,6 +424,40 @@ mod tests {
         band.clamp();
         assert_eq!(band.q, 10.0);
         assert_eq!(band.gain_db, 24.0);
+    }
+
+    #[test]
+    fn band_kind_serde_round_trips_and_renames() {
+        let json = serde_json::to_string(&BandKind::LowShelf).unwrap();
+        assert_eq!(json, "\"low_shelf\"");
+        let back: BandKind = serde_json::from_str("\"high_pass\"").unwrap();
+        assert_eq!(back, BandKind::HighPass);
+    }
+
+    #[test]
+    fn band_without_kind_defaults_to_peaking() {
+        // Presets predating per-band shapes have no `kind` key.
+        let band: EqBand =
+            serde_json::from_str(r#"{"enabled":true,"freq_hz":1000,"q":1.0,"gain_db":3.0}"#)
+                .unwrap();
+        assert_eq!(band.kind, BandKind::Peaking);
+    }
+
+    #[test]
+    fn bus_config_round_trips_eq_and_back_compat() {
+        let mut b = BusDspConfig::default();
+        b.eq.enabled = true;
+        b.eq.bands[0].kind = BandKind::HighShelf;
+        b.eq.bands[0].gain_db = 4.0;
+        let json = serde_json::to_string(&b).unwrap();
+        let back: BusDspConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(b, back);
+
+        // Old bus presets carry only a limiter; eq falls back to default.
+        let legacy: BusDspConfig =
+            serde_json::from_str(r#"{"limiter":{"enabled":false,"threshold_db":-1.0,"attack_ms":0.5,"release_ms":100.0}}"#)
+                .unwrap();
+        assert_eq!(legacy.eq, EqConfig::default());
     }
 
     #[test]

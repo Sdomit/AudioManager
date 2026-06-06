@@ -40,6 +40,15 @@
   border-top: 1px solid var(--am-border-subtle);
 }
 
+.note {
+  margin: var(--am-space-2) 0 0;
+  padding-top: var(--am-space-2);
+  border-top: 1px solid var(--am-border-subtle);
+  font-size: var(--am-text-11);
+  line-height: 1.4;
+  color: var(--am-text-tertiary);
+}
+
 /* ── One labelled slider ────────────────────────────────────────── */
 .param {
   display: grid;
@@ -89,6 +98,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--am-space-2);
+}
+.kindSelect {
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm, 4px);
+  padding: 1px 4px;
+  margin-left: auto;
+}
+.band[data-selected] {
+  background: color-mix(in srgb, var(--am-accent) 8%, transparent);
+  border-radius: var(--am-radius-sm, 4px);
 }
 .bandLabel {
   font-size: var(--am-text-11);

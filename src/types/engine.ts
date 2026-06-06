@@ -73,6 +73,16 @@ export type BusId = "A1" | "A2" | "B1" | "B2";
 
 // ── DSP chain config (mirrors src-tauri/src/audio/dsp/config.rs) ─────────────
 
+/** Neural denoiser backend (mirrors Rust `DenoiseBackend`, snake_case wire). */
+export type DenoiseBackend = "rnnoise" | "deep_filter_net";
+
+/** Neural noise suppression, first in the chain. RNNoise = 48 kHz mono, ~10 ms
+ *  latency (#37). `deep_filter_net` is reserved for a phase-2 upgrade. */
+export interface DenoiseConfig {
+  enabled: boolean;
+  backend: DenoiseBackend;
+}
+
 /** High-pass filter. */
 export interface HpfConfig {
   enabled: boolean;
@@ -88,9 +98,19 @@ export interface GateConfig {
   hold_ms: number;
 }
 
-/** One parametric (peaking) EQ band. */
+/** Filter shape for one EQ band (mirrors Rust `BandKind`, snake_case wire form). */
+export type BandKind =
+  | "peaking"
+  | "low_shelf"
+  | "high_shelf"
+  | "low_pass"
+  | "high_pass"
+  | "notch";
+
+/** One parametric EQ band. `kind` selects the filter shape. */
 export interface EqBand {
   enabled: boolean;
+  kind: BandKind;
   freq_hz: number;
   q: number;
   gain_db: number;
@@ -120,8 +140,9 @@ export interface LimiterConfig {
   release_ms: number;
 }
 
-/** Per-input effect chain: HPF -> Gate -> EQ -> Compressor -> Limiter. */
+/** Per-input effect chain: Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. */
 export interface DspConfig {
+  denoise: DenoiseConfig;
   hpf: HpfConfig;
   gate: GateConfig;
   eq: EqConfig;
@@ -129,8 +150,9 @@ export interface DspConfig {
   limiter: LimiterConfig;
 }
 
-/** Per-bus effect chain (final limiter in #32). */
+/** Per-bus effect chain, processed post-sum/pre-clip: EQ -> Limiter. */
 export interface BusDspConfig {
+  eq: EqConfig;
   limiter: LimiterConfig;
 }
 

@@ -330,7 +330,7 @@ export function AudioManager() {
         onOpenStreamSetup={am.openStreamSetup}
       />
 
-      <AmvcBanner />
+      <AmvcBanner busNames={state.buses.map((b) => b.label)} />
 
       {state.presetBannerVisible && loadedPreset && (
         <PresetBanner preset={loadedPreset} onDismiss={am.dismissPresetBanner} />
@@ -433,6 +433,7 @@ export function AudioManager() {
             }}
             onBusBufferSizeChange={am.setBusBufferSize}
             onBusLimiterChange={am.setBusLimiter}
+            onBusEqChange={am.setBusEq}
             onPickDevice={(id) => setBusPickerFor(id)}
             onSelectInputContext={(id) =>
               am.setSelection({ kind: "input", inputId: id })

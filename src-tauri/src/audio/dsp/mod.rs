@@ -1,13 +1,15 @@
 pub mod config;
+pub mod denoise;
 pub mod dynamics;
 pub mod filter;
 pub mod gate;
 pub mod live;
 
 pub use config::{
-    BusDspConfig, CompressorConfig, DspConfig, EqBand, EqConfig, GateConfig, HpfConfig,
-    LimiterConfig, MAX_EQ_BANDS,
+    BandKind, BusDspConfig, CompressorConfig, DenoiseBackend, DenoiseConfig, DspConfig, EqBand,
+    EqConfig, GateConfig, HpfConfig, LimiterConfig, MAX_EQ_BANDS,
 };
+pub use denoise::Denoiser;
 pub use dynamics::{Compressor, Limiter};
 pub use filter::BiquadFilter;
 pub use gate::NoiseGate;

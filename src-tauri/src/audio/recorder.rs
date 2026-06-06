@@ -119,11 +119,7 @@ impl ActiveTap {
         // NaN must be handled before clamp: `f32::clamp` returns NaN unchanged
         // because all NaN comparisons are false, so the inner `<`/`>` checks
         // never replace it with the bounds.
-        let s = if s.is_nan() {
-            0.0
-        } else {
-            s.clamp(-1.0, 1.0)
-        };
+        let s = if s.is_nan() { 0.0 } else { s.clamp(-1.0, 1.0) };
         if self.producer.push(s).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -301,10 +297,7 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
         sample_format: hound::SampleFormat::Float,
     };
     let writer = hound::WavWriter::create(&path, wav_spec).map_err(|e| EngineError {
-        message: format!(
-            "Failed to create WAV file '{}': {e}",
-            path.display()
-        ),
+        message: format!("Failed to create WAV file '{}': {e}", path.display()),
     })?;
 
     let ring = RingBuffer::<f32>::new(RECORDER_RING_FRAMES * channels as usize);
@@ -573,10 +566,7 @@ impl RecorderSettings {
         let path = Self::settings_file(app_data_dir);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| EngineError {
-                message: format!(
-                    "Failed to create settings dir '{}': {e}",
-                    parent.display()
-                ),
+                message: format!("Failed to create settings dir '{}': {e}", parent.display()),
             })?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| EngineError {
@@ -671,7 +661,10 @@ mod tests {
     fn tap_spec_slug_includes_kind() {
         let s = TapSpec::BusOut { bus_id: BusId::B2 }.slug();
         assert_eq!(s, "bus-B2");
-        let s = TapSpec::InputPre { device_id: "Mic".into() }.slug();
+        let s = TapSpec::InputPre {
+            device_id: "Mic".into(),
+        }
+        .slug();
         assert_eq!(s, "in-pre-mic");
         let s = TapSpec::InputPost {
             device_id: "Mic".into(),
@@ -692,7 +685,13 @@ mod tests {
             .bus(),
             Some(BusId::B1)
         );
-        assert_eq!(TapSpec::InputPre { device_id: "x".into() }.bus(), None);
+        assert_eq!(
+            TapSpec::InputPre {
+                device_id: "x".into()
+            }
+            .bus(),
+            None
+        );
     }
 
     fn make_tap(ring_capacity: usize) -> (ActiveTap, Consumer<f32>) {
@@ -810,8 +809,7 @@ mod tests {
         // P1 regression: with the receiver dropped, send(Add) fails. The
         // writer thread must be torn down and the just-created WAV file
         // must be removed — no leaked tap, no orphan file on disk.
-        let tmp = std::env::temp_dir()
-            .join(format!("am-rec-fail-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("am-rec-fail-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).unwrap();
 
         let (tx, rx) = mpsc::channel::<TapCommand>();
@@ -828,7 +826,10 @@ mod tests {
             session_subdir: None,
         });
 
-        assert!(result.is_err(), "expected error when engine receiver is gone");
+        assert!(
+            result.is_err(),
+            "expected error when engine receiver is gone"
+        );
 
         let leftover: Vec<_> = fs::read_dir(&tmp)
             .unwrap()
@@ -888,8 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_roundtrip(
-    ) {
+    fn settings_roundtrip() {
         let dir = std::env::temp_dir().join(format!("am-rec-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let s = RecorderSettings {

@@ -10,17 +10,21 @@
  * here only need sensible travel — see `DSP_RANGE` in `dspDefaults.ts`.
  */
 
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import type {
+  BandKind,
   CompressorConfig,
+  DenoiseConfig,
   DspConfig,
   EqBand,
+  EqConfig,
   GateConfig,
   HpfConfig,
   LimiterConfig,
 } from "../../types/engine";
-import { DSP_RANGE } from "./dspDefaults";
+import { BAND_KINDS, bandUsesGain, bandUsesQ, DSP_RANGE } from "./dspDefaults";
+import { EqGraph } from "./EqGraph";
 import styles from "./DspControls.module.css";
 
 /* ── Primitives ─────────────────────────────────────────────────────────── */
@@ -102,6 +106,119 @@ function EffectSection({
   );
 }
 
+/* ── EQ editor (graph + per-band rows) ──────────────────────────────────── */
+
+/** Shared parametric-EQ editor used by both input and bus chains. Renders the
+ *  interactive response graph plus one row per band (shape, freq, gain, Q). */
+function EqEditor({
+  eq,
+  onChange,
+}: {
+  eq: EqConfig;
+  onChange: (next: EqConfig) => void;
+}) {
+  const [selected, setSelected] = useState<number | null>(null);
+  const setBands = (bands: EqBand[]) => onChange({ ...eq, bands });
+  const setBand = (i: number, patch: Partial<EqBand>) =>
+    setBands(eq.bands.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+
+  return (
+    <>
+      <EqGraph
+        bands={eq.bands}
+        selected={selected}
+        onSelect={setSelected}
+        onChange={setBands}
+      />
+      {eq.bands.map((band, i) => (
+        <div
+          key={i}
+          className={styles.band}
+          data-selected={selected === i ? "" : undefined}
+        >
+          <div className={styles.bandHeader}>
+            <span className={styles.bandLabel}>Band {i + 1}</span>
+            <select
+              className={styles.kindSelect}
+              value={band.kind}
+              aria-label={`Band ${i + 1} type`}
+              onChange={(e) => setBand(i, { kind: e.target.value as BandKind })}
+            >
+              {BAND_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={band.enabled}
+              aria-label={`Band ${i + 1} ${band.enabled ? "on" : "off"}`}
+              className={styles.toggle}
+              data-on={band.enabled ? "" : undefined}
+              onClick={() => setBand(i, { enabled: !band.enabled })}
+            >
+              <span className={styles.toggleKnob} />
+            </button>
+          </div>
+          <Param
+            label="Freq"
+            value={band.freq_hz}
+            range={DSP_RANGE.eqFreq}
+            unit="Hz"
+            disabled={!band.enabled}
+            onChange={(v) => setBand(i, { freq_hz: v })}
+          />
+          {bandUsesGain(band.kind) ? (
+            <Param
+              label="Gain"
+              value={band.gain_db}
+              range={DSP_RANGE.eqGain}
+              unit="dB"
+              precision={1}
+              disabled={!band.enabled}
+              onChange={(v) => setBand(i, { gain_db: v })}
+            />
+          ) : null}
+          {bandUsesQ(band.kind) ? (
+            <Param
+              label="Q"
+              value={band.q}
+              range={DSP_RANGE.eqQ}
+              precision={1}
+              disabled={!band.enabled}
+              onChange={(v) => setBand(i, { q: v })}
+            />
+          ) : null}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ── Bus EQ + limiter ───────────────────────────────────────────────────── */
+
+export function BusEqControls({
+  eq,
+  onChange,
+}: {
+  eq: EqConfig;
+  onChange: (next: EqConfig) => void;
+}) {
+  return (
+    <div className={styles.chain}>
+      <EffectSection
+        title="EQ"
+        enabled={eq.enabled}
+        onToggle={(enabled) => onChange({ ...eq, enabled })}
+      >
+        <EqEditor eq={eq} onChange={onChange} />
+      </EffectSection>
+    </div>
+  );
+}
+
 /* ── Bus limiter ────────────────────────────────────────────────────────── */
 
 export function BusLimiterControls({
@@ -156,6 +273,8 @@ export function InputDspControls({
   dsp: DspConfig;
   onChange: (next: DspConfig) => void;
 }) {
+  const setDenoise = (patch: Partial<DenoiseConfig>) =>
+    onChange({ ...dsp, denoise: { ...dsp.denoise, ...patch } });
   const setHpf = (patch: Partial<HpfConfig>) =>
     onChange({ ...dsp, hpf: { ...dsp.hpf, ...patch } });
   const setGate = (patch: Partial<GateConfig>) =>
@@ -166,13 +285,20 @@ export function InputDspControls({
     onChange({ ...dsp, limiter: { ...dsp.limiter, ...patch } });
   const setEqEnabled = (enabled: boolean) =>
     onChange({ ...dsp, eq: { ...dsp.eq, enabled } });
-  const setBand = (i: number, patch: Partial<EqBand>) => {
-    const bands = dsp.eq.bands.map((b, idx) => (idx === i ? { ...b, ...patch } : b));
-    onChange({ ...dsp, eq: { ...dsp.eq, bands } });
-  };
 
   return (
     <div className={styles.chain}>
+      <EffectSection
+        title="Noise suppression (AI)"
+        enabled={dsp.denoise.enabled}
+        onToggle={(enabled) => setDenoise({ enabled })}
+      >
+        <p className={styles.note}>
+          RNNoise neural denoiser · 48 kHz · adds ~10 ms latency. Best on a
+          voice mic. No parameters — it adapts automatically.
+        </p>
+      </EffectSection>
+
       <EffectSection
         title="High-pass"
         enabled={dsp.hpf.enabled}
@@ -228,49 +354,7 @@ export function InputDspControls({
         enabled={dsp.eq.enabled}
         onToggle={setEqEnabled}
       >
-        {dsp.eq.bands.map((band, i) => (
-          <div key={i} className={styles.band}>
-            <div className={styles.bandHeader}>
-              <span className={styles.bandLabel}>Band {i + 1}</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={band.enabled}
-                aria-label={`Band ${i + 1} ${band.enabled ? "on" : "off"}`}
-                className={styles.toggle}
-                data-on={band.enabled ? "" : undefined}
-                onClick={() => setBand(i, { enabled: !band.enabled })}
-              >
-                <span className={styles.toggleKnob} />
-              </button>
-            </div>
-            <Param
-              label="Freq"
-              value={band.freq_hz}
-              range={DSP_RANGE.eqFreq}
-              unit="Hz"
-              disabled={!band.enabled}
-              onChange={(v) => setBand(i, { freq_hz: v })}
-            />
-            <Param
-              label="Gain"
-              value={band.gain_db}
-              range={DSP_RANGE.eqGain}
-              unit="dB"
-              precision={1}
-              disabled={!band.enabled}
-              onChange={(v) => setBand(i, { gain_db: v })}
-            />
-            <Param
-              label="Q"
-              value={band.q}
-              range={DSP_RANGE.eqQ}
-              precision={1}
-              disabled={!band.enabled}
-              onChange={(v) => setBand(i, { q: v })}
-            />
-          </div>
-        ))}
+        <EqEditor eq={dsp.eq} onChange={(eq) => onChange({ ...dsp, eq })} />
       </EffectSection>
 
       <EffectSection

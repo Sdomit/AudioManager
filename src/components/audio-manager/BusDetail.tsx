@@ -6,7 +6,7 @@ import {
   PowerIcon,
   ChevronRightIcon,
 } from "./Icon";
-import { BusLimiterControls } from "./DspControls";
+import { BusEqControls, BusLimiterControls } from "./DspControls";
 import { BUFFER_SIZE_OPTIONS } from "./dspDefaults";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
@@ -15,6 +15,7 @@ import type {
   ActiveRecording,
   AudioInput,
   Bus,
+  EqConfig,
   LimiterConfig,
   Send,
   TapSpec,
@@ -32,6 +33,7 @@ interface BusDetailProps {
   onPickDevice: () => void;
   onSelectInput: (id: string) => void;
   onBufferSizeChange: (frames: number | null) => void;
+  onEqChange: (eq: EqConfig) => void;
   onLimiterChange: (limiter: LimiterConfig) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
@@ -57,6 +59,7 @@ export function BusDetail({
   onPickDevice,
   onSelectInput,
   onBufferSizeChange,
+  onEqChange,
   onLimiterChange,
   onStartRecording,
   onStopRecording,
@@ -197,6 +200,7 @@ export function BusDetail({
             {bus.underruns} under · {bus.overruns} over
           </span>
         </div>
+        <BusEqControls eq={bus.eq} onChange={onEqChange} />
         <BusLimiterControls limiter={bus.limiter} onChange={onLimiterChange} />
       </section>
 

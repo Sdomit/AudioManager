@@ -21,13 +21,33 @@
 
 use std::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 
-use super::config::{BusDspConfig, DspConfig, MAX_EQ_BANDS};
+use super::config::{BandKind, BusDspConfig, DspConfig, EqBand, MAX_EQ_BANDS};
+use super::denoise::Denoiser;
 use super::dynamics::{Compressor, CompressorCoeffs, Limiter, LimiterCoeffs};
-use super::filter::{high_pass_coeffs, peaking_coeffs, BiquadFilter};
+use super::filter::{
+    high_pass_coeffs, high_pass_coeffs_q, high_shelf_coeffs, low_pass_coeffs, low_shelf_coeffs,
+    notch_coeffs, peaking_coeffs, BiquadFilter,
+};
 use super::gate::{GateCoeffs, NoiseGate};
 use super::DspEffect;
 
 const RELAXED: Ordering = Ordering::Relaxed;
+
+/// Precompute one EQ band's biquad coefficients for its selected shape. Runs on
+/// the IPC thread only (the realtime path applies the resulting `[f32; 5]`). The
+/// frequency is Nyquist-clamped here so every shape stays stable near Nyquist.
+#[inline]
+fn eq_band_coeffs(b: &EqBand, sr: f32) -> [f32; 5] {
+    let f = nyquist_clamp(b.freq_hz, sr);
+    match b.kind {
+        BandKind::Peaking => peaking_coeffs(f, b.q, b.gain_db, sr),
+        BandKind::LowShelf => low_shelf_coeffs(f, b.gain_db, sr),
+        BandKind::HighShelf => high_shelf_coeffs(f, b.gain_db, sr),
+        BandKind::LowPass => low_pass_coeffs(f, b.q, sr),
+        BandKind::HighPass => high_pass_coeffs_q(f, b.q, sr),
+        BandKind::Notch => notch_coeffs(f, b.q, sr),
+    }
+}
 
 /// Clamp a filter frequency below Nyquist for the active sample rate. Biquad
 /// coefficients degrade and can go unstable as the cutoff approaches Nyquist, so
@@ -211,6 +231,7 @@ impl AtomicLimiter {
 /// Stack copy of one input's full effect parameter set, read atomically out of
 /// [`InputDspShared`]. Public so tests can assert internal consistency.
 pub struct InputDspSnapshot {
+    pub denoise_enabled: bool,
     pub hpf: (bool, [f32; 5]),
     pub eq: [(bool, [f32; 5]); MAX_EQ_BANDS],
     pub gate: (bool, GateCoeffs),
@@ -220,6 +241,7 @@ pub struct InputDspSnapshot {
 
 /// Stack copy of one bus's effect parameter set.
 pub struct BusDspSnapshot {
+    pub eq: [(bool, [f32; 5]); MAX_EQ_BANDS],
     pub limiter: (bool, LimiterCoeffs),
 }
 
@@ -229,6 +251,7 @@ pub struct BusDspSnapshot {
 /// audio callback reloads from it. One per active input.
 pub struct InputDspShared {
     generation: AtomicU32,
+    denoise_enabled: AtomicBool,
     hpf: AtomicBiquad,
     eq: [AtomicBiquad; MAX_EQ_BANDS],
     gate: AtomicGate,
@@ -242,6 +265,7 @@ impl InputDspShared {
     pub fn new(cfg: &DspConfig, sample_rate: f32) -> Self {
         let s = Self {
             generation: AtomicU32::new(0),
+            denoise_enabled: AtomicBool::new(false),
             hpf: AtomicBiquad::new(),
             eq: std::array::from_fn(|_| AtomicBiquad::new()),
             gate: AtomicGate::new(),
@@ -264,16 +288,15 @@ impl InputDspShared {
     }
 
     fn write_fields(&self, cfg: &DspConfig, sr: f32) {
+        self.denoise_enabled
+            .store(cfg.denoise.enabled, RELAXED);
         self.hpf.store(
             cfg.hpf.enabled,
             high_pass_coeffs(nyquist_clamp(cfg.hpf.freq_hz, sr), sr),
         );
         for (i, slot) in self.eq.iter().enumerate() {
             match cfg.eq.bands.get(i) {
-                Some(b) => slot.store(
-                    cfg.eq.enabled && b.enabled,
-                    peaking_coeffs(nyquist_clamp(b.freq_hz, sr), b.q, b.gain_db, sr),
-                ),
+                Some(b) => slot.store(cfg.eq.enabled && b.enabled, eq_band_coeffs(b, sr)),
                 None => slot.store(false, peaking_coeffs(1_000.0, 1.0, 0.0, sr)),
             }
         }
@@ -311,6 +334,7 @@ impl InputDspShared {
 
     fn read_fields(&self) -> InputDspSnapshot {
         InputDspSnapshot {
+            denoise_enabled: self.denoise_enabled.load(RELAXED),
             hpf: self.hpf.load(),
             eq: std::array::from_fn(|i| self.eq[i].load()),
             gate: self.gate.load(),
@@ -356,9 +380,11 @@ impl InputDspShared {
     }
 }
 
-/// Shared per-bus DSP parameter block (limiter only in #32).
+/// Shared per-bus DSP parameter block. Carries a parametric EQ (post-sum tone
+/// shaping) and the final limiter, published through the same seqlock as inputs.
 pub struct BusDspShared {
     generation: AtomicU32,
+    eq: [AtomicBiquad; MAX_EQ_BANDS],
     limiter: AtomicLimiter,
 }
 
@@ -366,6 +392,7 @@ impl BusDspShared {
     pub fn new(cfg: &BusDspConfig, sample_rate: f32) -> Self {
         let s = Self {
             generation: AtomicU32::new(0),
+            eq: std::array::from_fn(|_| AtomicBiquad::new()),
             limiter: AtomicLimiter::new(),
         };
         s.write_fields(cfg, sample_rate);
@@ -382,6 +409,12 @@ impl BusDspShared {
     }
 
     fn write_fields(&self, cfg: &BusDspConfig, sr: f32) {
+        for (i, slot) in self.eq.iter().enumerate() {
+            match cfg.eq.bands.get(i) {
+                Some(b) => slot.store(cfg.eq.enabled && b.enabled, eq_band_coeffs(b, sr)),
+                None => slot.store(false, peaking_coeffs(1_000.0, 1.0, 0.0, sr)),
+            }
+        }
         self.limiter.store(
             cfg.limiter.enabled,
             LimiterCoeffs::compute(
@@ -399,12 +432,13 @@ impl BusDspShared {
             return false;
         }
         fence(Ordering::Acquire);
+        let eq = std::array::from_fn(|i| self.eq[i].load());
         let limiter = self.limiter.load();
         fence(Ordering::Acquire);
         if self.generation.load(RELAXED) != s1 {
             return false;
         }
-        slots.apply(&BusDspSnapshot { limiter });
+        slots.apply(&BusDspSnapshot { eq, limiter });
         slots.last_gen = s1;
         true
     }
@@ -453,6 +487,8 @@ fn process_block_effect<E: DspEffect>(effect: &mut E, interleaved: &mut [f32], c
 /// retuned in place via [`InputDspShared::reload_if_changed`], never rebuilt.
 pub struct InputDspSlots {
     last_gen: u32,
+    denoiser: Denoiser,
+    denoise_enabled: bool,
     hpf: BiquadFilter,
     gate: NoiseGate,
     eq: [BiquadFilter; MAX_EQ_BANDS],
@@ -500,6 +536,8 @@ impl InputDspSlots {
         limiter.set_enabled(false);
         Self {
             last_gen: u32::MAX,
+            denoiser: Denoiser::new(sample_rate),
+            denoise_enabled: false,
             hpf,
             gate,
             eq,
@@ -509,6 +547,13 @@ impl InputDspSlots {
     }
 
     fn apply(&mut self, s: &InputDspSnapshot) {
+        // Denoiser: flush bridging buffers on a disabled→enabled transition so
+        // stale queued audio can't play out when it switches back on.
+        let denoise_was = self.denoise_enabled;
+        self.denoise_enabled = s.denoise_enabled;
+        if s.denoise_enabled && !denoise_was {
+            self.denoiser.reset();
+        }
         apply_biquad(&mut self.hpf, s.hpf.0, s.hpf.1);
         for (band, snap) in self.eq.iter_mut().zip(s.eq.iter()) {
             apply_biquad(band, snap.0, snap.1);
@@ -564,6 +609,12 @@ impl InputDspSlots {
     /// `channels`.
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
+        // Denoiser runs first (pre-HPF) so downstream effects see clean audio.
+        // Block-only: the per-frame `process` path above omits it (the realtime
+        // mixer always uses `process_block`).
+        if self.denoise_enabled {
+            self.denoiser.process(interleaved, channels);
+        }
         if self.hpf.is_enabled() {
             process_block_effect(&mut self.hpf, interleaved, channels);
         }
@@ -584,15 +635,22 @@ impl InputDspSlots {
     }
 }
 
-/// Fixed per-bus effect chain (limiter only in #32), processed post-sum/pre-clip.
+/// Fixed per-bus effect chain (EQ → Limiter), processed post-sum/pre-clip.
 pub struct BusDspSlots {
     last_gen: u32,
+    eq: [BiquadFilter; MAX_EQ_BANDS],
     limiter: Limiter,
 }
 
 impl BusDspSlots {
     pub fn new(sample_rate: f32) -> Self {
         let cfg = BusDspConfig::default();
+        let eq = std::array::from_fn(|i| {
+            let b = &cfg.eq.bands[i];
+            let mut f = BiquadFilter::peaking(b.freq_hz, b.q, b.gain_db, sample_rate);
+            f.set_enabled(false);
+            f
+        });
         let mut limiter = Limiter::new(
             cfg.limiter.threshold_db,
             cfg.limiter.attack_ms,
@@ -602,11 +660,15 @@ impl BusDspSlots {
         limiter.set_enabled(false);
         Self {
             last_gen: u32::MAX,
+            eq,
             limiter,
         }
     }
 
     fn apply(&mut self, s: &BusDspSnapshot) {
+        for (band, snap) in self.eq.iter_mut().zip(s.eq.iter()) {
+            apply_biquad(band, snap.0, snap.1);
+        }
         let was = self.limiter.is_enabled();
         self.limiter.set_enabled(s.limiter.0);
         self.limiter.set_coeffs(s.limiter.1);
@@ -617,14 +679,24 @@ impl BusDspSlots {
 
     #[inline]
     pub fn process(&mut self, buf: &mut [f32; 2], channels: usize) {
+        for band in &mut self.eq {
+            if band.is_enabled() {
+                band.process(buf, channels);
+            }
+        }
         if self.limiter.is_enabled() {
             self.limiter.process(buf, channels);
         }
     }
 
-    /// Block form of [`Self::process`] (bus limiter only in #32).
+    /// Block form of [`Self::process`]: same chain order (EQ → Limiter).
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
+        for band in &mut self.eq {
+            if band.is_enabled() {
+                process_block_effect(band, interleaved, channels);
+            }
+        }
         if self.limiter.is_enabled() {
             process_block_effect(&mut self.limiter, interleaved, channels);
         }
@@ -726,6 +798,53 @@ mod tests {
             peak < 0.95,
             "bus limiter should pull a hot signal down, got {peak}"
         );
+    }
+
+    #[test]
+    fn eq_band_kind_selects_coeffs() {
+        // A non-peaking band must publish the coefficients of its shape, not
+        // the old hardcoded peaking set.
+        let mut c = DspConfig::default();
+        c.eq.enabled = true;
+        c.eq.bands[0].enabled = true;
+        c.eq.bands[0].kind = BandKind::LowShelf;
+        c.eq.bands[0].freq_hz = 200.0;
+        c.eq.bands[0].gain_db = 6.0;
+        c.clamp();
+        let shared = InputDspShared::new(&c, SR);
+        let snap = shared.try_snapshot().expect("clean snapshot");
+        assert!(snap.eq[0].0, "band 0 should be enabled");
+        assert_eq!(snap.eq[0].1, low_shelf_coeffs(200.0, 6.0, SR));
+    }
+
+    #[test]
+    fn bus_eq_alters_signal() {
+        let shared = BusDspShared::new(&BusDspConfig::default(), SR);
+        let mut slots = BusDspSlots::new(SR);
+        assert!(shared.reload_if_changed(&mut slots));
+        // Bypassed: DC passes through untouched.
+        let mut b = [0.5, -0.5];
+        slots.process(&mut b, 2);
+        assert_eq!(b, [0.5, -0.5]);
+
+        // Enable a low shelf: DC sits in the shelf band, so it is boosted.
+        let mut c = BusDspConfig::default();
+        c.eq.enabled = true;
+        c.eq.bands[0].enabled = true;
+        c.eq.bands[0].kind = BandKind::LowShelf;
+        c.eq.bands[0].freq_hz = 300.0;
+        c.eq.bands[0].gain_db = 6.0;
+        c.clamp();
+        shared.publish(&c, SR);
+        assert!(shared.reload_if_changed(&mut slots));
+        let mut out = 0.0f32;
+        for _ in 0..2_000 {
+            let mut x = [0.5, 0.5];
+            slots.process(&mut x, 2);
+            assert!(x[0].is_finite());
+            out = x[0];
+        }
+        assert!(out > 0.6, "low-shelf boost should lift DC, got {out}");
     }
 
     #[test]

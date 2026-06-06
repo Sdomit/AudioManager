@@ -1,8 +1,8 @@
 use super::DspEffect;
 use std::f32::consts::PI;
 
-/// Butterworth Q (maximally flat, -3 dB at cutoff).
-const BUTTERWORTH_Q: f32 = 0.707_107;
+/// Butterworth Q = 1/√2 (maximally flat, -3 dB at cutoff).
+const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
 struct Coeffs {
     b0: f32,
@@ -86,6 +86,20 @@ impl Coeffs {
         }
     }
 
+    fn notch(freq: f32, q: f32, sr: f32) -> Self {
+        let w0 = 2.0 * PI * freq / sr;
+        let cos = w0.cos();
+        let alpha = w0.sin() / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: 1.0 / a0,
+            b1: -2.0 * cos / a0,
+            b2: 1.0 / a0,
+            a1: -2.0 * cos / a0,
+            a2: (1.0 - alpha) / a0,
+        }
+    }
+
     /// `[b0, b1, b2, a1, a2]` for publishing across the realtime boundary.
     fn as_array(&self) -> [f32; 5] {
         [self.b0, self.b1, self.b2, self.a1, self.a2]
@@ -102,9 +116,35 @@ pub fn peaking_coeffs(freq_hz: f32, q: f32, gain_db: f32, sample_rate: f32) -> [
     Coeffs::peaking(freq_hz, q, gain_db, sample_rate).as_array()
 }
 
+/// Precompute low-pass coefficients with a user-supplied Q (EQ band variant).
+pub fn low_pass_coeffs(freq_hz: f32, q: f32, sample_rate: f32) -> [f32; 5] {
+    Coeffs::low_pass(freq_hz, q, sample_rate).as_array()
+}
+
+/// Precompute high-pass coefficients with a user-supplied Q (EQ band variant).
+/// The dedicated HPF effect uses [`high_pass_coeffs`] (fixed Butterworth Q).
+pub fn high_pass_coeffs_q(freq_hz: f32, q: f32, sample_rate: f32) -> [f32; 5] {
+    Coeffs::high_pass(freq_hz, q, sample_rate).as_array()
+}
+
+/// Precompute low-shelf coefficients off the realtime thread.
+pub fn low_shelf_coeffs(freq_hz: f32, gain_db: f32, sample_rate: f32) -> [f32; 5] {
+    Coeffs::low_shelf(freq_hz, gain_db, sample_rate).as_array()
+}
+
+/// Precompute high-shelf coefficients off the realtime thread.
+pub fn high_shelf_coeffs(freq_hz: f32, gain_db: f32, sample_rate: f32) -> [f32; 5] {
+    Coeffs::high_shelf(freq_hz, gain_db, sample_rate).as_array()
+}
+
+/// Precompute notch coefficients off the realtime thread.
+pub fn notch_coeffs(freq_hz: f32, q: f32, sample_rate: f32) -> [f32; 5] {
+    Coeffs::notch(freq_hz, q, sample_rate).as_array()
+}
+
 /// 2nd-order IIR biquad filter (Audio EQ Cookbook, R. Bristow-Johnson).
 /// Direct Form I — per-channel state, numerically stable.
-/// Modes: HPF, LPF, peaking bell, low shelf, high shelf.
+/// Modes: HPF, LPF, peaking bell, low shelf, high shelf, notch.
 pub struct BiquadFilter {
     coeffs: Coeffs,
     enabled: bool,
@@ -138,6 +178,11 @@ impl BiquadFilter {
     /// High shelving filter. gain_db: boost/cut above freq_hz.
     pub fn high_shelf(freq_hz: f32, gain_db: f32, sample_rate: f32) -> Self {
         Self::from_coeffs(Coeffs::high_shelf(freq_hz, gain_db, sample_rate))
+    }
+
+    /// Notch (band-reject) filter. q sets the notch width.
+    pub fn notch(freq_hz: f32, q: f32, sample_rate: f32) -> Self {
+        Self::from_coeffs(Coeffs::notch(freq_hz, q, sample_rate))
     }
 
     pub fn set_enabled(&mut self, v: bool) {
@@ -216,6 +261,41 @@ mod tests {
         let peak_fn = peaking_coeffs(2_000.0, 1.2, 4.0, 48_000.0);
         let peak_ctor = BiquadFilter::peaking(2_000.0, 1.2, 4.0, 48_000.0);
         assert_eq!(peak_fn, peak_ctor.coeffs.as_array());
+
+        // Butterworth Q feeds the q-variants, so they match the fixed-Q ctors.
+        assert_eq!(
+            low_pass_coeffs(5_000.0, BUTTERWORTH_Q, 48_000.0),
+            BiquadFilter::low_pass(5_000.0, 48_000.0).coeffs.as_array()
+        );
+        assert_eq!(
+            high_pass_coeffs_q(120.0, BUTTERWORTH_Q, 48_000.0),
+            BiquadFilter::high_pass(120.0, 48_000.0).coeffs.as_array()
+        );
+        assert_eq!(
+            low_shelf_coeffs(200.0, 6.0, 48_000.0),
+            BiquadFilter::low_shelf(200.0, 6.0, 48_000.0).coeffs.as_array()
+        );
+        assert_eq!(
+            high_shelf_coeffs(8_000.0, -4.0, 48_000.0),
+            BiquadFilter::high_shelf(8_000.0, -4.0, 48_000.0).coeffs.as_array()
+        );
+        assert_eq!(
+            notch_coeffs(1_000.0, 4.0, 48_000.0),
+            BiquadFilter::notch(1_000.0, 4.0, 48_000.0).coeffs.as_array()
+        );
+    }
+
+    #[test]
+    fn all_band_helpers_finite() {
+        for c in [
+            low_pass_coeffs(5_000.0, 0.7, 48_000.0),
+            high_pass_coeffs_q(80.0, 1.5, 48_000.0),
+            low_shelf_coeffs(120.0, 9.0, 48_000.0),
+            high_shelf_coeffs(10_000.0, -12.0, 48_000.0),
+            notch_coeffs(2_000.0, 8.0, 48_000.0),
+        ] {
+            assert!(c.iter().all(|v| v.is_finite()));
+        }
     }
 
     #[test]

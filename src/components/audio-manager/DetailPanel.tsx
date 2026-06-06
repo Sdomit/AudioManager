@@ -8,6 +8,7 @@ import type {
   BusId,
   DetailSelection,
   DspConfig,
+  EqConfig,
   LimiterConfig,
   Send,
   TapSpec,
@@ -32,6 +33,7 @@ interface DetailPanelProps {
   onBusMutedChange: (id: BusId) => void;
   onBusBufferSizeChange: (id: BusId, frames: number | null) => void;
   onBusLimiterChange: (id: BusId, limiter: LimiterConfig) => void;
+  onBusEqChange: (id: BusId, eq: EqConfig) => void;
   onPickDevice: (id: BusId) => void;
   onSelectInputContext: (id: string) => void;
   onStartRecording: (spec: TapSpec) => void;
@@ -100,6 +102,7 @@ export function DetailPanel(props: DetailPanelProps) {
         onPickDevice={() => props.onPickDevice(bus.id)}
         onSelectInput={props.onSelectInputContext}
         onBufferSizeChange={(frames) => props.onBusBufferSizeChange(bus.id, frames)}
+        onEqChange={(eq) => props.onBusEqChange(bus.id, eq)}
         onLimiterChange={(limiter) => props.onBusLimiterChange(bus.id, limiter)}
         onStartRecording={props.onStartRecording}
         onStopRecording={props.onStopRecording}
