@@ -395,6 +395,73 @@
   background: rgba(110, 168, 254, 0.12);
 }
 
+/* On-canvas per-input effect boxes (input → fx → fx → … → buses). */
+.fxNode {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  background: var(--am-surface-2, #232733);
+  border: 1px solid var(--am-border-default);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  cursor: pointer;
+  z-index: 4;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: border-color var(--am-dur-fast), color var(--am-dur-fast);
+}
+.fxNode:hover {
+  border-color: var(--am-accent, #6ea8fe);
+  color: var(--am-text-primary);
+}
+.fxNodeLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fxNodeRemove {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--am-text-tertiary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fxNodeRemove:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--am-meter-clip, #ef4444);
+}
+.fxAddNode {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--am-border-default);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--am-text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 4;
+  transition: border-color var(--am-dur-fast), color var(--am-dur-fast),
+    background var(--am-dur-fast);
+}
+.fxAddNode:hover {
+  border-color: var(--am-accent, #6ea8fe);
+  color: var(--am-accent, #6ea8fe);
+  background: rgba(110, 168, 254, 0.08);
+}
+
 .recBadge:hover:not(:disabled) {
   opacity: 1;
   color: var(--am-meter-clip, #EF4444);

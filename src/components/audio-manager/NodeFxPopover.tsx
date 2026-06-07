@@ -32,6 +32,63 @@ interface NodeFxPopoverProps {
   onClose: () => void;
 }
 
+/** Per-input effect keys, in the engine's fixed processing order. */
+export type InputFxKey = "denoise" | "hpf" | "gate" | "eq" | "comp" | "limiter";
+
+/** Canonical effect list (order = engine chain order) for menus + boxes. */
+export const INPUT_FX_DEFS: { key: InputFxKey; label: string }[] = [
+  { key: "denoise", label: "Denoise" },
+  { key: "hpf", label: "High-pass" },
+  { key: "gate", label: "Gate" },
+  { key: "eq", label: "EQ" },
+  { key: "comp", label: "Comp" },
+  { key: "limiter", label: "Limiter" },
+];
+
+export function inputFxEnabled(dsp: DspConfig, key: InputFxKey): boolean {
+  switch (key) {
+    case "denoise":
+      return dsp.denoise.enabled;
+    case "hpf":
+      return dsp.hpf.enabled;
+    case "gate":
+      return dsp.gate.enabled;
+    case "eq":
+      return dsp.eq.enabled;
+    case "comp":
+      return dsp.compressor.enabled;
+    case "limiter":
+      return dsp.limiter.enabled;
+  }
+}
+
+/** Return a new DspConfig with one effect toggled on/off (immutable). */
+export function setInputFxEnabled(
+  dsp: DspConfig,
+  key: InputFxKey,
+  on: boolean,
+): DspConfig {
+  switch (key) {
+    case "denoise":
+      return { ...dsp, denoise: { ...dsp.denoise, enabled: on } };
+    case "hpf":
+      return { ...dsp, hpf: { ...dsp.hpf, enabled: on } };
+    case "gate":
+      return { ...dsp, gate: { ...dsp.gate, enabled: on } };
+    case "eq":
+      return { ...dsp, eq: { ...dsp.eq, enabled: on } };
+    case "comp":
+      return { ...dsp, compressor: { ...dsp.compressor, enabled: on } };
+    case "limiter":
+      return { ...dsp, limiter: { ...dsp.limiter, enabled: on } };
+  }
+}
+
+/** Enabled effects in chain order — drives the on-canvas effect boxes. */
+export function enabledInputFx(dsp: DspConfig): { key: InputFxKey; label: string }[] {
+  return INPUT_FX_DEFS.filter((d) => inputFxEnabled(dsp, d.key));
+}
+
 /** Count enabled effects in an input chain — drives the node's FX pill badge. */
 export function countInputFx(dsp: DspConfig): number {
   let n = 0;

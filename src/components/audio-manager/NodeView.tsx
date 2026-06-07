@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   iconForBusRole,
   iconForKind,
@@ -23,6 +23,11 @@ import {
   NodeFxPopover,
   countBusFx,
   countInputFx,
+  enabledInputFx,
+  setInputFxEnabled,
+  INPUT_FX_DEFS,
+  inputFxEnabled,
+  type InputFxKey,
   type NodeFxTarget,
 } from "./NodeFxPopover";
 import { gainToDb } from "./units";
@@ -116,6 +121,11 @@ const GROUP_W = 180;
 const GROUP_H = 56;
 const COL_PAD = 18;
 const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
+// On-canvas per-input effect boxes (chained off the input, before its wires).
+const FX_W = 104;
+const FX_H = 26;
+const FX_GAP = 24;
+const FX_ADD_W = 26; // the trailing "+" box
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
 
@@ -592,6 +602,60 @@ export function NodeView({
     }
     return m;
   }, [nodePositions]);
+
+  // Per-input effect boxes: enabled effects rendered as a node chain hanging
+  // off the input (input → fx → fx → …). The input's outgoing wires then start
+  // at the last box, so audio visibly flows through the chain. Boxes follow the
+  // input's position (not independently draggable); fixed engine order.
+  const inputFxLayout = useMemo(() => {
+    interface FxBox {
+      key: InputFxKey;
+      label: string;
+      x: number;
+      y: number;
+    }
+    interface InputFxRow {
+      boxes: FxBox[];
+      origin: { x: number; y: number };
+      plus: { x: number; y: number };
+      connectors: { x1: number; y1: number; x2: number; y2: number }[];
+    }
+    const map = new Map<string, InputFxRow>();
+    for (const input of inputs) {
+      const pos = inputPositions.get(input.id);
+      if (!pos) continue;
+      const cy = pos.y + INPUT_H / 2;
+      const boxes: FxBox[] = [];
+      const connectors: InputFxRow["connectors"] = [];
+      let prevRightX = pos.x + INPUT_W;
+      for (const chip of enabledInputFx(input.dsp)) {
+        const bx = prevRightX + FX_GAP;
+        boxes.push({ key: chip.key, label: chip.label, x: bx, y: cy - FX_H / 2 });
+        connectors.push({ x1: prevRightX, y1: cy, x2: bx, y2: cy });
+        prevRightX = bx + FX_W;
+      }
+      const origin = { x: prevRightX, y: cy };
+      const plus = { x: prevRightX + FX_GAP, y: cy - FX_H / 2 };
+      connectors.push({ x1: prevRightX, y1: cy, x2: plus.x, y2: cy });
+      map.set(input.id, { boxes, origin, plus, connectors });
+    }
+    return map;
+  }, [inputs, inputPositions]);
+
+  // Add-effect menu (anchored at the "+" box). Null when closed.
+  const [addFxMenu, setAddFxMenu] = useState<{
+    inputId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const toggleInputFx = useCallback(
+    (inputId: string, key: InputFxKey, on: boolean) => {
+      const input = inputs.find((i) => i.id === inputId);
+      if (!input) return;
+      onInputDsp(inputId, setInputFxEnabled(input.dsp, key, on));
+    },
+    [inputs, onInputDsp],
+  );
 
   // Back-compat refs + setters for code paths written against the old
   // split (Map<inputId, Pos> + Map<BusId, Pos>) model. They read from /
@@ -1383,9 +1447,17 @@ export function NodeView({
       const toH = nodeHeightFor(toNode);
       const inMeta = asInputNode(fromNode);
       const busMeta = asBusNode(toNode);
+      // If the source input has on-canvas effect boxes, start the wire at the
+      // last box (audio flows input → fx chain → bus).
+      let ip = { x: fromPos.x + fromW, y: fromPos.y + fromH / 2 };
+      const fromInputId = inputIdFromNodeId(edge.fromNode);
+      if (fromInputId) {
+        const row = inputFxLayout.get(fromInputId);
+        if (row && row.boxes.length > 0) ip = row.origin;
+      }
       out.push({
         edge,
-        ip: { x: fromPos.x + fromW, y: fromPos.y + fromH / 2 },
+        ip,
         bp: { x: toPos.x,           y: toPos.y   + toH   / 2 },
         color: busMeta ? busColor(busMeta.backing.id) : "rgba(170,180,200,0.7)",
         input: inMeta?.backing ?? null,
@@ -1393,7 +1465,7 @@ export function NodeView({
       });
     }
     return out;
-  }, [graph, nodePositions]);
+  }, [graph, nodePositions, inputFxLayout]);
 
   return (
     <div
@@ -1536,6 +1608,22 @@ export function NodeView({
             );
           })}
 
+          {/* Short connectors linking an input to its effect-box chain. */}
+          {Array.from(inputFxLayout.values()).flatMap((row) =>
+            row.connectors.map((c, i) => (
+              <line
+                key={`fxc-${c.x1}-${c.y1}-${i}`}
+                x1={c.x1}
+                y1={c.y1}
+                x2={c.x2}
+                y2={c.y2}
+                stroke="rgba(170,180,200,0.5)"
+                strokeWidth={2}
+                strokeLinecap="round"
+              />
+            )),
+          )}
+
           {/* Ghost wire while dragging. Invalid drop (cycle / port
               mismatch) paints the ghost red AND pulses to draw the
               eye, plus a tooltip explains the rejection. */}
@@ -1634,6 +1722,58 @@ export function NodeView({
               fxCount={countInputFx(input.dsp)}
               onFxOpen={openInputFx}
             />
+          );
+        })}
+
+        {/* Per-input effect boxes chained off the input + add button */}
+        {inputs.map((input) => {
+          const row = inputFxLayout.get(input.id);
+          if (!row) return null;
+          return (
+            <Fragment key={`fx-${input.id}`}>
+              {row.boxes.map((b) => (
+                <div
+                  key={b.key}
+                  className={styles.fxNode}
+                  style={{ left: b.x, top: b.y, width: FX_W, height: FX_H }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openInputFx(input.id, e);
+                  }}
+                  title={`${b.label} — click to edit`}
+                >
+                  <span className={styles.fxNodeLabel}>{b.label}</span>
+                  <button
+                    type="button"
+                    className={styles.fxNodeRemove}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleInputFx(input.id, b.key, false);
+                    }}
+                    title={`Remove ${b.label}`}
+                    aria-label={`Remove ${b.label}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className={styles.fxAddNode}
+                style={{ left: row.plus.x, top: row.plus.y, width: FX_ADD_W, height: FX_H }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAddFxMenu({ inputId: input.id, x: e.clientX, y: e.clientY });
+                }}
+                title="Add an effect"
+                aria-label={`Add effect to ${input.name}`}
+              >
+                +
+              </button>
+            </Fragment>
           );
         })}
 
@@ -1760,6 +1900,50 @@ export function NodeView({
           onClose={() => setOpenFx(null)}
         />
       )}
+
+      {addFxMenu &&
+        (() => {
+          const input = inputs.find((i) => i.id === addFxMenu.inputId);
+          if (!input) return null;
+          const available = INPUT_FX_DEFS.filter(
+            (d) => !inputFxEnabled(input.dsp, d.key),
+          );
+          return (
+            <>
+              <div
+                className={styles.bgCtxBackdrop}
+                onClick={() => setAddFxMenu(null)}
+                aria-hidden
+              />
+              <div
+                className={styles.bgCtxMenu}
+                role="menu"
+                aria-label="Add effect"
+                style={{ left: addFxMenu.x, top: addFxMenu.y }}
+              >
+                {available.length === 0 ? (
+                  <div className={styles.bgCtxItem} aria-disabled>
+                    All effects added
+                  </div>
+                ) : (
+                  available.map((d) => (
+                    <button
+                      key={d.key}
+                      role="menuitem"
+                      className={styles.bgCtxItem}
+                      onClick={() => {
+                        toggleInputFx(addFxMenu.inputId, d.key, true);
+                        setAddFxMenu(null);
+                      }}
+                    >
+                      + {d.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          );
+        })()}
 
       {bgCtx && (
         <>
