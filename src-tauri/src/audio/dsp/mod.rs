@@ -6,8 +6,8 @@ pub mod gate;
 pub mod live;
 
 pub use config::{
-    BandKind, BusDspConfig, CompressorConfig, DenoiseBackend, DenoiseConfig, DspConfig, EqBand,
-    EqConfig, GateConfig, HpfConfig, LimiterConfig, MAX_EQ_BANDS,
+    BandKind, BusDspConfig, CompressorConfig, DenoiseBackend, DenoiseConfig, DspConfig, DspStage,
+    EqBand, EqConfig, GateConfig, HpfConfig, LimiterConfig, MAX_EQ_BANDS,
 };
 pub use denoise::Denoiser;
 pub use dynamics::{Compressor, Limiter};

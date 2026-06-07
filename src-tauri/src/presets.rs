@@ -917,6 +917,41 @@ mod tests {
     }
 
     #[test]
+    fn preset_round_trips_input_dsp_order() {
+        use crate::audio::dsp::DspStage;
+        // A non-canonical wired order must survive save/load.
+        let mut dsp = DspConfig::default();
+        dsp.order = vec![
+            DspStage::Limiter,
+            DspStage::Comp,
+            DspStage::Eq,
+            DspStage::Gate,
+            DspStage::Hpf,
+            DspStage::Denoise,
+        ];
+        let input = PresetInputV2 {
+            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            gain: 1.0,
+            muted: false,
+            sends: default_sends(),
+            dsp: dsp.clone(),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let back: PresetInputV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.dsp.order, dsp.order);
+    }
+
+    #[test]
+    fn preset_without_order_loads_canonical() {
+        use crate::audio::dsp::DspStage;
+        // Pre-order presets (no `order` key) default to canonical order.
+        let json = r#"{"device":{"id":"mic","name":"Mic"},"gain":1.0,
+            "muted":false,"sends":[],"dsp":{}}"#;
+        let back: PresetInputV2 = serde_json::from_str(json).unwrap();
+        assert_eq!(back.dsp.order, DspStage::ALL.to_vec());
+    }
+
+    #[test]
     fn preset_round_trips_eq_band_kind_and_bus_eq() {
         use crate::audio::dsp::BandKind;
         // Input EQ with a non-default band shape.
