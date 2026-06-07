@@ -84,9 +84,35 @@ export function setInputFxEnabled(
   }
 }
 
-/** Enabled effects in chain order — drives the on-canvas effect boxes. */
+/** Enabled effects in canonical order (menus/badges). */
 export function enabledInputFx(dsp: DspConfig): { key: InputFxKey; label: string }[] {
   return INPUT_FX_DEFS.filter((d) => inputFxEnabled(dsp, d.key));
+}
+
+/** Enabled effects in the WIRED order (`dsp.order`) — drives the node chain. */
+export function orderedInputFx(dsp: DspConfig): { key: InputFxKey; label: string }[] {
+  const label = (k: InputFxKey) => INPUT_FX_DEFS.find((d) => d.key === k)?.label ?? k;
+  return (dsp.order as InputFxKey[])
+    .filter((k) => inputFxEnabled(dsp, k))
+    .map((k) => ({ key: k, label: label(k) }));
+}
+
+/**
+ * Move stage `from` to sit immediately before `before` in the chain order
+ * (immutable). Used when the user wires one fx node's output into another's
+ * input. Returns the config unchanged if the move is a no-op.
+ */
+export function reorderInputFx(
+  dsp: DspConfig,
+  from: InputFxKey,
+  before: InputFxKey,
+): DspConfig {
+  if (from === before) return dsp;
+  const order = (dsp.order as InputFxKey[]).filter((k) => k !== from);
+  const i = order.indexOf(before);
+  if (i < 0) return dsp;
+  order.splice(i, 0, from);
+  return { ...dsp, order: order as DspConfig["order"] };
 }
 
 /** Count enabled effects in an input chain — drives the node's FX pill badge. */

@@ -23,7 +23,8 @@ import {
   NodeFxPopover,
   countBusFx,
   countInputFx,
-  enabledInputFx,
+  orderedInputFx,
+  reorderInputFx,
   setInputFxEnabled,
   INPUT_FX_DEFS,
   inputFxEnabled,
@@ -613,6 +614,10 @@ export function NodeView({
       label: string;
       x: number;
       y: number;
+      /** in-port (left) + out-port (right) centers, for wires + drop targets. */
+      inX: number;
+      outX: number;
+      portY: number;
     }
     interface InputFxRow {
       boxes: FxBox[];
@@ -628,9 +633,19 @@ export function NodeView({
       const boxes: FxBox[] = [];
       const connectors: InputFxRow["connectors"] = [];
       let prevRightX = pos.x + INPUT_W;
-      for (const chip of enabledInputFx(input.dsp)) {
+      // Boxes follow the WIRED order (dsp.order), so re-wiring visibly
+      // reshuffles the chain.
+      for (const chip of orderedInputFx(input.dsp)) {
         const bx = prevRightX + FX_GAP;
-        boxes.push({ key: chip.key, label: chip.label, x: bx, y: cy - FX_H / 2 });
+        boxes.push({
+          key: chip.key,
+          label: chip.label,
+          x: bx,
+          y: cy - FX_H / 2,
+          inX: bx,
+          outX: bx + FX_W,
+          portY: cy,
+        });
         connectors.push({ x1: prevRightX, y1: cy, x2: bx, y2: cy });
         prevRightX = bx + FX_W;
       }
@@ -641,6 +656,83 @@ export function NodeView({
     }
     return map;
   }, [inputs, inputPositions]);
+
+  // FX reorder wire-drag: drag one fx box's OUT port onto another's IN port to
+  // place it immediately before that one. Self-contained (fx ports only) so the
+  // input→bus wiring system is untouched. Coords are canvas-space.
+  const [fxDrag, setFxDrag] = useState<{
+    inputId: string;
+    fromKey: InputFxKey;
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+    hoverKey: InputFxKey | null;
+  } | null>(null);
+  const fxDragRef = useRef(fxDrag);
+  useEffect(() => {
+    fxDragRef.current = fxDrag;
+  }, [fxDrag]);
+
+  const onFxPortDown = useCallback(
+    (inputId: string, fromKey: InputFxKey, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const row = inputFxLayout.get(inputId);
+      const box = row?.boxes.find((b) => b.key === fromKey);
+      if (!box) return;
+      const { x, y } = toCanvas(e.clientX, e.clientY);
+      setFxDrag({
+        inputId,
+        fromKey,
+        startX: box.outX,
+        startY: box.portY,
+        curX: x,
+        curY: y,
+        hoverKey: null,
+      });
+    },
+    [inputFxLayout],
+  );
+
+  useEffect(() => {
+    if (!fxDrag) return;
+    const onMove = (e: MouseEvent) => {
+      const { x, y } = toCanvas(e.clientX, e.clientY);
+      const d = fxDragRef.current;
+      if (!d) return;
+      const row = inputFxLayout.get(d.inputId);
+      let hoverKey: InputFxKey | null = null;
+      if (row) {
+        for (const b of row.boxes) {
+          if (b.key === d.fromKey) continue;
+          const dx = x - b.inX;
+          const dy = y - b.portY;
+          if (dx * dx + dy * dy < 28 * 28) {
+            hoverKey = b.key;
+            break;
+          }
+        }
+      }
+      setFxDrag((s) => (s ? { ...s, curX: x, curY: y, hoverKey } : null));
+    };
+    const onUp = () => {
+      const d = fxDragRef.current;
+      if (d && d.hoverKey) {
+        const input = inputs.find((i) => i.id === d.inputId);
+        if (input) {
+          onInputDsp(d.inputId, reorderInputFx(input.dsp, d.fromKey, d.hoverKey));
+        }
+      }
+      setFxDrag(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [fxDrag, inputFxLayout, inputs, onInputDsp, toCanvas]);
 
   // Add-effect menu (anchored at the "+" box). Null when closed.
   const [addFxMenu, setAddFxMenu] = useState<{
@@ -1624,6 +1716,20 @@ export function NodeView({
             )),
           )}
 
+          {/* Ghost wire while reordering an fx node (out-port → in-port). */}
+          {fxDrag && (
+            <line
+              x1={fxDrag.startX}
+              y1={fxDrag.startY}
+              x2={fxDrag.curX}
+              y2={fxDrag.curY}
+              stroke={fxDrag.hoverKey ? "rgba(110,168,254,0.95)" : "rgba(170,180,200,0.7)"}
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              strokeDasharray="5 5"
+            />
+          )}
+
           {/* Ghost wire while dragging. Invalid drop (cycle / port
               mismatch) paints the ghost red AND pulses to draw the
               eye, plus a tooltip explains the rejection. */}
@@ -1731,34 +1837,51 @@ export function NodeView({
           if (!row) return null;
           return (
             <Fragment key={`fx-${input.id}`}>
-              {row.boxes.map((b) => (
-                <div
-                  key={b.key}
-                  className={styles.fxNode}
-                  style={{ left: b.x, top: b.y, width: FX_W, height: FX_H }}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openInputFx(input.id, e);
-                  }}
-                  title={`${b.label} — click to edit`}
-                >
-                  <span className={styles.fxNodeLabel}>{b.label}</span>
-                  <button
-                    type="button"
-                    className={styles.fxNodeRemove}
+              {row.boxes.map((b) => {
+                const isDropTarget =
+                  fxDrag?.inputId === input.id && fxDrag.hoverKey === b.key;
+                return (
+                  <div
+                    key={b.key}
+                    className={`${styles.fxNode} ${isDropTarget ? styles.fxNodeDrop : ""}`}
+                    style={{ left: b.x, top: b.y, width: FX_W, height: FX_H }}
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggleInputFx(input.id, b.key, false);
+                      openInputFx(input.id, e);
                     }}
-                    title={`Remove ${b.label}`}
-                    aria-label={`Remove ${b.label}`}
+                    title={`${b.label} — click to edit, drag the right dot to reorder`}
                   >
-                    ×
-                  </button>
-                </div>
-              ))}
+                    <span className={styles.fxPortIn} aria-hidden>
+                      <span className={styles.fxPortDot} />
+                    </span>
+                    <span className={styles.fxNodeLabel}>{b.label}</span>
+                    <button
+                      type="button"
+                      className={styles.fxPortOut}
+                      onMouseDown={(e) => onFxPortDown(input.id, b.key, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      title={`Drag onto another effect's input to reorder ${b.label}`}
+                      aria-label={`Reorder ${b.label}`}
+                    >
+                      <span className={styles.fxPortDot} />
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.fxNodeRemove}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleInputFx(input.id, b.key, false);
+                      }}
+                      title={`Remove ${b.label}`}
+                      aria-label={`Remove ${b.label}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
               <button
                 type="button"
                 className={styles.fxAddNode}

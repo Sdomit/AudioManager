@@ -417,6 +417,53 @@
   border-color: var(--am-accent, #6ea8fe);
   color: var(--am-text-primary);
 }
+.fxPortIn,
+.fxPortOut {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  z-index: 5;
+}
+.fxPortIn {
+  left: -8px;
+  cursor: default;
+}
+.fxPortOut {
+  right: -8px;
+  cursor: grab;
+}
+.fxPortOut:active {
+  cursor: grabbing;
+}
+.fxPortDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--am-surface-1);
+  border: 2px solid var(--am-text-tertiary);
+  transition: border-color var(--am-dur-fast), background var(--am-dur-fast),
+    transform var(--am-dur-fast);
+}
+.fxPortOut:hover .fxPortDot {
+  border-color: var(--am-accent, #6ea8fe);
+  transform: scale(1.2);
+}
+.fxNodeDrop {
+  border-color: var(--am-accent, #6ea8fe) !important;
+  box-shadow: 0 0 0 2px rgba(110, 168, 254, 0.4);
+}
+.fxNodeDrop .fxPortIn .fxPortDot {
+  border-color: var(--am-accent, #6ea8fe);
+  background: var(--am-accent, #6ea8fe);
+}
+
 .fxNodeLabel {
   flex: 1;
   overflow: hidden;
