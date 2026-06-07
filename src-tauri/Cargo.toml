@@ -31,6 +31,21 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # = false` drops the CLI `bin`/`dasp` deps (clap, hound, anyhow). #37
 nnnoiseless = { version = "0.5.2", default-features = false }
 
+# DeepFilterNet (phase 2, #37) is NOT wired as a build dep on purpose. A working
+# prototype used:
+#   deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", branch = "main",
+#                   default-features = false, features = ["tract", "default-model"], optional = true }
+#   ndarray = "=0.15.6"; tract-{core,onnx,pulse,hir} = "=0.21.4"  (pin: main uses
+#   the pre-rename `symbol_table` tract API), behind a `deepfilternet` feature.
+# Blocker: the embedded DeepFilterNet3 model fails tract codegen at load
+# ("duplicate name /convt3/Conv.bias") with 0.21.4, and newer tract drops the
+# API `deep_filter` main needs — so no buildable model/tract combo right now.
+# It was kept out of the tree because an optional git dep is fetched even on
+# default builds, burdening everyone for a feature that can't load its model
+# yet. The backend enum + UI selector + seqlock plumbing below are ready; drop
+# `DfBackend` back into audio/dsp/denoise.rs and re-add the deps once upstream
+# ships a compatible model/tract.
+
 # WASAPI loopback capture (system + per-process). Windows-only; pulls in the
 # `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).
 [target.'cfg(windows)'.dependencies]

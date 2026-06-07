@@ -21,7 +21,7 @@
 
 use std::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 
-use super::config::{BandKind, BusDspConfig, DspConfig, EqBand, MAX_EQ_BANDS};
+use super::config::{BandKind, BusDspConfig, DenoiseBackend, DspConfig, EqBand, MAX_EQ_BANDS};
 use super::denoise::Denoiser;
 use super::dynamics::{Compressor, CompressorCoeffs, Limiter, LimiterCoeffs};
 use super::filter::{
@@ -232,6 +232,7 @@ impl AtomicLimiter {
 /// [`InputDspShared`]. Public so tests can assert internal consistency.
 pub struct InputDspSnapshot {
     pub denoise_enabled: bool,
+    pub denoise_use_dfn: bool,
     pub hpf: (bool, [f32; 5]),
     pub eq: [(bool, [f32; 5]); MAX_EQ_BANDS],
     pub gate: (bool, GateCoeffs),
@@ -252,6 +253,7 @@ pub struct BusDspSnapshot {
 pub struct InputDspShared {
     generation: AtomicU32,
     denoise_enabled: AtomicBool,
+    denoise_use_dfn: AtomicBool,
     hpf: AtomicBiquad,
     eq: [AtomicBiquad; MAX_EQ_BANDS],
     gate: AtomicGate,
@@ -266,6 +268,7 @@ impl InputDspShared {
         let s = Self {
             generation: AtomicU32::new(0),
             denoise_enabled: AtomicBool::new(false),
+            denoise_use_dfn: AtomicBool::new(false),
             hpf: AtomicBiquad::new(),
             eq: std::array::from_fn(|_| AtomicBiquad::new()),
             gate: AtomicGate::new(),
@@ -290,6 +293,8 @@ impl InputDspShared {
     fn write_fields(&self, cfg: &DspConfig, sr: f32) {
         self.denoise_enabled
             .store(cfg.denoise.enabled, RELAXED);
+        self.denoise_use_dfn
+            .store(cfg.denoise.backend == DenoiseBackend::DeepFilterNet, RELAXED);
         self.hpf.store(
             cfg.hpf.enabled,
             high_pass_coeffs(nyquist_clamp(cfg.hpf.freq_hz, sr), sr),
@@ -335,6 +340,7 @@ impl InputDspShared {
     fn read_fields(&self) -> InputDspSnapshot {
         InputDspSnapshot {
             denoise_enabled: self.denoise_enabled.load(RELAXED),
+            denoise_use_dfn: self.denoise_use_dfn.load(RELAXED),
             hpf: self.hpf.load(),
             eq: std::array::from_fn(|i| self.eq[i].load()),
             gate: self.gate.load(),
@@ -547,11 +553,13 @@ impl InputDspSlots {
     }
 
     fn apply(&mut self, s: &InputDspSnapshot) {
-        // Denoiser: flush bridging buffers on a disabled→enabled transition so
-        // stale queued audio can't play out when it switches back on.
+        // Denoiser: pick the backend, then flush bridging buffers on a
+        // disabled→enabled transition or a backend switch so stale queued audio
+        // can't play out.
         let denoise_was = self.denoise_enabled;
         self.denoise_enabled = s.denoise_enabled;
-        if s.denoise_enabled && !denoise_was {
+        let backend_changed = self.denoiser.set_use_dfn(s.denoise_use_dfn);
+        if s.denoise_enabled && (!denoise_was || backend_changed) {
             self.denoiser.reset();
         }
         apply_biquad(&mut self.hpf, s.hpf.0, s.hpf.1);

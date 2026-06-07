@@ -1,25 +1,31 @@
 //! Neural noise suppression (#37), placed first in the per-input chain.
 //!
-//! Backend: RNNoise via the pure-Rust [`nnnoiseless`] port. RNNoise is a small
-//! recurrent network that operates on **48 kHz mono** in fixed 480-sample
-//! (10 ms) frames, with samples in **i16 scale** (`[-32768, 32767]`) rather
-//! than normalised `[-1, 1]`.
+//! **RNNoise** (the pure-Rust [`nnnoiseless`] port) is the active backend: a
+//! small recurrent net, ~10 ms latency, tiny CPU, i16-scaled samples. It runs
+//! at **48 kHz mono** in fixed 480-sample frames, so the wrapper accumulates
+//! arbitrary callback blocks into full frames and reads denoised output from a
+//! queue primed with one frame of silence — constant ~10 ms latency, never
+//! reads empty. Stereo runs one state per channel. Off 48 kHz it bypasses.
 //!
-//! Two realities force the wrapper below:
+//! ## DeepFilterNet (phase 2 — wired but not built)
 //!
-//!  * **Block bridging.** The audio callback hands us arbitrary block sizes,
-//!    but RNNoise wants exactly 480-sample frames. We accumulate input into
-//!    full frames and read denoised output from a queue primed with one frame
-//!    of silence, giving a constant ~10 ms latency and never reading empty.
-//!  * **Stereo.** RNNoise is mono, so a stereo input runs two independent
-//!    states (one per channel).
+//! [`Denoiser`] carries a `use_dfn` flag fed from [`DenoiseBackend`] through the
+//! seqlock, and selecting DeepFilterNet in the UI flows all the way here. The
+//! actual `DfTract` engine is **not compiled in**: a prototype backend worked
+//! architecturally (per-channel `df::tract::DfTract`, normalised `[-1,1]`,
+//! `hop_size` framing, `unsafe impl Send` because tract holds `Rc`s but the
+//! slots only ever touch the audio thread after a single move), but:
+//!   * the published `deep_filter` crate predates `DfTract`;
+//!   * `deep_filter` `main` only builds against tract `=0.21.4`; and
+//!   * that tract then fails to load the embedded DeepFilterNet3 model
+//!     (`duplicate name /convt3/Conv.bias` during codegen).
+//! No buildable model/tract combo exists today, and an optional git dep is
+//! fetched even on default builds, so DFN is held out. Until it lands,
+//! `use_dfn` simply falls back to RNNoise (see [`Denoiser::process`]).
 //!
-//! The model assumes 48 kHz; at any other engine rate the denoiser bypasses
-//! (passes the block through untouched) so we never feed it wrong-rate audio.
-//!
-//! Allocation happens only in [`Denoiser::new`] (engine-start, off the audio
-//! thread). `process` and `reset` touch pre-sized buffers only — no realtime
-//! allocation as long as a block stays within [`OUT_CAPACITY`].
+//! Allocation happens only in [`Denoiser::new`] (engine start, off the audio
+//! thread). `process`/`reset` touch pre-sized buffers — no realtime allocation
+//! as long as a block stays within [`OUT_CAPACITY`].
 
 use std::collections::VecDeque;
 
@@ -35,17 +41,20 @@ const SCALE: f32 = 32_768.0;
 /// largest realistic callback block, so steady-state pushes never reallocate.
 const OUT_CAPACITY: usize = FRAME * 2 + 16_384;
 
-/// Per-input RNNoise denoiser with block bridging. Up to two channels.
+/// Per-input neural denoiser. RNNoise backend; `use_dfn` is plumbed for the
+/// future DeepFilterNet backend and currently falls back to RNNoise.
 pub struct Denoiser {
     /// One RNNoise state per channel (index 0 = L/mono, 1 = R).
     states: Vec<Box<DenoiseState<'static>>>,
     /// Partial input frame per channel, in i16 scale; len < `FRAME`.
     accum: Vec<Vec<f32>>,
-    /// Denoised output per channel, in i16 scale; primed with one frame of
-    /// silence so a read of any block size always succeeds.
+    /// Denoised output per channel, in i16 scale; primed one frame ahead.
     out: Vec<VecDeque<f32>>,
     /// True only when the engine runs at 48 kHz; otherwise `process` bypasses.
     sr_ok: bool,
+    /// DeepFilterNet requested. No effect until the DFN backend is compiled in;
+    /// retained so the UI selection and seqlock stay wired end to end.
+    use_dfn: bool,
 }
 
 impl Denoiser {
@@ -59,48 +68,51 @@ impl Denoiser {
             VecDeque::with_capacity(OUT_CAPACITY),
         ];
         for q in &mut out {
-            for _ in 0..FRAME {
-                q.push_back(0.0);
-            }
+            prime(q, FRAME);
         }
         Self {
             states,
             accum,
             out,
             sr_ok: (sample_rate - 48_000.0).abs() < 1.0,
+            use_dfn: false,
         }
     }
 
-    /// True when the engine rate lets the denoiser run (48 kHz). When false,
-    /// `process` is a passthrough and the UI toggle has no audible effect.
+    /// True when the engine rate lets the denoiser run (48 kHz).
     pub fn is_supported(&self) -> bool {
         self.sr_ok
     }
 
+    /// Select the DeepFilterNet backend. Returns true if it changed (caller
+    /// resets on change). No audible effect until the DFN backend is compiled
+    /// in — selection currently falls back to RNNoise.
+    pub fn set_use_dfn(&mut self, use_dfn: bool) -> bool {
+        let changed = self.use_dfn != use_dfn;
+        self.use_dfn = use_dfn;
+        changed
+    }
+
     /// Flush bridging buffers back to a clean one-frame latency. Keeps RNNoise
-    /// internal state (no reallocation) — used on a disabled→enabled transition
-    /// so stale queued audio can't play out. Safe on the audio thread.
+    /// internal state (no reallocation). Safe on the audio thread.
     pub fn reset(&mut self) {
         for a in &mut self.accum {
             a.clear();
         }
         for q in &mut self.out {
             q.clear();
-            for _ in 0..FRAME {
-                q.push_back(0.0);
-            }
+            prime(q, FRAME);
         }
     }
 
-    /// Denoise an interleaved block in place. `channels` is 1 or 2. Bypass
-    /// (no-op) when the engine is not at 48 kHz.
+    /// Denoise an interleaved block in place. `channels` is 1 or 2. Bypass when
+    /// the engine is not at 48 kHz. (DeepFilterNet selection falls back here.)
     pub fn process(&mut self, interleaved: &mut [f32], channels: usize) {
         if !self.sr_ok || channels == 0 {
             return;
         }
         let ch_count = channels.min(self.states.len());
         let frames = interleaved.len() / channels;
-
         for ch in 0..ch_count {
             // Pass A — consume this channel's samples into full RNNoise frames.
             for f in 0..frames {
@@ -122,6 +134,14 @@ impl Denoiser {
                 interleaved[f * channels + ch] = s / SCALE;
             }
         }
+    }
+}
+
+/// Prime an output queue with `n` zeros (one frame of latency headroom).
+#[inline]
+fn prime(q: &mut VecDeque<f32>, n: usize) {
+    for _ in 0..n {
+        q.push_back(0.0);
     }
 }
 
@@ -180,5 +200,24 @@ mod tests {
         let mut buf = vec![0.9f32; 100];
         d.process(&mut buf, 1);
         assert!(buf.iter().all(|&s| s == 0.0), "reset must re-prime silence");
+    }
+
+    #[test]
+    fn set_use_dfn_reports_change() {
+        let mut d = Denoiser::new(48_000.0);
+        assert!(d.set_use_dfn(true), "false→true is a change");
+        assert!(!d.set_use_dfn(true), "true→true is no change");
+        assert!(d.set_use_dfn(false), "true→false is a change");
+    }
+
+    // Selecting DeepFilterNet falls back to RNNoise (DFN backend not compiled):
+    // same primed-latency behavior, no panic.
+    #[test]
+    fn dfn_selection_falls_back_to_rnnoise() {
+        let mut d = Denoiser::new(48_000.0);
+        d.set_use_dfn(true);
+        let mut buf = vec![0.7f32; 100];
+        d.process(&mut buf, 1);
+        assert!(buf.iter().all(|&s| s == 0.0), "fallback keeps primed silence");
     }
 }
