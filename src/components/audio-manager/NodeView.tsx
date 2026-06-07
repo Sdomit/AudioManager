@@ -126,7 +126,6 @@ const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus co
 const FX_W = 104;
 const FX_H = 26;
 const FX_GAP = 24;
-const FX_ADD_W = 26; // the trailing "+" box
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
 
@@ -180,7 +179,7 @@ function dropReasonFor(code: string): string {
 }
 
 interface NodeDragState {
-  kind: "input" | "bus" | "group";
+  kind: "input" | "bus" | "group" | "fx";
   id: string;
   startMouseX: number;
   startMouseY: number;
@@ -208,14 +207,31 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
+// FX node ids live in the shared `nodePositions` map alongside input/bus/group
+// nodes so the existing drag/clamp/persistence machinery handles them for free.
+// Form: `fx:<inputId>:<stage>`.
+const FX_NODE_PREFIX = "fx:";
+function fxNodeId(inputId: string, key: string): NodeId {
+  return `${FX_NODE_PREFIX}${inputId}:${key}`;
+}
+function isFxNodeId(id: NodeId): boolean {
+  return id.startsWith(FX_NODE_PREFIX);
+}
+
 // ── Layout helpers ────────────────────────────────────────────────────
 // Node footprint by graph NodeId kind. Centralizes the size lookup that
 // the clamp / drag / placement paths used to each duplicate inline.
 function nodeWidth(nid: NodeId): number {
-  return isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
+  if (isInputNodeId(nid)) return INPUT_W;
+  if (isBusNodeId(nid)) return BUS_W;
+  if (isFxNodeId(nid)) return FX_W;
+  return GROUP_W;
 }
 function nodeHeight(nid: NodeId): number {
-  return isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
+  if (isInputNodeId(nid)) return INPUT_H;
+  if (isBusNodeId(nid)) return BUS_H;
+  if (isFxNodeId(nid)) return FX_H;
+  return GROUP_H;
 }
 
 // Clamp a node's top-left so the whole node stays inside [0, bound-size].
@@ -235,10 +251,6 @@ function clampToBounds(
 // Bus column x: sit at a comfortable, readable distance from the input
 // column rather than pinned to the far right edge (which left a large
 // dead gap in the middle on wide canvases). Never overflow the canvas.
-function busColumnXFor(boundsW: number): number {
-  return Math.min(boundsW - BUS_W - COL_PAD, COL_PAD + INPUT_W + COL_GAP_BETWEEN);
-}
-
 // Keep the (canvasW × canvasH) world box within the visible viewport.
 // Nodes are always clamped inside the box, so a visible box guarantees
 // every node stays on screen. When the box is smaller than the viewport
@@ -539,7 +551,8 @@ export function NodeView({
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      const busColX = busColumnXFor(boundsRef.current.w);
+      // Hug the input column (not the right edge of the huge world canvas).
+      const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -557,10 +570,18 @@ export function NodeView({
       const aliveInputs = new Set(inputs.map((i) => inputNodeId(i.id)));
       const aliveBuses = new Set(buses.map((b) => busNodeId(b.id)));
       const aliveGroups = new Set(Array.from(localGroupsRef.current.keys()).map(groupNodeId));
+      // Stage `k` is alive iff its input is alive AND enabled in that input's dsp.
+      const aliveFx = new Set<NodeId>();
+      for (const i of inputs) {
+        for (const chip of orderedInputFx(i.dsp)) {
+          aliveFx.add(fxNodeId(i.id, chip.key));
+        }
+      }
       for (const id of Array.from(next.keys())) {
         if (isInputNodeId(id) && !aliveInputs.has(id)) { next.delete(id); changed = true; }
         else if (isBusNodeId(id) && !aliveBuses.has(id)) { next.delete(id); changed = true; }
         else if (isGroupNodeId(id) && !aliveGroups.has(id)) { next.delete(id); changed = true; }
+        else if (isFxNodeId(id) && !aliveFx.has(id)) { next.delete(id); changed = true; }
       }
       return changed ? next : prev;
     });
@@ -606,8 +627,12 @@ export function NodeView({
 
   // Per-input effect boxes: enabled effects rendered as a node chain hanging
   // off the input (input → fx → fx → …). The input's outgoing wires then start
-  // at the last box, so audio visibly flows through the chain. Boxes follow the
-  // input's position (not independently draggable); fixed engine order.
+  // at the last box, so audio visibly flows through the chain.
+  //
+  // Each fx node has its own position in `nodePositions` (id = `fx:<inputId>:<key>`).
+  // First time we see an enabled stage we seed its position from the auto-layout
+  // chain spot; after that the user can drag the box anywhere via the standard
+  // node-drag machinery, and the connectors follow.
   const inputFxLayout = useMemo(() => {
     interface FxBox {
       key: InputFxKey;
@@ -622,40 +647,76 @@ export function NodeView({
     interface InputFxRow {
       boxes: FxBox[];
       origin: { x: number; y: number };
-      plus: { x: number; y: number };
       connectors: { x1: number; y1: number; x2: number; y2: number }[];
     }
     const map = new Map<string, InputFxRow>();
     for (const input of inputs) {
       const pos = inputPositions.get(input.id);
       if (!pos) continue;
-      const cy = pos.y + INPUT_H / 2;
+      const inCy = pos.y + INPUT_H / 2;
+      const inRightX = pos.x + INPUT_W;
       const boxes: FxBox[] = [];
       const connectors: InputFxRow["connectors"] = [];
-      let prevRightX = pos.x + INPUT_W;
-      // Boxes follow the WIRED order (dsp.order), so re-wiring visibly
-      // reshuffles the chain.
+      // Cursor for the auto-layout fallback (used only when an fx box has no
+      // stored position yet — i.e. it was just enabled this render).
+      let autoX = inRightX;
+      let prevOutX = inRightX;
+      let prevOutY = inCy;
+      // Boxes follow the WIRED order (dsp.order), so re-wiring reshuffles the
+      // chain visually as well as in the engine.
       for (const chip of orderedInputFx(input.dsp)) {
-        const bx = prevRightX + FX_GAP;
+        const nid = fxNodeId(input.id, chip.key);
+        const stored = nodePositions.get(nid);
+        const autoBoxX = autoX + FX_GAP;
+        const bx = stored?.x ?? autoBoxX;
+        const by = stored?.y ?? inCy - FX_H / 2;
+        const cy = by + FX_H / 2;
         boxes.push({
           key: chip.key,
           label: chip.label,
           x: bx,
-          y: cy - FX_H / 2,
+          y: by,
           inX: bx,
           outX: bx + FX_W,
           portY: cy,
         });
-        connectors.push({ x1: prevRightX, y1: cy, x2: bx, y2: cy });
-        prevRightX = bx + FX_W;
+        // Connector from previous out-port to this in-port. Works for any
+        // position (free-form), drawing a polyline → straight is fine here.
+        connectors.push({ x1: prevOutX, y1: prevOutY, x2: bx, y2: cy });
+        prevOutX = bx + FX_W;
+        prevOutY = cy;
+        autoX = autoBoxX + FX_W;
       }
-      const origin = { x: prevRightX, y: cy };
-      const plus = { x: prevRightX + FX_GAP, y: cy - FX_H / 2 };
-      connectors.push({ x1: prevRightX, y1: cy, x2: plus.x, y2: cy });
-      map.set(input.id, { boxes, origin, plus, connectors });
+      const origin = { x: prevOutX, y: prevOutY };
+      map.set(input.id, { boxes, origin, connectors });
     }
     return map;
-  }, [inputs, inputPositions]);
+  }, [inputs, inputPositions, nodePositions]);
+
+  // Seed `nodePositions` for fx boxes that don't have a stored position yet
+  // (effects just enabled, or new inputs). One-shot: subsequent renders read
+  // the stored value. Drag/clamp paths share the unified map.
+  useEffect(() => {
+    setNodePositions((prev) => {
+      let next: Map<NodeId, NodePos> | null = null;
+      for (const input of inputs) {
+        const ipos = prev.get(inputNodeId(input.id));
+        if (!ipos) continue;
+        const inCy = ipos.y + INPUT_H / 2;
+        let autoX = ipos.x + INPUT_W;
+        for (const chip of orderedInputFx(input.dsp)) {
+          const nid = fxNodeId(input.id, chip.key);
+          const bx = autoX + FX_GAP;
+          autoX = bx + FX_W;
+          if (!prev.get(nid)) {
+            if (!next) next = new Map(prev);
+            next.set(nid, { x: bx, y: inCy - FX_H / 2 });
+          }
+        }
+      }
+      return next ?? prev;
+    });
+  }, [inputs]);
 
   // FX reorder wire-drag: drag one fx box's OUT port onto another's IN port to
   // place it immediately before that one. Self-contained (fx ports only) so the
@@ -668,6 +729,7 @@ export function NodeView({
     curX: number;
     curY: number;
     hoverKey: InputFxKey | null;
+    hoverBusId: BusId | null;
   } | null>(null);
   const fxDragRef = useRef(fxDrag);
   useEffect(() => {
@@ -690,6 +752,7 @@ export function NodeView({
         curX: x,
         curY: y,
         hoverKey: null,
+        hoverBusId: null,
       });
     },
     [inputFxLayout],
@@ -701,24 +764,39 @@ export function NodeView({
       const { x, y } = toCanvas(e.clientX, e.clientY);
       const d = fxDragRef.current;
       if (!d) return;
-      const row = inputFxLayout.get(d.inputId);
+      // Bus in-ports take precedence (drag-to-route). Sweep bus left-edge ports.
+      let hoverBusId: BusId | null = null;
+      for (const [bid, p] of busPositions) {
+        const dx = x - p.x;
+        const dy = y - (p.y + BUS_H / 2);
+        if (dx * dx + dy * dy < 32 * 32 && isBusId(bid)) {
+          hoverBusId = bid;
+          break;
+        }
+      }
       let hoverKey: InputFxKey | null = null;
-      if (row) {
-        for (const b of row.boxes) {
-          if (b.key === d.fromKey) continue;
-          const dx = x - b.inX;
-          const dy = y - b.portY;
-          if (dx * dx + dy * dy < 28 * 28) {
-            hoverKey = b.key;
-            break;
+      if (!hoverBusId) {
+        const row = inputFxLayout.get(d.inputId);
+        if (row) {
+          for (const b of row.boxes) {
+            if (b.key === d.fromKey) continue;
+            const dx = x - b.inX;
+            const dy = y - b.portY;
+            if (dx * dx + dy * dy < 28 * 28) {
+              hoverKey = b.key;
+              break;
+            }
           }
         }
       }
-      setFxDrag((s) => (s ? { ...s, curX: x, curY: y, hoverKey } : null));
+      setFxDrag((s) => (s ? { ...s, curX: x, curY: y, hoverKey, hoverBusId } : null));
     };
     const onUp = () => {
       const d = fxDragRef.current;
-      if (d && d.hoverKey) {
+      if (d && d.hoverBusId) {
+        // Drop on a bus → route this input there (chain feeds the send tail).
+        onToggleSend(d.inputId, d.hoverBusId);
+      } else if (d && d.hoverKey) {
         const input = inputs.find((i) => i.id === d.inputId);
         if (input) {
           onInputDsp(d.inputId, reorderInputFx(input.dsp, d.fromKey, d.hoverKey));
@@ -732,7 +810,7 @@ export function NodeView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [fxDrag, inputFxLayout, inputs, onInputDsp, toCanvas]);
+  }, [fxDrag, inputFxLayout, inputs, onInputDsp, onToggleSend, busPositions, toCanvas]);
 
   // Add-effect menu (anchored at the "+" box). Null when closed.
   const [addFxMenu, setAddFxMenu] = useState<{
@@ -767,10 +845,16 @@ export function NodeView({
     return p ? { x: p.x, y: p.y + BUS_H / 2 } : null;
   };
 
-  const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W);
-  const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H);
+  // Canvas is a fixed large world (effectively limitless for hand-laid graphs)
+  // so users can pan freely and drag nodes far apart without hitting an edge.
+  // The default viewport stays at {0,0,1}, and `resetLayout` places nodes at
+  // (COL_PAD, ...) so the visible top-left is where the nodes are.
+  const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W, 10_000);
+  const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H, 10_000);
   boundsRef.current = { w: canvasW, h: canvasH };
-  const busColumnX = busColumnXFor(canvasW);
+  // Bus column hugs the input column instead of the (now huge) right edge so
+  // the initial layout still fits in the visible viewport.
+  const busColumnX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
 
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
@@ -824,7 +908,7 @@ export function NodeView({
 
   // ── Mouse handlers for moving a node ──────────────────────────────────
   const handleNodeMouseDown = useCallback(
-    (kind: "input" | "bus" | "group", id: string, e: React.MouseEvent) => {
+    (kind: "input" | "bus" | "group" | "fx", id: string, e: React.MouseEvent) => {
       // Only left mouse button initiates a drag.
       if (e.button !== 0) return;
       // Ignore clicks on interactive children (ports, buttons).
@@ -833,6 +917,7 @@ export function NodeView({
       const nid =
         kind === "input" ? inputNodeId(id)
         : kind === "bus" ? busNodeId(id as BusId)
+        : kind === "fx" ? (id as NodeId) // already a fxNodeId
         : groupNodeId(id);
       const pos = nodePosRef.current.get(nid);
       if (!pos) return;
@@ -1339,6 +1424,11 @@ export function NodeView({
     handleNodeMouseDown("bus", id, e), [handleNodeMouseDown]);
   const onGroupNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
     handleNodeMouseDown("group", id, e), [handleNodeMouseDown]);
+  // Fx node drag. `id` is the full fxNodeId (`fx:<inputId>:<key>`); the drag
+  // handler treats it as already-formed so it can share `nodePositions` with
+  // input/bus/group nodes via the unified clamp/move infrastructure.
+  const onFxNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
+    handleNodeMouseDown("fx", id, e), [handleNodeMouseDown]);
 
   // Start a drag-connect from a group's output port.
   const onGroupPortMouseDown = useCallback(
@@ -1723,7 +1813,11 @@ export function NodeView({
               y1={fxDrag.startY}
               x2={fxDrag.curX}
               y2={fxDrag.curY}
-              stroke={fxDrag.hoverKey ? "rgba(110,168,254,0.95)" : "rgba(170,180,200,0.7)"}
+              stroke={
+                fxDrag.hoverKey || fxDrag.hoverBusId
+                  ? "rgba(110,168,254,0.95)"
+                  : "rgba(170,180,200,0.7)"
+              }
               strokeWidth={2.5}
               strokeLinecap="round"
               strokeDasharray="5 5"
@@ -1827,6 +1921,9 @@ export function NodeView({
               onGainChange={(v) => onInputGainChange(input.id, v)}
               fxCount={countInputFx(input.dsp)}
               onFxOpen={openInputFx}
+              onAddFxRequest={(id, e) =>
+                setAddFxMenu({ inputId: id, x: e.clientX, y: e.clientY })
+              }
             />
           );
         })}
@@ -1840,17 +1937,22 @@ export function NodeView({
               {row.boxes.map((b) => {
                 const isDropTarget =
                   fxDrag?.inputId === input.id && fxDrag.hoverKey === b.key;
+                const fxNid = fxNodeId(input.id, b.key);
+                const isMoving =
+                  nodeDrag?.kind === "fx" && nodeDrag.id === fxNid;
                 return (
                   <div
                     key={b.key}
-                    className={`${styles.fxNode} ${isDropTarget ? styles.fxNodeDrop : ""}`}
+                    className={`${styles.fxNode} ${isDropTarget ? styles.fxNodeDrop : ""} ${
+                      isMoving ? styles.nodeMoving : ""
+                    }`}
                     style={{ left: b.x, top: b.y, width: FX_W, height: FX_H }}
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => onFxNodeMouseDown(fxNid, e)}
                     onClick={(e) => {
                       e.stopPropagation();
                       openInputFx(input.id, e);
                     }}
-                    title={`${b.label} — click to edit, drag the right dot to reorder`}
+                    title={`${b.label} — click to edit, drag the box to reposition, drag the right dot to reorder`}
                   >
                     <span className={styles.fxPortIn} aria-hidden>
                       <span className={styles.fxPortDot} />
@@ -1882,20 +1984,6 @@ export function NodeView({
                   </div>
                 );
               })}
-              <button
-                type="button"
-                className={styles.fxAddNode}
-                style={{ left: row.plus.x, top: row.plus.y, width: FX_ADD_W, height: FX_H }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setAddFxMenu({ inputId: input.id, x: e.clientX, y: e.clientY });
-                }}
-                title="Add an effect"
-                aria-label={`Add effect to ${input.name}`}
-              >
-                +
-              </button>
             </Fragment>
           );
         })}
@@ -1906,7 +1994,8 @@ export function NodeView({
           if (!pos) return null;
           const isSelected = selection.kind === "bus" && selection.busId === bus.id;
           const isHover = hoverBus === bus.id;
-          const isDragTarget = drag?.hoverBusId === bus.id;
+          const isDragTarget =
+            drag?.hoverBusId === bus.id || fxDrag?.hoverBusId === bus.id;
           const isMoving = nodeDrag?.kind === "bus" && nodeDrag.id === bus.id;
           const isMulti = selBuses.has(bus.id);
           const busOutSpec: TapSpec = { kind: "bus_out", bus_id: bus.id };
@@ -2097,6 +2186,30 @@ export function NodeView({
                 + Add input device…
               </button>
             )}
+            {inputs.length > 0 && (
+              <>
+                <div className={styles.bgCtxSep} aria-hidden />
+                <div className={styles.bgCtxHeading}>Add effect to…</div>
+                {inputs.map((input) => (
+                  <button
+                    key={`addfx-${input.id}`}
+                    role="menuitem"
+                    className={styles.bgCtxItem}
+                    onClick={() => {
+                      setAddFxMenu({
+                        inputId: input.id,
+                        x: bgCtx.x,
+                        y: bgCtx.y,
+                      });
+                      setBgCtx(null);
+                    }}
+                  >
+                    {input.name}
+                  </button>
+                ))}
+                <div className={styles.bgCtxSep} aria-hidden />
+              </>
+            )}
             <button
               role="menuitem"
               className={styles.bgCtxItem}
@@ -2257,6 +2370,8 @@ interface InputNodeProps {
   onGainChange: (v: number) => void;
   fxCount: number;
   onFxOpen: (id: string, e: React.MouseEvent) => void;
+  /** Right-click on the input body opens the add-effect menu (#37 phase 2). */
+  onAddFxRequest: (id: string, e: React.MouseEvent) => void;
 }
 
 const InputNode = memo(function InputNode({
@@ -2280,6 +2395,7 @@ const InputNode = memo(function InputNode({
   onGainChange,
   fxCount,
   onFxOpen,
+  onAddFxRequest,
 }: InputNodeProps) {
   const id = input.id;
   return (
@@ -2294,6 +2410,11 @@ const InputNode = memo(function InputNode({
       onClick={(e) => {
         e.stopPropagation();
         onSelect(id);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onAddFxRequest(id, e);
       }}
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={() => onMouseLeave(id)}
