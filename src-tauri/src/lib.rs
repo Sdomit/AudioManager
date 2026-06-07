@@ -942,6 +942,13 @@ fn update_input_dsp(
     device_id: String,
     config: DspConfig,
 ) -> Result<(), EngineError> {
+    // Clamp once up front so the LIVE seqlock publish gets the same normalized
+    // config the graph stores. Critical for `order`: the realtime packer assumes
+    // a full 6-stage permutation, so a partial/duplicate order from a caller
+    // would otherwise double-run or skip stages. (set_input_dsp re-clamps the
+    // stored copy; harmless.)
+    let mut config = config;
+    config.clamp();
     let mut inner = state.inner.lock().unwrap();
     if !inner.graph.set_input_dsp(&device_id, config.clone()) {
         return Err(EngineError {
