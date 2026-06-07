@@ -359,6 +359,42 @@
     background var(--am-dur-fast);
 }
 .busNode .recBadge { right: 6px; }
+
+.fxBadge {
+  position: absolute;
+  top: 4px;
+  right: 40px;
+  height: 16px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: var(--am-text-tertiary);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.8;
+  z-index: 3;
+  transition: color var(--am-dur-fast), border-color var(--am-dur-fast),
+    background var(--am-dur-fast), opacity var(--am-dur-fast);
+}
+.busNode .fxBadge { right: 28px; }
+.fxBadge:hover {
+  opacity: 1;
+  color: var(--am-text-primary);
+  border-color: var(--am-accent, #6ea8fe);
+}
+.fxBadgeActive {
+  opacity: 1;
+  color: var(--am-accent, #6ea8fe);
+  border-color: var(--am-accent, #6ea8fe);
+  background: rgba(110, 168, 254, 0.12);
+}
+
 .recBadge:hover:not(:disabled) {
   opacity: 1;
   color: var(--am-meter-clip, #EF4444);

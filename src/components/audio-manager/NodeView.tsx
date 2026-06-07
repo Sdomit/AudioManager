@@ -13,9 +13,18 @@ import type {
   Bus,
   BusId,
   DetailSelection,
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
   Send,
   TapSpec,
 } from "./types";
+import {
+  NodeFxPopover,
+  countBusFx,
+  countInputFx,
+  type NodeFxTarget,
+} from "./NodeFxPopover";
 import { gainToDb } from "./units";
 import { bipartiteToGraph } from "./graphAdapter";
 import {
@@ -81,6 +90,12 @@ interface NodeViewProps {
   onRemoveInput?: (id: string) => void;
   onInputGainChange: (id: string, v: number) => void;
   onBusVolumeChange: (id: BusId, v: number) => void;
+  /** Per-input DSP chain edit (denoise/HPF/gate/EQ/comp/limiter). */
+  onInputDsp: (id: string, dsp: DspConfig) => void;
+  /** Per-bus EQ edit. */
+  onBusEq: (id: BusId, eq: EqConfig) => void;
+  /** Per-bus limiter edit. */
+  onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
 }
 
 interface MarqueeState {
@@ -358,8 +373,24 @@ export function NodeView({
   onRemoveInput,
   onInputGainChange,
   onBusVolumeChange,
+  onInputDsp,
+  onBusEq,
+  onBusLimiter,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  // Open node FX editor (anchored at the click). Null when closed.
+  const [openFx, setOpenFx] = useState<NodeFxTarget | null>(null);
+  const openInputFx = useCallback((id: string, e: React.MouseEvent) => {
+    // Screen coords (popover is position:fixed), clamped so it stays on-screen.
+    const x = Math.min(Math.max(8, e.clientX - 150), window.innerWidth - 320);
+    const y = Math.min(Math.max(8, e.clientY), window.innerHeight - 200);
+    setOpenFx({ kind: "input", id, x, y });
+  }, []);
+  const openBusFx = useCallback((id: BusId, e: React.MouseEvent) => {
+    const x = Math.min(Math.max(8, e.clientX - 150), window.innerWidth - 320);
+    const y = Math.min(Math.max(8, e.clientY), window.innerHeight - 200);
+    setOpenFx({ kind: "bus", id, x, y });
+  }, []);
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
   const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
     w: MIN_CANVAS_W,
@@ -1600,6 +1631,8 @@ export function NodeView({
               onPortMouseDown={handlePortMouseDown}
               onRecToggle={onInputRecToggle}
               onGainChange={(v) => onInputGainChange(input.id, v)}
+              fxCount={countInputFx(input.dsp)}
+              onFxOpen={openInputFx}
             />
           );
         })}
@@ -1636,6 +1669,8 @@ export function NodeView({
               onNodeMouseDown={onBusNodeMouseDown}
               onRecToggle={onBusRecToggle}
               onVolumeChange={(v) => onBusVolumeChange(bus.id, v)}
+              fxCount={countBusFx(bus)}
+              onFxOpen={openBusFx}
             />
           );
         })}
@@ -1713,6 +1748,18 @@ export function NodeView({
           })()}
       </div>
       </div>
+
+      {openFx && (
+        <NodeFxPopover
+          target={openFx}
+          inputs={inputs}
+          buses={buses}
+          onInputDsp={onInputDsp}
+          onBusEq={onBusEq}
+          onBusLimiter={onBusLimiter}
+          onClose={() => setOpenFx(null)}
+        />
+      )}
 
       {bgCtx && (
         <>
@@ -1901,6 +1948,8 @@ interface InputNodeProps {
   onPortMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: string) => void;
   onGainChange: (v: number) => void;
+  fxCount: number;
+  onFxOpen: (id: string, e: React.MouseEvent) => void;
 }
 
 const InputNode = memo(function InputNode({
@@ -1922,6 +1971,8 @@ const InputNode = memo(function InputNode({
   onPortMouseDown,
   onRecToggle,
   onGainChange,
+  fxCount,
+  onFxOpen,
 }: InputNodeProps) {
   const id = input.id;
   return (
@@ -1982,6 +2033,19 @@ const InputNode = memo(function InputNode({
       >
         <span className={styles.portInner} />
       </button>
+      <button
+        type="button"
+        className={`${styles.fxBadge} ${fxCount > 0 ? styles.fxBadgeActive : ""}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFxOpen(id, e);
+        }}
+        title={fxCount > 0 ? `${fxCount} effect(s) — click to edit` : "Add effects"}
+        aria-label={`Effects for ${input.name}`}
+      >
+        FX{fxCount > 0 ? ` ${fxCount}` : ""}
+      </button>
       {!(recDisabled && !recArmed) && (
         <button
           type="button"
@@ -2020,6 +2084,8 @@ interface BusNodeProps {
   onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: BusId) => void;
   onVolumeChange: (v: number) => void;
+  fxCount: number;
+  onFxOpen: (id: BusId, e: React.MouseEvent) => void;
 }
 
 const BusNode = memo(function BusNode({
@@ -2039,6 +2105,8 @@ const BusNode = memo(function BusNode({
   onNodeMouseDown,
   onRecToggle,
   onVolumeChange,
+  fxCount,
+  onFxOpen,
 }: BusNodeProps) {
   const id = bus.id;
   return (
@@ -2110,6 +2178,19 @@ const BusNode = memo(function BusNode({
           <span>{stateLabel(bus.state)}</span>
         </div>
       </div>
+      <button
+        type="button"
+        className={`${styles.fxBadge} ${fxCount > 0 ? styles.fxBadgeActive : ""}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFxOpen(bus.id, e);
+        }}
+        title={fxCount > 0 ? `${fxCount} effect(s) — click to edit` : "Add effects"}
+        aria-label={`Effects for ${bus.label}`}
+      >
+        FX{fxCount > 0 ? ` ${fxCount}` : ""}
+      </button>
       {!(recDisabled && !recArmed) && (
         <button
           type="button"
