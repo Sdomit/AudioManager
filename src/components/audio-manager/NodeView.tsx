@@ -150,6 +150,8 @@ interface DragState {
   hoverBusId: BusId | null;
   /** Group drop target. Null when nothing is hovered or hovering a bus. */
   hoverGroupId: string | null;
+  /** Floating-fx drop target — claim that fx for this input on drop. */
+  hoverFloatId: string | null;
   /**
    * True if the candidate edge would be accepted by the generalized
    * graph (no cycle, ports compatible, no duplicate). Drives ghost-wire
@@ -179,7 +181,7 @@ function dropReasonFor(code: string): string {
 }
 
 interface NodeDragState {
-  kind: "input" | "bus" | "group" | "fx";
+  kind: "input" | "bus" | "group" | "fx" | "float";
   id: string;
   startMouseX: number;
   startMouseY: number;
@@ -218,19 +220,35 @@ function isFxNodeId(id: NodeId): boolean {
   return id.startsWith(FX_NODE_PREFIX);
 }
 
+// Floating fx: a placeholder effect node parked on the canvas with no input
+// owner. Drag any input's out-port onto its in-port to claim it (enables that
+// stage on that input + removes the placeholder).
+const FLOAT_NODE_PREFIX = "float:";
+function floatNodeId(floatId: string): NodeId {
+  return `${FLOAT_NODE_PREFIX}${floatId}`;
+}
+function isFloatNodeId(id: NodeId): boolean {
+  return id.startsWith(FLOAT_NODE_PREFIX);
+}
+function floatIdFromNodeId(id: NodeId): string | null {
+  return id.startsWith(FLOAT_NODE_PREFIX)
+    ? id.slice(FLOAT_NODE_PREFIX.length)
+    : null;
+}
+
 // ── Layout helpers ────────────────────────────────────────────────────
 // Node footprint by graph NodeId kind. Centralizes the size lookup that
 // the clamp / drag / placement paths used to each duplicate inline.
 function nodeWidth(nid: NodeId): number {
   if (isInputNodeId(nid)) return INPUT_W;
   if (isBusNodeId(nid)) return BUS_W;
-  if (isFxNodeId(nid)) return FX_W;
+  if (isFxNodeId(nid) || isFloatNodeId(nid)) return FX_W;
   return GROUP_W;
 }
 function nodeHeight(nid: NodeId): number {
   if (isInputNodeId(nid)) return INPUT_H;
   if (isBusNodeId(nid)) return BUS_H;
-  if (isFxNodeId(nid)) return FX_H;
+  if (isFxNodeId(nid) || isFloatNodeId(nid)) return FX_H;
   return GROUP_H;
 }
 
@@ -297,6 +315,7 @@ const LS_INPUTS_LEGACY = "am.nodePositions.inputs";
 const LS_BUSES_LEGACY  = "am.nodePositions.buses";
 const LS_VIEW          = "am.nodeView.viewport";
 const LS_GROUPS        = "am.nodeGroups.v1";
+const LS_FLOATING_FX   = "am.floatingFx.v1";
 const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
 
 /**
@@ -353,6 +372,26 @@ function loadGroups(): Map<string, GroupMeta> {
     }
   } catch {}
   return new Map();
+}
+
+/** Frontend-only floating-fx placeholder: stage label, awaiting an input. */
+interface FloatingFxMeta { stage: InputFxKey; }
+
+function loadFloatingFx(): Map<string, FloatingFxMeta> {
+  try {
+    const raw = localStorage.getItem(LS_FLOATING_FX);
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<[string, FloatingFxMeta]>;
+      return new Map(arr);
+    }
+  } catch {}
+  return new Map();
+}
+
+let floatIdCounter = 0;
+function nextFloatId(): string {
+  floatIdCounter += 1;
+  return `f_${Date.now().toString(36)}_${floatIdCounter.toString(36)}`;
 }
 
 function loadLocalEdges(): Map<string, GraphEdge> {
@@ -531,10 +570,13 @@ export function NodeView({
   // adapter will translate these into real engine nodes.
   const [localGroups, setLocalGroups] = useState<Map<string, GroupMeta>>(loadGroups);
   const [localEdges, setLocalEdges] = useState<Map<string, GraphEdge>>(loadLocalEdges);
+  const [floatingFx, setFloatingFx] = useState<Map<string, FloatingFxMeta>>(loadFloatingFx);
   const localGroupsRef = useRef(localGroups);
   const localEdgesRef = useRef(localEdges);
+  const floatingFxRef = useRef(floatingFx);
   useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
   useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
+  useEffect(() => { floatingFxRef.current = floatingFx; }, [floatingFx]);
   useEffect(() => {
     try {
       localStorage.setItem(LS_GROUPS, JSON.stringify(Array.from(localGroups.entries())));
@@ -545,6 +587,11 @@ export function NodeView({
       localStorage.setItem(LS_LOCAL_EDGES, JSON.stringify(Array.from(localEdges.entries())));
     } catch {}
   }, [localEdges]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_FLOATING_FX, JSON.stringify(Array.from(floatingFx.entries())));
+    } catch {}
+  }, [floatingFx]);
 
   // Sync inputs+buses → seed defaults, prune removed. One effect now.
   useEffect(() => {
@@ -577,15 +624,20 @@ export function NodeView({
           aliveFx.add(fxNodeId(i.id, chip.key));
         }
       }
+      const aliveFloats = new Set<NodeId>();
+      for (const fid of floatingFxRef.current.keys()) {
+        aliveFloats.add(floatNodeId(fid));
+      }
       for (const id of Array.from(next.keys())) {
         if (isInputNodeId(id) && !aliveInputs.has(id)) { next.delete(id); changed = true; }
         else if (isBusNodeId(id) && !aliveBuses.has(id)) { next.delete(id); changed = true; }
         else if (isGroupNodeId(id) && !aliveGroups.has(id)) { next.delete(id); changed = true; }
         else if (isFxNodeId(id) && !aliveFx.has(id)) { next.delete(id); changed = true; }
+        else if (isFloatNodeId(id) && !aliveFloats.has(id)) { next.delete(id); changed = true; }
       }
       return changed ? next : prev;
     });
-  }, [inputs, buses]);
+  }, [inputs, buses, floatingFx]);
 
   // Prune local edges whose endpoints no longer exist.
   useEffect(() => {
@@ -899,6 +951,7 @@ export function NodeView({
         curY: startY,
         hoverBusId: null,
         hoverGroupId: null,
+        hoverFloatId: null,
         dropOk: true,
         dropReason: null,
       });
@@ -908,7 +961,11 @@ export function NodeView({
 
   // ── Mouse handlers for moving a node ──────────────────────────────────
   const handleNodeMouseDown = useCallback(
-    (kind: "input" | "bus" | "group" | "fx", id: string, e: React.MouseEvent) => {
+    (
+      kind: "input" | "bus" | "group" | "fx" | "float",
+      id: string,
+      e: React.MouseEvent,
+    ) => {
       // Only left mouse button initiates a drag.
       if (e.button !== 0) return;
       // Ignore clicks on interactive children (ports, buttons).
@@ -918,6 +975,7 @@ export function NodeView({
         kind === "input" ? inputNodeId(id)
         : kind === "bus" ? busNodeId(id as BusId)
         : kind === "fx" ? (id as NodeId) // already a fxNodeId
+        : kind === "float" ? (id as NodeId) // already a floatNodeId
         : groupNodeId(id);
       const pos = nodePosRef.current.get(nid);
       if (!pos) return;
@@ -995,6 +1053,7 @@ export function NodeView({
       // group input ports sit on the left edge of their nodes.
       let hoverBusId: BusId | null = null;
       let hoverGroupId: string | null = null;
+      let hoverFloatId: string | null = null;
       for (const [nid, pos] of nodePosRef.current) {
         if (isBusNodeId(nid)) {
           const portX = pos.x;
@@ -1003,7 +1062,7 @@ export function NodeView({
           const dy = y - portY;
           if (dx * dx + dy * dy < 32 * 32) {
             const bid = busIdFromNodeId(nid);
-            if (bid) { hoverBusId = bid; hoverGroupId = null; break; }
+            if (bid) { hoverBusId = bid; hoverGroupId = null; hoverFloatId = null; break; }
           }
         } else if (isGroupNodeId(nid)) {
           const portX = pos.x;
@@ -1012,7 +1071,17 @@ export function NodeView({
           const dy = y - portY;
           if (dx * dx + dy * dy < 32 * 32) {
             const gid = groupIdFromNodeId(nid);
-            if (gid) { hoverGroupId = gid; hoverBusId = null; break; }
+            if (gid) { hoverGroupId = gid; hoverBusId = null; hoverFloatId = null; break; }
+          }
+        } else if (isFloatNodeId(nid)) {
+          // Float in-port is on the left edge, vertically centered.
+          const portX = pos.x;
+          const portY = pos.y + FX_H / 2;
+          const dx = x - portX;
+          const dy = y - portY;
+          if (dx * dx + dy * dy < 28 * 28) {
+            const fid = floatIdFromNodeId(nid);
+            if (fid) { hoverFloatId = fid; hoverBusId = null; hoverGroupId = null; break; }
           }
         }
       }
@@ -1054,7 +1123,16 @@ export function NodeView({
 
       setDrag((d) =>
         d
-          ? { ...d, curX: x, curY: y, hoverBusId, hoverGroupId, dropOk, dropReason }
+          ? {
+              ...d,
+              curX: x,
+              curY: y,
+              hoverBusId,
+              hoverGroupId,
+              hoverFloatId,
+              dropOk,
+              dropReason,
+            }
           : null,
       );
     };
@@ -1067,7 +1145,21 @@ export function NodeView({
       // from NodeView on release.
       const d = dragRef.current;
       if (d && d.dropOk) {
-        if (d.hoverBusId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
+        if (d.hoverFloatId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
+          // Float drop → claim the floating fx for this input: enable that
+          // stage on the input and remove the placeholder. The chain re-derives
+          // via dsp.order on the next render.
+          const meta = floatingFxRef.current.get(d.hoverFloatId);
+          const input = inputs.find((i) => i.id === d.fromInputId);
+          if (meta && input) {
+            onInputDsp(d.fromInputId, setInputFxEnabled(input.dsp, meta.stage, true));
+            setFloatingFx((prev) => {
+              const next = new Map(prev);
+              next.delete(d.hoverFloatId!);
+              return next;
+            });
+          }
+        } else if (d.hoverBusId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
           // Bipartite input → bus — flip via the backend send action.
           onToggleSend(d.fromInputId, d.hoverBusId);
         } else if (d.hoverBusId || d.hoverGroupId) {
@@ -1106,7 +1198,7 @@ export function NodeView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [drag, onToggleSend, toCanvas]);
+  }, [drag, onToggleSend, onInputDsp, inputs, toCanvas]);
 
   // ── Node-drag effect (moving a node around the canvas) ───────────────
   useEffect(() => {
@@ -1429,6 +1521,10 @@ export function NodeView({
   // input/bus/group nodes via the unified clamp/move infrastructure.
   const onFxNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
     handleNodeMouseDown("fx", id, e), [handleNodeMouseDown]);
+  // Floating fx node uses the same generic drag path; id is the full
+  // floatNodeId(`float:<floatId>`).
+  const onFloatNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
+    handleNodeMouseDown("float", id, e), [handleNodeMouseDown]);
 
   // Start a drag-connect from a group's output port.
   const onGroupPortMouseDown = useCallback(
@@ -1449,6 +1545,7 @@ export function NodeView({
         curY: startY,
         hoverBusId: null,
         hoverGroupId: null,
+        hoverFloatId: null,
         dropOk: true,
         dropReason: null,
       });
@@ -1828,7 +1925,8 @@ export function NodeView({
               mismatch) paints the ghost red AND pulses to draw the
               eye, plus a tooltip explains the rejection. */}
           {drag && (() => {
-            const hasTarget = !!drag.hoverBusId || !!drag.hoverGroupId;
+            const hasTarget =
+              !!drag.hoverBusId || !!drag.hoverGroupId || !!drag.hoverFloatId;
             const invalid = hasTarget && !drag.dropOk;
             const targetColor = drag.hoverBusId
               ? busColor(drag.hoverBusId)
@@ -2027,6 +2125,51 @@ export function NodeView({
           );
         })}
 
+        {/* Floating fx placeholders — drag any input's out-port onto an in-port
+            to claim (= enable that stage on that input + remove placeholder). */}
+        {Array.from(floatingFx.entries()).map(([fid, meta]) => {
+          const nid = floatNodeId(fid);
+          const pos = nodePositions.get(nid);
+          if (!pos) return null;
+          const label =
+            INPUT_FX_DEFS.find((d) => d.key === meta.stage)?.label ?? meta.stage;
+          const isMoving = nodeDrag?.kind === "float" && nodeDrag.id === nid;
+          const isDropTarget = drag?.hoverFloatId === fid;
+          return (
+            <div
+              key={nid}
+              className={`${styles.floatFx} ${isMoving ? styles.nodeMoving : ""} ${
+                isDropTarget ? styles.fxNodeDrop : ""
+              }`}
+              style={{ left: pos.x, top: pos.y, width: FX_W, height: FX_H }}
+              onMouseDown={(e) => onFloatNodeMouseDown(nid, e)}
+              title={`Floating ${label} — wire an input here to claim`}
+            >
+              <span className={styles.fxPortIn} aria-hidden>
+                <span className={styles.fxPortDot} />
+              </span>
+              <span className={styles.fxNodeLabel}>{label}</span>
+              <button
+                type="button"
+                className={styles.fxNodeRemove}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFloatingFx((prev) => {
+                    const next = new Map(prev);
+                    next.delete(fid);
+                    return next;
+                  });
+                }}
+                title="Remove placeholder"
+                aria-label="Remove floating effect"
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+
         {/* Group nodes (frontend-only DAG demo nodes) */}
         {Array.from(localGroups.entries()).map(([gid, meta]) => {
           const nid = groupNodeId(gid);
@@ -2207,9 +2350,40 @@ export function NodeView({
                     {input.name}
                   </button>
                 ))}
-                <div className={styles.bgCtxSep} aria-hidden />
               </>
             )}
+            <div className={styles.bgCtxSep} aria-hidden />
+            <div className={styles.bgCtxHeading}>Add floating effect</div>
+            {INPUT_FX_DEFS.map((d) => (
+              <button
+                key={`float-${d.key}`}
+                role="menuitem"
+                className={styles.bgCtxItem}
+                onClick={() => {
+                  // Convert the click screen coords back to canvas-space so the
+                  // floating fx spawns where the user right-clicked (not 0,0).
+                  const { x: cx, y: cy } = toCanvas(bgCtx.x, bgCtx.y);
+                  const id = nextFloatId();
+                  setFloatingFx((prev) => {
+                    const next = new Map(prev);
+                    next.set(id, { stage: d.key });
+                    return next;
+                  });
+                  setNodePositions((prev) => {
+                    const next = new Map(prev);
+                    next.set(floatNodeId(id), {
+                      x: Math.max(0, cx - FX_W / 2),
+                      y: Math.max(0, cy - FX_H / 2),
+                    });
+                    return next;
+                  });
+                  setBgCtx(null);
+                }}
+              >
+                + {d.label}
+              </button>
+            ))}
+            <div className={styles.bgCtxSep} aria-hidden />
             <button
               role="menuitem"
               className={styles.bgCtxItem}

@@ -417,6 +417,32 @@
   border-color: var(--am-accent, #6ea8fe);
   color: var(--am-text-primary);
 }
+
+/* Floating placeholder fx — unclaimed, awaiting an input drop. Dashed border
+   distinguishes it from an active input-owned fx. Shares port + remove styles. */
+.floatFx {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  background: var(--am-surface-1, #1b1e26);
+  border: 1px dashed var(--am-text-tertiary);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  cursor: grab;
+  z-index: 4;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: border-color var(--am-dur-fast), color var(--am-dur-fast);
+}
+.floatFx:active { cursor: grabbing; }
+.floatFx:hover {
+  border-color: var(--am-accent, #6ea8fe);
+  color: var(--am-text-primary);
+}
+
 .fxPortIn,
 .fxPortOut {
   position: absolute;
