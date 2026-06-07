@@ -140,7 +140,11 @@ export interface LimiterConfig {
   release_ms: number;
 }
 
-/** Per-input effect chain: Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. */
+/** One stage in the per-input chain (mirrors Rust `DspStage`, snake_case). */
+export type DspStage = "denoise" | "hpf" | "gate" | "eq" | "comp" | "limiter";
+
+/** Per-input effect chain. `order` is the wired processing order; default
+ *  Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. */
 export interface DspConfig {
   denoise: DenoiseConfig;
   hpf: HpfConfig;
@@ -148,6 +152,7 @@ export interface DspConfig {
   eq: EqConfig;
   compressor: CompressorConfig;
   limiter: LimiterConfig;
+  order: DspStage[];
 }
 
 /** Per-bus effect chain, processed post-sum/pre-clip: EQ -> Limiter. */

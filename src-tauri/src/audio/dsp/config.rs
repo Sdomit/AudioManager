@@ -292,9 +292,61 @@ impl DenoiseConfig {
     }
 }
 
-/// Full per-input effect chain, in processing order:
-/// Denoise → HPF → Gate → EQ → Compressor → Limiter.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// One stage in the per-input effect chain. The node-graph UI wires effects in
+/// a chosen order; this enum names the stages so [`DspConfig::order`] can carry
+/// that order to the engine. Declaration order is the canonical default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DspStage {
+    Denoise,
+    Hpf,
+    Gate,
+    Eq,
+    Comp,
+    Limiter,
+}
+
+impl DspStage {
+    /// All stages in canonical processing order.
+    pub const ALL: [DspStage; 6] = [
+        DspStage::Denoise,
+        DspStage::Hpf,
+        DspStage::Gate,
+        DspStage::Eq,
+        DspStage::Comp,
+        DspStage::Limiter,
+    ];
+}
+
+fn default_dsp_order() -> Vec<DspStage> {
+    DspStage::ALL.to_vec()
+}
+
+/// Normalize an order list to a full permutation of all six stages: keep the
+/// first occurrence of each, drop duplicates/unknowns, then append any missing
+/// stages in canonical order. Guarantees the realtime loop sees each stage
+/// exactly once regardless of what the UI sent.
+fn normalize_order(order: &mut Vec<DspStage>) {
+    let mut seen = [false; 6];
+    let mut out: Vec<DspStage> = Vec::with_capacity(6);
+    for &s in order.iter() {
+        let i = s as usize;
+        if !seen[i] {
+            seen[i] = true;
+            out.push(s);
+        }
+    }
+    for &s in DspStage::ALL.iter() {
+        if !seen[s as usize] {
+            out.push(s);
+        }
+    }
+    *order = out;
+}
+
+/// Full per-input effect chain. `order` carries the wired processing order
+/// (default: Denoise → HPF → Gate → EQ → Compressor → Limiter).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DspConfig {
     #[serde(default)]
     pub denoise: DenoiseConfig,
@@ -308,12 +360,30 @@ pub struct DspConfig {
     pub compressor: CompressorConfig,
     #[serde(default)]
     pub limiter: LimiterConfig,
+    /// Processing order of the stages. `serde(default)` so pre-order configs
+    /// load with the canonical order.
+    #[serde(default = "default_dsp_order")]
+    pub order: Vec<DspStage>,
+}
+
+impl Default for DspConfig {
+    fn default() -> Self {
+        Self {
+            denoise: DenoiseConfig::default(),
+            hpf: HpfConfig::default(),
+            gate: GateConfig::default(),
+            eq: EqConfig::default(),
+            compressor: CompressorConfig::default(),
+            limiter: LimiterConfig::default(),
+            order: default_dsp_order(),
+        }
+    }
 }
 
 impl DspConfig {
-    /// Clamp every effect's parameters to safe ranges. Run on the IPC thread
-    /// before publishing to the realtime atomics, so the audio callback only
-    /// ever sees valid values.
+    /// Clamp every effect's parameters to safe ranges and normalize the stage
+    /// order. Run on the IPC thread before publishing to the realtime atomics,
+    /// so the audio callback only ever sees valid values.
     pub fn clamp(&mut self) {
         self.denoise.clamp();
         self.hpf.clamp();
@@ -321,6 +391,7 @@ impl DspConfig {
         self.eq.clamp();
         self.compressor.clamp();
         self.limiter.clamp();
+        normalize_order(&mut self.order);
     }
 }
 
@@ -498,5 +569,38 @@ mod tests {
         b.limiter.threshold_db = 99.0;
         b.clamp();
         assert_eq!(b.limiter.threshold_db, 0.0);
+    }
+
+    #[test]
+    fn dsp_config_default_order_is_canonical() {
+        assert_eq!(DspConfig::default().order, DspStage::ALL.to_vec());
+    }
+
+    #[test]
+    fn normalize_order_dedupes_and_fills() {
+        // Duplicates dropped (keep first), unknown count irrelevant, missing
+        // stages appended in canonical order.
+        let mut c = DspConfig::default();
+        c.order = vec![DspStage::Limiter, DspStage::Eq, DspStage::Limiter];
+        c.clamp();
+        assert_eq!(
+            c.order,
+            vec![
+                DspStage::Limiter,
+                DspStage::Eq,
+                DspStage::Denoise,
+                DspStage::Hpf,
+                DspStage::Gate,
+                DspStage::Comp,
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_order_empty_becomes_canonical() {
+        let mut c = DspConfig::default();
+        c.order = vec![];
+        c.clamp();
+        assert_eq!(c.order, DspStage::ALL.to_vec());
     }
 }

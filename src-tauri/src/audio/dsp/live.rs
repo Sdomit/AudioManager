@@ -21,7 +21,39 @@
 
 use std::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 
-use super::config::{BandKind, BusDspConfig, DenoiseBackend, DspConfig, EqBand, MAX_EQ_BANDS};
+use super::config::{
+    BandKind, BusDspConfig, DenoiseBackend, DspConfig, DspStage, EqBand, MAX_EQ_BANDS,
+};
+
+/// Pack a 6-stage order (each stage 0..5) into 3-bit fields of a u32 so the
+/// seqlock can deliver it lock-free. Input must be a 6-element permutation
+/// (guaranteed by `DspConfig::clamp` → `normalize_order`).
+fn pack_order(order: &[DspStage]) -> u32 {
+    let mut v = 0u32;
+    for (i, &s) in order.iter().take(6).enumerate() {
+        v |= ((s as u32) & 0x7) << (i * 3);
+    }
+    v
+}
+
+fn stage_from_code(c: u32) -> DspStage {
+    match c {
+        0 => DspStage::Denoise,
+        1 => DspStage::Hpf,
+        2 => DspStage::Gate,
+        3 => DspStage::Eq,
+        4 => DspStage::Comp,
+        _ => DspStage::Limiter,
+    }
+}
+
+fn unpack_order(v: u32) -> [DspStage; 6] {
+    let mut out = [DspStage::Denoise; 6];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = stage_from_code((v >> (i * 3)) & 0x7);
+    }
+    out
+}
 use super::denoise::Denoiser;
 use super::dynamics::{Compressor, CompressorCoeffs, Limiter, LimiterCoeffs};
 use super::filter::{
@@ -233,6 +265,7 @@ impl AtomicLimiter {
 pub struct InputDspSnapshot {
     pub denoise_enabled: bool,
     pub denoise_use_dfn: bool,
+    pub order: [DspStage; 6],
     pub hpf: (bool, [f32; 5]),
     pub eq: [(bool, [f32; 5]); MAX_EQ_BANDS],
     pub gate: (bool, GateCoeffs),
@@ -254,6 +287,8 @@ pub struct InputDspShared {
     generation: AtomicU32,
     denoise_enabled: AtomicBool,
     denoise_use_dfn: AtomicBool,
+    /// Stage order packed into 3-bit fields (see `pack_order`).
+    order: AtomicU32,
     hpf: AtomicBiquad,
     eq: [AtomicBiquad; MAX_EQ_BANDS],
     gate: AtomicGate,
@@ -269,6 +304,7 @@ impl InputDspShared {
             generation: AtomicU32::new(0),
             denoise_enabled: AtomicBool::new(false),
             denoise_use_dfn: AtomicBool::new(false),
+            order: AtomicU32::new(pack_order(&DspStage::ALL)),
             hpf: AtomicBiquad::new(),
             eq: std::array::from_fn(|_| AtomicBiquad::new()),
             gate: AtomicGate::new(),
@@ -295,6 +331,7 @@ impl InputDspShared {
             .store(cfg.denoise.enabled, RELAXED);
         self.denoise_use_dfn
             .store(cfg.denoise.backend == DenoiseBackend::DeepFilterNet, RELAXED);
+        self.order.store(pack_order(&cfg.order), RELAXED);
         self.hpf.store(
             cfg.hpf.enabled,
             high_pass_coeffs(nyquist_clamp(cfg.hpf.freq_hz, sr), sr),
@@ -341,6 +378,7 @@ impl InputDspShared {
         InputDspSnapshot {
             denoise_enabled: self.denoise_enabled.load(RELAXED),
             denoise_use_dfn: self.denoise_use_dfn.load(RELAXED),
+            order: unpack_order(self.order.load(RELAXED)),
             hpf: self.hpf.load(),
             eq: std::array::from_fn(|i| self.eq[i].load()),
             gate: self.gate.load(),
@@ -495,6 +533,7 @@ pub struct InputDspSlots {
     last_gen: u32,
     denoiser: Denoiser,
     denoise_enabled: bool,
+    order: [DspStage; 6],
     hpf: BiquadFilter,
     gate: NoiseGate,
     eq: [BiquadFilter; MAX_EQ_BANDS],
@@ -544,6 +583,7 @@ impl InputDspSlots {
             last_gen: u32::MAX,
             denoiser: Denoiser::new(sample_rate),
             denoise_enabled: false,
+            order: DspStage::ALL,
             hpf,
             gate,
             eq,
@@ -562,6 +602,7 @@ impl InputDspSlots {
         if s.denoise_enabled && (!denoise_was || backend_changed) {
             self.denoiser.reset();
         }
+        self.order = s.order;
         apply_biquad(&mut self.hpf, s.hpf.0, s.hpf.1);
         for (band, snap) in self.eq.iter_mut().zip(s.eq.iter()) {
             apply_biquad(band, snap.0, snap.1);
@@ -617,28 +658,45 @@ impl InputDspSlots {
     /// `channels`.
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
-        // Denoiser runs first (pre-HPF) so downstream effects see clean audio.
-        // Block-only: the per-frame `process` path above omits it (the realtime
-        // mixer always uses `process_block`).
-        if self.denoise_enabled {
-            self.denoiser.process(interleaved, channels);
-        }
-        if self.hpf.is_enabled() {
-            process_block_effect(&mut self.hpf, interleaved, channels);
-        }
-        if self.gate.is_enabled() {
-            process_block_effect(&mut self.gate, interleaved, channels);
-        }
-        for band in &mut self.eq {
-            if band.is_enabled() {
-                process_block_effect(band, interleaved, channels);
+        // Walk the stages in the wired order. Each stage runs only if enabled;
+        // disabled stages are cheap skips. Block-only path — the realtime mixer
+        // always uses `process_block` (the per-frame `process` keeps the fixed
+        // canonical order and omits the denoiser).
+        for stage in self.order {
+            match stage {
+                DspStage::Denoise => {
+                    if self.denoise_enabled {
+                        self.denoiser.process(interleaved, channels);
+                    }
+                }
+                DspStage::Hpf => {
+                    if self.hpf.is_enabled() {
+                        process_block_effect(&mut self.hpf, interleaved, channels);
+                    }
+                }
+                DspStage::Gate => {
+                    if self.gate.is_enabled() {
+                        process_block_effect(&mut self.gate, interleaved, channels);
+                    }
+                }
+                DspStage::Eq => {
+                    for band in &mut self.eq {
+                        if band.is_enabled() {
+                            process_block_effect(band, interleaved, channels);
+                        }
+                    }
+                }
+                DspStage::Comp => {
+                    if self.comp.is_enabled() {
+                        process_block_effect(&mut self.comp, interleaved, channels);
+                    }
+                }
+                DspStage::Limiter => {
+                    if self.limiter.is_enabled() {
+                        process_block_effect(&mut self.limiter, interleaved, channels);
+                    }
+                }
             }
-        }
-        if self.comp.is_enabled() {
-            process_block_effect(&mut self.comp, interleaved, channels);
-        }
-        if self.limiter.is_enabled() {
-            process_block_effect(&mut self.limiter, interleaved, channels);
         }
     }
 }
@@ -953,5 +1011,56 @@ mod tests {
         for (x, y) in a.iter().zip(b.iter()) {
             assert!((x - y).abs() < 1e-6, "mono block != per-frame: {x} vs {y}");
         }
+    }
+
+    #[test]
+    fn order_pack_round_trips() {
+        let order = [
+            DspStage::Limiter,
+            DspStage::Comp,
+            DspStage::Eq,
+            DspStage::Gate,
+            DspStage::Hpf,
+            DspStage::Denoise,
+        ];
+        assert_eq!(unpack_order(pack_order(&order)), order);
+        assert_eq!(unpack_order(pack_order(&DspStage::ALL)), DspStage::ALL);
+    }
+
+    #[test]
+    fn stage_order_changes_block_output() {
+        // Compressor with makeup gain then a hard limiter is NOT the same as
+        // limiter then compressor: boosting before clamping vs clamping before
+        // boosting. Same params, different order → different output.
+        let mut base = DspConfig::default();
+        base.compressor.enabled = true;
+        base.compressor.threshold_db = -24.0;
+        base.compressor.ratio = 8.0;
+        base.compressor.makeup_db = 18.0;
+        base.limiter.enabled = true;
+        base.limiter.threshold_db = -6.0;
+
+        let mut comp_first = base.clone();
+        comp_first.order = vec![DspStage::Comp, DspStage::Limiter];
+        comp_first.clamp();
+        let mut lim_first = base.clone();
+        lim_first.order = vec![DspStage::Limiter, DspStage::Comp];
+        lim_first.clamp();
+
+        let run = |cfg: &DspConfig| {
+            let shared = InputDspShared::new(cfg, SR);
+            let mut slots = InputDspSlots::new(SR);
+            assert!(shared.reload_if_changed(&mut slots));
+            let mut buf: Vec<f32> = (0..512 * 2)
+                .map(|i| ((i as f32) * 0.05).sin() * 0.9)
+                .collect();
+            slots.process_block(&mut buf, 2);
+            buf
+        };
+
+        let a = run(&comp_first);
+        let b = run(&lim_first);
+        let diff: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum();
+        assert!(diff > 1e-3, "stage order should change output, diff={diff}");
     }
 }

@@ -13,6 +13,7 @@ import type {
   CompressorConfig,
   DenoiseConfig,
   DspConfig,
+  DspStage,
   EqBand,
   EqConfig,
   GateConfig,
@@ -94,6 +95,16 @@ export function defaultLimiter(): LimiterConfig {
   return { enabled: false, threshold_db: -1, attack_ms: 0.5, release_ms: 100 };
 }
 
+/** Canonical stage order (matches the Rust default). */
+export const DEFAULT_DSP_ORDER: DspStage[] = [
+  "denoise",
+  "hpf",
+  "gate",
+  "eq",
+  "comp",
+  "limiter",
+];
+
 export function defaultDspConfig(): DspConfig {
   return {
     denoise: defaultDenoise(),
@@ -102,6 +113,7 @@ export function defaultDspConfig(): DspConfig {
     eq: defaultEq(),
     compressor: defaultCompressor(),
     limiter: defaultLimiter(),
+    order: [...DEFAULT_DSP_ORDER],
   };
 }
 
