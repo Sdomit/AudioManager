@@ -287,9 +287,14 @@ function clampView(
   viewW: number,
   viewH: number,
 ): Viewport {
+  // Free pan in all directions: the world is 10000×10000, far larger than
+  // anyone's screen, so locking the viewport to the world's left/top edge
+  // (the old `Math.min(0, …)` upper bound) made pan-right and pan-down feel
+  // jammed. Now we only re-center the viewport when the world happens to be
+  // SMALLER than the viewport (zoomed out past 1×); otherwise t is untouched.
   const clampAxis = (t: number, content: number, viewport: number) => {
     if (content <= viewport) return (viewport - content) / 2;
-    return Math.min(0, Math.max(viewport - content, t));
+    return t;
   };
   return {
     zoom: v.zoom,
