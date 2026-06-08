@@ -25,10 +25,8 @@
 }
 
 .zoomBar {
-  position: absolute;
-  top: 12px;
-  right: 16px;
-  z-index: 30;
+  /* Portalled into the Routing header (RoutingView's .nodeToolbarSlot), so
+     this is a static flex strip, not an absolute overlay. */
   display: flex;
   align-items: center;
   gap: 4px;

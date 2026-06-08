@@ -84,6 +84,11 @@ export function RoutingView({
             {sends.filter((s) => s.enabled).length} active sends
           </span>
         </div>
+        {/* Canvas toolbar (zoom / Reset layout / Add input / Group) is
+            portalled into here by NodeView when this view is active. */}
+        {view === "nodes" && (
+          <div id="am-node-toolbar-slot" className={styles.nodeToolbarSlot} />
+        )}
         <ViewToggle view={view} onChange={onViewChange} />
       </header>
 
@@ -154,7 +159,7 @@ function ViewToggle({
         className={`${styles.toggleBtn} ${view === "flow" ? styles.toggleBtnActive : ""}`}
         onClick={() => onChange("flow")}
       >
-        <FlowIcon size={14} />
+        <FlowIcon size={18} />
         <span>Flow</span>
       </button>
       <button
@@ -163,7 +168,7 @@ function ViewToggle({
         className={`${styles.toggleBtn} ${view === "nodes" ? styles.toggleBtnActive : ""}`}
         onClick={() => onChange("nodes")}
       >
-        <ChainIcon size={14} />
+        <ChainIcon size={18} />
         <span>Nodes</span>
       </button>
       <button
@@ -172,7 +177,7 @@ function ViewToggle({
         className={`${styles.toggleBtn} ${view === "matrix" ? styles.toggleBtnActive : ""}`}
         onClick={() => onChange("matrix")}
       >
-        <GridIcon size={14} />
+        <GridIcon size={18} />
         <span>Matrix</span>
       </button>
     </div>

@@ -1,8 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
-  ChainIcon,
-  FlowIcon,
-  GridIcon,
   iconForBusRole,
   iconForKind,
   MuteIcon,
@@ -105,13 +103,6 @@ interface NodeViewProps {
   onBusEq: (id: BusId, eq: EqConfig) => void;
   /** Per-bus limiter edit. */
   onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
-  /**
-   * Current routing view + setter. NodeView renders an in-canvas
-   * Flow/Nodes/Matrix toggle so users can switch views from the same
-   * toolbar that holds zoom / Reset layout / Add input / Group.
-   */
-  view?: import("./types").RoutingView;
-  onViewChange?: (v: import("./types").RoutingView) => void;
 }
 
 interface MarqueeState {
@@ -453,10 +444,22 @@ export function NodeView({
   onInputDsp,
   onBusEq,
   onBusLimiter,
-  view: routingView,
-  onViewChange: onRoutingViewChange,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  // The Routing header renders `<div id="am-node-toolbar-slot" />` when in node
+  // view; we portal the canvas toolbar into it so the top bar carries the zoom
+  // controls + Reset layout + Add input / Group buttons instead of stacking
+  // another row above the canvas. Slot lookup happens after mount.
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    const update = () => setToolbarSlot(document.getElementById("am-node-toolbar-slot"));
+    update();
+    // The slot is created by RoutingView when the view toggles to "nodes" —
+    // observe so we re-resolve if it mounts after NodeView (or remounts).
+    const obs = new MutationObserver(update);
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, []);
   // Open node FX editor (anchored at the click). Null when closed.
   const [openFx, setOpenFx] = useState<NodeFxTarget | null>(null);
   const openInputFx = useCallback((id: string, e: React.MouseEvent) => {
@@ -1782,96 +1785,72 @@ export function NodeView({
       role="region"
       aria-label="Node graph routing"
     >
-      <div className={styles.zoomBar} onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          className={styles.zoomBtn}
-          onClick={() => zoomBy(1 / 1.2)}
-          title="Zoom out"
-          aria-label="Zoom out"
-        >
-          −
-        </button>
-        <button
-          type="button"
-          className={styles.zoomReadout}
-          onClick={resetView}
-          title="Reset zoom (100%)"
-        >
-          {Math.round(view.zoom * 100)}%
-        </button>
-        <button
-          type="button"
-          className={styles.zoomBtn}
-          onClick={() => zoomBy(1.2)}
-          title="Zoom in"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        {onRoutingViewChange && routingView && (
-          <div className={styles.viewSwitch} role="tablist" aria-label="Routing view">
+      {(() => {
+        const toolbar = (
+          <div className={styles.zoomBar} onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
-              role="tab"
-              aria-selected={routingView === "flow"}
-              className={`${styles.viewSwitchBtn} ${routingView === "flow" ? styles.viewSwitchBtnActive : ""}`}
-              onClick={() => onRoutingViewChange("flow")}
-              title="Flow view"
+              className={styles.zoomBtn}
+              onClick={() => zoomBy(1 / 1.2)}
+              title="Zoom out"
+              aria-label="Zoom out"
             >
-              <FlowIcon size={12} />
+              −
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={routingView === "nodes"}
-              className={`${styles.viewSwitchBtn} ${routingView === "nodes" ? styles.viewSwitchBtnActive : ""}`}
-              onClick={() => onRoutingViewChange("nodes")}
-              title="Nodes view"
+              className={styles.zoomReadout}
+              onClick={resetView}
+              title="Reset zoom (100%)"
             >
-              <ChainIcon size={12} />
+              {Math.round(view.zoom * 100)}%
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={routingView === "matrix"}
-              className={`${styles.viewSwitchBtn} ${routingView === "matrix" ? styles.viewSwitchBtnActive : ""}`}
-              onClick={() => onRoutingViewChange("matrix")}
-              title="Matrix view"
+              className={styles.zoomBtn}
+              onClick={() => zoomBy(1.2)}
+              title="Zoom in"
+              aria-label="Zoom in"
             >
-              <GridIcon size={12} />
+              +
+            </button>
+            <button
+              type="button"
+              className={styles.resetBtn}
+              onClick={resetLayout}
+              title="Reset node positions"
+            >
+              Reset layout
+            </button>
+            {onAddInput && (
+              <button
+                type="button"
+                className={styles.addInputBtn}
+                onClick={onAddInput}
+                title="Add input device"
+                aria-label="Add input device"
+              >
+                + Add input
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.addGroupBtn}
+              onClick={addGroup}
+              title="Add a group node (frontend only)"
+              aria-label="Add group node"
+            >
+              + Group
             </button>
           </div>
-        )}
-        <button
-          type="button"
-          className={styles.resetBtn}
-          onClick={resetLayout}
-          title="Reset node positions"
-        >
-          Reset layout
-        </button>
-        {onAddInput && (
-          <button
-            type="button"
-            className={styles.addInputBtn}
-            onClick={onAddInput}
-            title="Add input device"
-            aria-label="Add input device"
-          >
-            + Add input
-          </button>
-        )}
-        <button
-          type="button"
-          className={styles.addGroupBtn}
-          onClick={addGroup}
-          title="Add a group node (frontend only)"
-          aria-label="Add group node"
-        >
-          + Group
-        </button>
-      </div>
+        );
+        // Portal the toolbar up into the Routing header next to the
+        // Flow/Nodes/Matrix toggle when the slot is mounted; fall back to
+        // rendering in place during the first paint so it never disappears.
+        return toolbarSlot
+          ? createPortal(toolbar, toolbarSlot)
+          : toolbar;
+      })()}
       <div
         className={styles.canvasTransform}
         style={{
