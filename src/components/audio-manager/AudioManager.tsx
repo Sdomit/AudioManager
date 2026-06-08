@@ -443,6 +443,7 @@ export function AudioManager() {
             }
             onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
             onStopRecording={(id: string) => void am.stopRecording(id)}
+            inputOnly={state.routingView === "nodes"}
           />
         )}
       </main>

@@ -1,5 +1,8 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChainIcon,
+  FlowIcon,
+  GridIcon,
   iconForBusRole,
   iconForKind,
   MuteIcon,
@@ -102,6 +105,13 @@ interface NodeViewProps {
   onBusEq: (id: BusId, eq: EqConfig) => void;
   /** Per-bus limiter edit. */
   onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
+  /**
+   * Current routing view + setter. NodeView renders an in-canvas
+   * Flow/Nodes/Matrix toggle so users can switch views from the same
+   * toolbar that holds zoom / Reset layout / Add input / Group.
+   */
+  view?: import("./types").RoutingView;
+  onViewChange?: (v: import("./types").RoutingView) => void;
 }
 
 interface MarqueeState {
@@ -123,9 +133,9 @@ const GROUP_H = 56;
 const COL_PAD = 18;
 const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
 // On-canvas per-input effect boxes (chained off the input, before its wires).
-const FX_W = 104;
-const FX_H = 26;
-const FX_GAP = 24;
+const FX_W = 120;
+const FX_H = 36;
+const FX_GAP = 28;
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
 
@@ -252,7 +262,10 @@ function nodeHeight(nid: NodeId): number {
   return GROUP_H;
 }
 
-// Clamp a node's top-left so the whole node stays inside [0, bound-size].
+// Clamp a node's top-left to the world box. The world is the (canvasW × canvasH)
+// box centered at origin extended by `DRAG_MARGIN` in every direction, so a node
+// can be dragged off the seeded layout in any direction (up/left included).
+const DRAG_MARGIN = 4000;
 function clampToBounds(
   x: number,
   y: number,
@@ -261,9 +274,11 @@ function clampToBounds(
   bw: number,
   bh: number,
 ): NodePos {
-  const maxX = Math.max(0, bw - w);
-  const maxY = Math.max(0, bh - h);
-  return { x: Math.min(maxX, Math.max(0, x)), y: Math.min(maxY, Math.max(0, y)) };
+  const minX = -DRAG_MARGIN;
+  const minY = -DRAG_MARGIN;
+  const maxX = Math.max(minX, bw + DRAG_MARGIN - w);
+  const maxY = Math.max(minY, bh + DRAG_MARGIN - h);
+  return { x: Math.min(maxX, Math.max(minX, x)), y: Math.min(maxY, Math.max(minY, y)) };
 }
 
 // Bus column x: sit at a comfortable, readable distance from the input
@@ -438,6 +453,8 @@ export function NodeView({
   onInputDsp,
   onBusEq,
   onBusLimiter,
+  view: routingView,
+  onViewChange: onRoutingViewChange,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   // Open node FX editor (anchored at the click). Null when closed.
@@ -1792,6 +1809,40 @@ export function NodeView({
         >
           +
         </button>
+        {onRoutingViewChange && routingView && (
+          <div className={styles.viewSwitch} role="tablist" aria-label="Routing view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={routingView === "flow"}
+              className={`${styles.viewSwitchBtn} ${routingView === "flow" ? styles.viewSwitchBtnActive : ""}`}
+              onClick={() => onRoutingViewChange("flow")}
+              title="Flow view"
+            >
+              <FlowIcon size={12} />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={routingView === "nodes"}
+              className={`${styles.viewSwitchBtn} ${routingView === "nodes" ? styles.viewSwitchBtnActive : ""}`}
+              onClick={() => onRoutingViewChange("nodes")}
+              title="Nodes view"
+            >
+              <ChainIcon size={12} />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={routingView === "matrix"}
+              className={`${styles.viewSwitchBtn} ${routingView === "matrix" ? styles.viewSwitchBtnActive : ""}`}
+              onClick={() => onRoutingViewChange("matrix")}
+              title="Matrix view"
+            >
+              <GridIcon size={12} />
+            </button>
+          </div>
+        )}
         <button
           type="button"
           className={styles.resetBtn}
@@ -1887,39 +1938,45 @@ export function NodeView({
             );
           })}
 
-          {/* Short connectors linking an input to its effect-box chain. */}
+          {/* Connectors linking an input to its effect chain. Curved like
+              the main input→bus wires for visual consistency across the tool. */}
           {Array.from(inputFxLayout.values()).flatMap((row) =>
-            row.connectors.map((c, i) => (
-              <line
-                key={`fxc-${c.x1}-${c.y1}-${i}`}
-                x1={c.x1}
-                y1={c.y1}
-                x2={c.x2}
-                y2={c.y2}
-                stroke="rgba(170,180,200,0.5)"
-                strokeWidth={2}
-                strokeLinecap="round"
-              />
-            )),
+            row.connectors.map((c, i) => {
+              const dx = Math.max(20, Math.abs(c.x2 - c.x1));
+              const d = `M ${c.x1} ${c.y1} C ${c.x1 + dx * 0.5} ${c.y1}, ${c.x2 - dx * 0.5} ${c.y2}, ${c.x2} ${c.y2}`;
+              return (
+                <path
+                  key={`fxc-${c.x1}-${c.y1}-${i}`}
+                  d={d}
+                  stroke="rgba(170,180,200,0.55)"
+                  strokeWidth={2.5}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              );
+            }),
           )}
 
-          {/* Ghost wire while reordering an fx node (out-port → in-port). */}
-          {fxDrag && (
-            <line
-              x1={fxDrag.startX}
-              y1={fxDrag.startY}
-              x2={fxDrag.curX}
-              y2={fxDrag.curY}
-              stroke={
-                fxDrag.hoverKey || fxDrag.hoverBusId
-                  ? "rgba(110,168,254,0.95)"
-                  : "rgba(170,180,200,0.7)"
-              }
-              strokeWidth={2.5}
-              strokeLinecap="round"
-              strokeDasharray="5 5"
-            />
-          )}
+          {/* Ghost wire while reordering an fx node (out-port → in-port).
+              Same Bezier shape as the input→bus ghost for visual consistency. */}
+          {fxDrag && (() => {
+            const dx = Math.max(20, Math.abs(fxDrag.curX - fxDrag.startX));
+            const d = `M ${fxDrag.startX} ${fxDrag.startY} C ${fxDrag.startX + dx * 0.5} ${fxDrag.startY}, ${fxDrag.curX - dx * 0.5} ${fxDrag.curY}, ${fxDrag.curX} ${fxDrag.curY}`;
+            return (
+              <path
+                d={d}
+                stroke={
+                  fxDrag.hoverKey || fxDrag.hoverBusId
+                    ? "rgba(110,168,254,0.95)"
+                    : "rgba(170,180,200,0.7)"
+                }
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeDasharray="6 6"
+                fill="none"
+              />
+            );
+          })()}
 
           {/* Ghost wire while dragging. Invalid drop (cycle / port
               mismatch) paints the ghost red AND pulses to draw the
@@ -2055,6 +2112,7 @@ export function NodeView({
                     <span className={styles.fxPortIn} aria-hidden>
                       <span className={styles.fxPortDot} />
                     </span>
+                    <span className={styles.fxNodeKind}>FX</span>
                     <span className={styles.fxNodeLabel}>{b.label}</span>
                     <button
                       type="button"
@@ -2145,9 +2203,10 @@ export function NodeView({
               onMouseDown={(e) => onFloatNodeMouseDown(nid, e)}
               title={`Floating ${label} — wire an input here to claim`}
             >
-              <span className={styles.fxPortIn} aria-hidden>
-                <span className={styles.fxPortDot} />
+              <span className={styles.inputPort} aria-hidden>
+                <span className={styles.portInner} />
               </span>
+              <span className={styles.fxNodeKind}>FLOATING FX</span>
               <span className={styles.fxNodeLabel}>{label}</span>
               <button
                 type="button"

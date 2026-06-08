@@ -38,6 +38,9 @@ interface DetailPanelProps {
   onSelectInputContext: (id: string) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
+  /** True when shown in node view — hide the input's in-panel DSP chain so
+   *  the canvas is the single place to edit effects. */
+  inputOnly?: boolean;
 }
 
 /**
@@ -74,6 +77,7 @@ export function DetailPanel(props: DetailPanelProps) {
           onDspChange={(dsp) => props.onInputDsp(input.id, dsp)}
           onStartRecording={props.onStartRecording}
           onStopRecording={props.onStopRecording}
+          inputOnly={props.inputOnly}
         />
       </aside>
     );

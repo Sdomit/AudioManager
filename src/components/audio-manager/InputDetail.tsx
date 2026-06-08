@@ -6,6 +6,7 @@ import {
   PlusIcon,
 } from "./Icon";
 import { InputDspControls } from "./DspControls";
+import { openEqPopout } from "./eqPopoutWindow";
 import { MeterCanvas } from "./MeterCanvas";
 import { RecordButton } from "./RecordButton";
 import type {
@@ -34,6 +35,8 @@ interface InputDetailProps {
   onDspChange: (dsp: DspConfig) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
+  /** When true, hide the in-panel DSP chain — node view edits fx via canvas. */
+  inputOnly?: boolean;
 }
 
 /**
@@ -59,6 +62,7 @@ export function InputDetail({
   onDspChange,
   onStartRecording,
   onStopRecording,
+  inputOnly,
 }: InputDetailProps) {
   const sendMap = new Map<BusId, Send>();
   sends.forEach((s) => sendMap.set(s.busId, s));
@@ -147,11 +151,17 @@ export function InputDetail({
         </div>
       </section>
 
-      {/* DSP chain */}
-      <section className={styles.section}>
-        <div className={styles.sectionTitle}>Processing (DSP)</div>
-        <InputDspControls dsp={input.dsp} onChange={onDspChange} />
-      </section>
+      {/* DSP chain (hidden in node view — fx are edited on the canvas). */}
+      {!inputOnly && (
+        <section className={styles.section}>
+          <div className={styles.sectionTitle}>Processing (DSP)</div>
+          <InputDspControls
+            dsp={input.dsp}
+            onChange={onDspChange}
+            onPopOutEq={() => void openEqPopout(`input:${input.id}`, `EQ — ${input.name}`)}
+          />
+        </section>
+      )}
 
       {/* Sends */}
       <section className={styles.section}>
