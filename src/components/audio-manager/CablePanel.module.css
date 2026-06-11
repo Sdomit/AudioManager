@@ -87,6 +87,29 @@
   background: var(--am-fg-dim, #9aa3ad);
 }
 
+.epTag {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--am-fg, #e6e8ea);
+  background: var(--am-border, #2e333a);
+  flex-shrink: 0;
+}
+
+.epTagConflict {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.conflictNote {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #fbbf24;
+}
+
 .actions {
   display: flex;
   gap: 8px;
