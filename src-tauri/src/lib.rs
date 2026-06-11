@@ -13,6 +13,7 @@ use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::devices::{DeviceInfo, DeviceListError};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
+use audio::source::InputSourceSpec;
 use audio::recorder::{
     self, CallbackTapKind, RecorderSettings, RecordingFile, RecordingInfo, StartRecorderRequest,
     TapSpec,
@@ -31,6 +32,13 @@ fn list_input_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 #[tauri::command]
 fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
     audio::devices::list_output_devices()
+}
+
+/// List applications currently holding a session on the default render
+/// endpoint. Each entry carries a ready `proc:<pid>` source id for `add_input`.
+#[tauri::command]
+fn list_audio_sessions() -> Result<Vec<audio::session::AudioSessionInfo>, EngineError> {
+    audio::session::list_audio_sessions()
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -127,7 +135,11 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
 
     let mixer_inputs: Vec<MixerInput> = active_inputs
         .into_iter()
-        .map(|(name, vol, muted)| MixerInput { device_name: name, gain: vol, muted })
+        .map(|(id, vol, muted)| MixerInput {
+            source: InputSourceSpec::parse(&id),
+            gain: vol,
+            muted,
+        })
         .collect();
 
     match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted) {
@@ -156,14 +168,55 @@ fn new_last_error(inner: &mut AppInner, message: impl Into<String>) -> EngineErr
     EngineError { message }
 }
 
-fn ensure_input_name(device_id: &str) -> Result<(), EngineError> {
-    let inputs = audio::devices::list_input_devices().map_err(|err| EngineError {
-        message: format!("Failed to list input devices: {}", err.message),
-    })?;
-    if inputs.iter().any(|device| device.id == device_id) {
+/// Validate that `device_id` names a usable input source before it is added to
+/// the graph or used to (re)build a bus.
+///
+///   * Device ids must match a currently-enumerated cpal input device.
+///   * `sys:default` (system loopback) and `proc:<pid>` (process loopback) are
+///     accepted on Windows; the precise OS-version gate is enforced at capture
+///     time by the loopback module.
+///   * A plain device id that poaches a reserved synthetic prefix (`proc:` /
+///     `sys:`) is refused so it can never shadow a loopback source.
+fn ensure_input_source(device_id: &str) -> Result<(), EngineError> {
+    match InputSourceSpec::parse(device_id) {
+        InputSourceSpec::Device { name } => {
+            if audio::source::is_reserved_id(&name) {
+                return Err(EngineError {
+                    message: format!(
+                        "'{name}' uses a reserved id prefix (proc:/sys:) and cannot be \
+                         registered as a device."
+                    ),
+                });
+            }
+            let inputs = audio::devices::list_input_devices().map_err(|err| EngineError {
+                message: format!("Failed to list input devices: {}", err.message),
+            })?;
+            if inputs.iter().any(|device| device.id == name) {
+                Ok(())
+            } else {
+                Err(EngineError { message: format!("Input device not found: {name}") })
+            }
+        }
+        InputSourceSpec::SystemLoopback
+        | InputSourceSpec::Process { .. }
+        | InputSourceSpec::ProcessByName { .. } => ensure_loopback_supported(),
+    }
+}
+
+/// Platform gate for loopback capture. The exact Windows build requirement
+/// (1803 for system, 2004 for process) is checked at capture time where the
+/// failure can be surfaced per-mode; here we only refuse non-Windows hosts.
+fn ensure_loopback_supported() -> Result<(), EngineError> {
+    #[cfg(windows)]
+    {
         Ok(())
-    } else {
-        Err(EngineError { message: format!("Input device not found: {device_id}") })
+    }
+    #[cfg(not(windows))]
+    {
+        Err(EngineError {
+            message: "Loopback capture (system / per-app) is only supported on Windows."
+                .to_string(),
+        })
     }
 }
 
@@ -297,7 +350,7 @@ fn start_passthrough(
     input_id: String,
     output_id: String,
 ) -> Result<(), EngineError> {
-    ensure_input_name(&input_id)?;
+    ensure_input_source(&input_id)?;
 
     let mut inner = state.inner.lock().unwrap();
     tear_down_all_engines(&mut inner);
@@ -556,7 +609,7 @@ fn add_input(
     state: tauri::State<AppState>,
     device_id: String,
 ) -> Result<Vec<InputChannel>, EngineError> {
-    ensure_input_name(&device_id)?;
+    ensure_input_source(&device_id)?;
     let mut inner = state.inner.lock().unwrap();
     inner.graph.add_input(&device_id);
     inner.last_error = None;
@@ -1167,6 +1220,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_input_devices,
             list_output_devices,
+            list_audio_sessions,
             start_passthrough,
             stop_passthrough,
             get_passthrough_status,

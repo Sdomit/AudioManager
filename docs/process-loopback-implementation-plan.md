@@ -8,6 +8,37 @@
 > Verified against current `main`: `graph.rs:31`, `mixer.rs:271`, `mixer.rs:411` still hold;
 > `ensure_input_name` moved `lib.rs:158 → :159`. Re-confirm all refs at execution time.
 
+## Implementation status — 2026-06-05 (branch `feature/process-loopback-input`)
+
+**Complete — every implementable issue landed (#7–#23, less the superseded
+#9/#10).** Verified: `cargo test` (77 lib tests), `npx tsc --noEmit`, `npm test`
+(105 tests), `cargo clippy` clean on all new modules, and the app builds +
+launches on Windows. Built against the `wasapi` 0.23 crate (system loopback +
+per-process via `new_application_loopback_client`); shared-mode `autoconvert`
+delivers stereo f32 at the bus rate, so loopback needs no rate gate.
+
+| Issues | What landed |
+|---|---|
+| #11 | `InputSourceSpec` seam; `ensure_input_source` accepts synthetic ids |
+| #12,#13,#14,#15 | `audio::loopback` — system + per-process WASAPI capture, wired into `mixer::start` |
+| #16,#17,#18 | `audio::session` enumeration, `list_audio_sessions` IPC + TS, frontend source-kind/name derivation |
+| #19 | input DevicePicker offers "System sound" + live apps (`includeLoopbackSources`) |
+| #20 | `audio::resampler` linear resampler for mismatched cpal device-input rates |
+| #21 | stable `app:<image>` ids resolved to a live PID; resolver climbs to the **browser tree root** so all tabs are captured |
+| #22 | refcounted **shared capture** per (source, rate) — one WASAPI client fanned out to all subscribing buses |
+| #7,#8,#23 | CI (windows-latest Rust + Linux frontend), repo templates/labels, macOS/Linux research |
+
+Extras beyond the plan: inline output-device dropdown on bus cards; AMVC
+device-name detection by substring.
+
+**Remaining:**
+- **#9 / #10 virtual-cable app-labeling + guided setup** — superseded by direct
+  loopback; the existing AMVC/CableNotice UI already covers cable setup. No-ops.
+- **Live-audio smoke test** — capture, the #20 resampler, and the #22 fan-out are
+  compile- and unit-verified but not yet exercised against real sound. Run
+  `npm run tauri dev` on Windows with playback before merge.
+- A higher-quality resampler (`rubato` sinc) could replace the linear one in #20.
+
 ## Purpose
 
 Capture audio from a **specific Windows application** (Chrome tab, game, Discord) directly,

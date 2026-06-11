@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
+use crate::audio::loopback::{self, Subscription};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
+use crate::audio::source::InputSourceSpec;
 
 // ~85 ms at 48 kHz stereo.
 const RING_SIZE: usize = 16384;
@@ -42,6 +44,9 @@ pub struct InputSlotShared {
 }
 
 pub struct MixerInputInfo {
+    /// The input's `device_id` (canonical key). For loopback sources this is a
+    /// synthetic id (`sys:default`, `proc:<pid>`); for devices it is the name.
+    /// Kept named `device_name` so status readers that surface it are untouched.
     pub device_name: String,
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
@@ -49,7 +54,8 @@ pub struct MixerInputInfo {
 
 /// Descriptor passed to `mixer::start` for each input.
 pub struct MixerInput {
-    pub device_name: String,
+    /// Typed capture backend, derived from the `device_id` by the caller.
+    pub source: InputSourceSpec,
     pub gain: f32,
     pub muted: bool,
 }
@@ -153,7 +159,7 @@ impl Drop for MixerEngine {
     }
 }
 
-fn store_max(target: &AtomicU32, value: f32) {
+pub(crate) fn store_max(target: &AtomicU32, value: f32) {
     if !value.is_finite() || value <= 0.0 {
         return;
     }
@@ -202,8 +208,8 @@ pub fn start(
     }
 
     let output_name = output_name.to_string();
-    let input_specs: Vec<(String, f32, bool)> =
-        inputs.iter().map(|i| (i.device_name.clone(), i.gain, i.muted)).collect();
+    let input_specs: Vec<(InputSourceSpec, f32, bool)> =
+        inputs.iter().map(|i| (i.source.clone(), i.gain, i.muted)).collect();
 
     let shared_slots: Vec<InputSlotShared> = input_specs
         .iter()
@@ -263,73 +269,158 @@ pub fn start(
             let out_stream_cfg: StreamConfig = out_cfg.into();
 
             let mut input_streams = Vec::new();
+            // Loopback subscriptions (system / per-app). Held on the engine
+            // thread; dropping them on teardown detaches from the shared capture
+            // and stops it when this was the last subscriber.
+            let mut subscriptions: Vec<Subscription> = Vec::new();
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
 
-            for (i, (in_name, _, _)) in in_specs.iter().enumerate() {
-                let input_device = host
-                    .input_devices()?
-                    .find(|d| d.name().ok().as_deref() == Some(in_name.as_str()))
-                    .ok_or_else(|| EngineError {
-                        message: format!("Input device not found: {in_name}"),
-                    })?;
+            for (i, (source, _, _)) in in_specs.iter().enumerate() {
+                match source {
+                    InputSourceSpec::Device { name } => {
+                        let in_name = name.as_str();
+                        let input_device = host
+                            .input_devices()?
+                            .find(|d| d.name().ok().as_deref() == Some(in_name))
+                            .ok_or_else(|| EngineError {
+                                message: format!("Input device not found: {in_name}"),
+                            })?;
 
-                let in_cfg = input_device.default_input_config()?;
+                        let in_cfg = input_device.default_input_config()?;
+                        let in_rate = in_cfg.sample_rate().0;
+                        let out_rate = out_sample_rate.0;
+                        let in_channels = in_cfg.channels() as usize;
 
-                if in_cfg.sample_rate() != out_sample_rate {
-                    return Err(EngineError {
-                        message: format!(
-                            "Sample rate mismatch: input '{in_name}' @ {} Hz vs output \
-                             '{out_name}' @ {} Hz. Set both devices to the same rate in \
-                             Windows Sound settings.",
-                            in_cfg.sample_rate().0,
-                            out_sample_rate.0
-                        ),
-                    });
+                        // Phase 4 supports only mono (1ch) and stereo (2ch) inputs.
+                        // Any combination of {1,2} × {1,2} is valid; > 2 is rejected.
+                        if in_channels > 2 {
+                            return Err(EngineError {
+                                message: format!(
+                                    "Unsupported channel mapping: input '{in_name}' has \
+                                     {in_channels}ch, output '{out_name}' has {out_channels}ch. \
+                                     Phase 4 supports mono/stereo only."
+                                ),
+                            });
+                        }
+
+                        let ring = RingBuffer::<f32>::new(RING_SIZE);
+                        let (producer, consumer) = ring.split();
+                        consumers.push((consumer, in_channels));
+                        input_channels_meta.push(in_channels as u16);
+
+                        let in_stream_cfg: StreamConfig = in_cfg.into();
+                        let err_cb = move |e| eprintln!("[audio] input stream {i} error: {e}");
+                        let input_stream = if in_rate == out_rate {
+                            // Matched rate: push raw samples straight to the ring.
+                            let mut producer = producer;
+                            let peak = Arc::clone(&shared_for_thread);
+                            input_device.build_input_stream(
+                                &in_stream_cfg,
+                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    let mut block_peak = 0.0f32;
+                                    for &s in data {
+                                        let abs = s.abs();
+                                        if abs > block_peak {
+                                            block_peak = abs;
+                                        }
+                                        let _ = producer.push(s);
+                                    }
+                                    store_max(&peak[i].input_peak, block_peak);
+                                },
+                                err_cb,
+                                None,
+                            )
+                        } else {
+                            // Rate mismatch: linear-resample to the bus rate (#20).
+                            let mut producer = producer;
+                            let peak = Arc::clone(&shared_for_thread);
+                            let mut resampler = crate::audio::resampler::LinearResampler::new(
+                                in_rate,
+                                out_rate,
+                                in_channels,
+                            );
+                            input_device.build_input_stream(
+                                &in_stream_cfg,
+                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    let mut block_peak = 0.0f32;
+                                    let frames = data.len() / in_channels;
+                                    for fi in 0..frames {
+                                        let frame =
+                                            &data[fi * in_channels..fi * in_channels + in_channels];
+                                        for &s in frame {
+                                            let abs = s.abs();
+                                            if abs > block_peak {
+                                                block_peak = abs;
+                                            }
+                                        }
+                                        resampler.process_frame(frame, |out| {
+                                            for &s in &out[..in_channels] {
+                                                let _ = producer.push(s);
+                                            }
+                                        });
+                                    }
+                                    store_max(&peak[i].input_peak, block_peak);
+                                },
+                                err_cb,
+                                None,
+                            )
+                        }
+                        .map_err(|e| EngineError { message: e.to_string() })?;
+
+                        input_streams.push(input_stream);
+                    }
+
+                    // Loopback sources fill the same source-blind ring from a
+                    // WASAPI capture thread. `autoconvert` delivers stereo f32 at
+                    // the bus rate, so there is no rate gate and no channel check.
+                    InputSourceSpec::SystemLoopback => {
+                        let (consumer, ch, sub) = loopback::subscribe_system(
+                            out_sample_rate.0,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        subscriptions.push(sub);
+                    }
+
+                    InputSourceSpec::Process { pid, include_tree } => {
+                        let (consumer, ch, sub) = loopback::subscribe_process(
+                            *pid,
+                            *include_tree,
+                            out_sample_rate.0,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        subscriptions.push(sub);
+                    }
+
+                    // Stable app id: resolve the image name to a live PID now,
+                    // then subscribe exactly like the Process arm.
+                    InputSourceSpec::ProcessByName { image_name, include_tree } => {
+                        let pid = crate::audio::session::resolve_pid_for_image(image_name)?
+                            .ok_or_else(|| EngineError {
+                                message: format!(
+                                    "App '{image_name}' is not currently playing audio. \
+                                     Start playback in the app, then enable this input."
+                                ),
+                            })?;
+                        let (consumer, ch, sub) = loopback::subscribe_process(
+                            pid,
+                            *include_tree,
+                            out_sample_rate.0,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        subscriptions.push(sub);
+                    }
                 }
-
-                let in_channels = in_cfg.channels() as usize;
-
-                // Phase 4 supports only mono (1ch) and stereo (2ch) inputs.
-                // Any combination of {1,2} × {1,2} is valid; anything > 2 is rejected.
-                if in_channels > 2 {
-                    return Err(EngineError {
-                        message: format!(
-                            "Unsupported channel mapping: input '{in_name}' has {in_channels}ch, \
-                             output '{out_name}' has {out_channels}ch. \
-                             Phase 4 supports mono/stereo only."
-                        ),
-                    });
-                }
-
-                let ring = RingBuffer::<f32>::new(RING_SIZE);
-                let (mut producer, consumer) = ring.split();
-                consumers.push((consumer, in_channels));
-                input_channels_meta.push(in_channels as u16);
-
-                let in_stream_cfg: StreamConfig = in_cfg.into();
-                let input_peak_slots = Arc::clone(&shared_for_thread);
-                let input_stream = input_device
-                    .build_input_stream(
-                        &in_stream_cfg,
-                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                            let mut block_peak = 0.0f32;
-                            for &s in data {
-                                let abs = s.abs();
-                                if abs > block_peak {
-                                    block_peak = abs;
-                                }
-                                let _ = producer.push(s);
-                            }
-                            store_max(&input_peak_slots[i].input_peak, block_peak);
-                        },
-                        move |e| eprintln!("[audio] input stream {i} error: {e}"),
-                        None,
-                    )
-                    .map_err(|e| EngineError { message: e.to_string() })?;
-
-                input_streams.push(input_stream);
             }
 
             let slots = Arc::clone(&shared_for_thread);
@@ -490,6 +581,7 @@ pub fn start(
 
             Ok((
                 input_streams,
+                subscriptions,
                 output_stream,
                 StartInfo {
                     out_channels: out_channels as u16,
@@ -500,13 +592,17 @@ pub fn start(
         })();
 
         match outcome {
-            Ok((input_streams, output_stream, info)) => {
+            Ok((input_streams, subscriptions, output_stream, info)) => {
                 let _ = result_tx.send(Ok(info));
                 drop(result_tx);
                 let _ = stop_rx.recv();
-                // Streams dropped on this thread — WASAPI handles released here.
-                drop(input_streams);
+                // Stop the realtime callback first, then drop the producers:
+                // cpal streams release their WASAPI handles here; dropping each
+                // loopback Subscription detaches it and stops the shared capture
+                // when it was the last subscriber.
                 drop(output_stream);
+                drop(input_streams);
+                drop(subscriptions);
             }
             Err(e) => {
                 let _ = result_tx.send(Err(e));
@@ -520,8 +616,8 @@ pub fn start(
             inputs: input_specs
                 .into_iter()
                 .zip(info.input_channels.iter().copied())
-                .map(|((name, _, _), channels)| MixerInputInfo {
-                    device_name: name,
+                .map(|((source, _, _), channels)| MixerInputInfo {
+                    device_name: source.to_id(),
                     channels,
                 })
                 .collect(),
@@ -549,7 +645,7 @@ mod tests {
     fn fake_inputs(n: usize) -> Vec<MixerInput> {
         (0..n)
             .map(|i| MixerInput {
-                device_name: format!("fake_device_{i}"),
+                source: InputSourceSpec::Device { name: format!("fake_device_{i}") },
                 gain: 1.0,
                 muted: false,
             })

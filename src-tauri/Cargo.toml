@@ -28,3 +28,10 @@ hound = "3.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# WASAPI loopback capture (system + per-process). Windows-only; pulls in the
+# `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.23"
+# Resolve session PIDs to process image names for the app picker (#16).
+sysinfo = "0.39"
+

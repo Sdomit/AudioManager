@@ -1,0 +1,32 @@
+# Planning labels for AudioManager. Consumed by a label-sync action
+# (e.g. EndBug/label-sync). Mirrors the scopes used in Conventional Commits
+# and the process-loopback plan's issue table.
+
+- name: enhancement
+  color: a2eeef
+  description: New feature or capability
+- name: bug
+  color: d73a4a
+  description: Something is broken
+- name: documentation
+  color: 0075ca
+  description: Docs and planning artifacts
+
+# Scopes (match commit scopes: audio/graph/ui/ipc/recorder/infra)
+- name: "scope:audio"
+  color: 1d76db
+  description: Mixer, graph, capture, DSP
+- name: "scope:ui"
+  color: 1d76db
+  description: React UI / components
+- name: "scope:ipc"
+  color: 1d76db
+  description: Tauri commands and TS wrappers
+- name: "scope:infra"
+  color: 1d76db
+  description: CI, templates, tooling
+
+# Platform gate
+- name: "platform:windows"
+  color: 5319e7
+  description: Windows-only (WASAPI / COM)

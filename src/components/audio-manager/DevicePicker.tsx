@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import * as ipc from "../../ipc/commands";
-import type { DeviceInfo } from "../../types/engine";
+import type { AudioSessionInfo, DeviceInfo } from "../../types/engine";
 import {
   getVirtualDeviceHint,
   isAudioManagerVirtualDevice,
@@ -27,6 +27,20 @@ interface DevicePickerProps {
   excludeIds?: Set<string>;
   /** Device id to highlight as the suggested/recommended pick. */
   recommendedDeviceId?: string | null;
+  /**
+   * Input mode only: also offer loopback sources — "System sound"
+   * (`sys:default`) and each app currently playing audio (`proc:<pid>`).
+   * onPick receives the synthetic source id, which add_input accepts.
+   */
+  includeLoopbackSources?: boolean;
+}
+
+const SYS_LOOPBACK_ID = "sys:default";
+
+interface LoopbackItem {
+  id: string;
+  name: string;
+  meta: string;
 }
 
 export function DevicePicker({
@@ -40,11 +54,15 @@ export function DevicePicker({
   highlightVirtual = false,
   excludeIds,
   recommendedDeviceId = null,
+  includeLoopbackSources = false,
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [sessions, setSessions] = useState<AudioSessionInfo[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const wantsLoopback = includeLoopbackSources && kind === "input";
 
   useEffect(() => {
     if (!open) return;
@@ -69,6 +87,28 @@ export function DevicePicker({
     };
   }, [open, kind]);
 
+  // App sessions are best-effort: a failure here (e.g. non-Windows) must not
+  // break the device picker, so it has its own fetch that only clears the
+  // app list on error.
+  useEffect(() => {
+    if (!open || !wantsLoopback) {
+      setSessions([]);
+      return;
+    }
+    let cancelled = false;
+    ipc
+      .listAudioSessions()
+      .then((items) => {
+        if (!cancelled) setSessions(items);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, wantsLoopback]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -90,6 +130,30 @@ export function DevicePicker({
     // AudioManager-branded devices sort first; within each tier, default then alpha.
     return [...list].sort(compareDevicesForPicker);
   }, [devices, search, excludeIds]);
+
+  const loopbackItems = useMemo<LoopbackItem[]>(() => {
+    if (!wantsLoopback) return [];
+    const q = search.trim().toLowerCase();
+    let list: LoopbackItem[] = [
+      {
+        id: SYS_LOOPBACK_ID,
+        name: "System sound",
+        meta: "Everything Windows is playing",
+      },
+      ...sessions.map((s) => ({
+        id: s.source_id,
+        name: s.name,
+        meta: `App · PID ${s.pid}`,
+      })),
+    ];
+    if (excludeIds && excludeIds.size > 0) {
+      list = list.filter((it) => !excludeIds.has(it.id));
+    }
+    if (q) {
+      list = list.filter((it) => it.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [wantsLoopback, sessions, search, excludeIds]);
 
   if (!open) return null;
 
@@ -128,6 +192,28 @@ export function DevicePicker({
         </div>
 
         {error && <div className={styles.errorMsg}>Error: {error}</div>}
+
+        {!error && loopbackItems.length > 0 && (
+          <>
+            <div className={styles.subtitle}>Capture an app or system sound</div>
+            <ul className={styles.list} aria-label="Capture sources">
+              {loopbackItems.map((it) => (
+                <li key={it.id}>
+                  <button
+                    className={styles.item}
+                    onClick={() => onPick(it.id)}
+                  >
+                    <div className={styles.itemMain}>
+                      <div className={styles.itemName}>{it.name}</div>
+                      <div className={styles.itemMeta}>{it.meta}</div>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className={styles.subtitle}>Input devices</div>
+          </>
+        )}
 
         {!error && loading && (
           <div className={styles.empty}>Loading devices…</div>

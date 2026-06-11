@@ -358,7 +358,7 @@ export function AudioManager() {
           am.setBusMuted(id, !bus.muted);
         }}
         onVolumeChange={am.setBusVolume}
-        onPickDevice={(id) => setBusPickerFor(id)}
+        onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
       />
 
@@ -484,14 +484,15 @@ export function AudioManager() {
         <DevicePicker
           open={true}
           kind="input"
-          title="Add input device"
+          title="Add input"
           subtitle={
             recommendedInputDevice
-              ? "Tip: use an AudioManager Cable Recording source to capture app audio, then route it to a bus."
-              : "Pick a microphone, system source, or virtual cable output."
+              ? "Capture an app or system sound directly, or pick a mic / cable device."
+              : "Capture an app or system sound directly, or pick a microphone."
           }
           excludeIds={usedInputIds}
           highlightVirtual
+          includeLoopbackSources
           recommendedDeviceId={recommendedInputDevice}
           onPick={(deviceId) => {
             if (deviceId) am.addInput(deviceId);

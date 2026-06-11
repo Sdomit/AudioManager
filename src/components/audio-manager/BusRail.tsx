@@ -9,7 +9,8 @@ interface BusRailProps {
   onToggleEnabled: (id: BusId) => void;
   onToggleMuted: (id: BusId) => void;
   onVolumeChange: (id: BusId, v: number) => void;
-  onPickDevice: (id: BusId) => void;
+  /** Assign/change/unassign a bus output device inline. Pass null to unassign. */
+  onSelectDevice: (id: BusId, deviceId: string | null) => void;
   /** Open the right-click context menu for a bus card. */
   onContextMenu?: (id: BusId, x: number, y: number) => void;
 }
@@ -26,7 +27,7 @@ export function BusRail({
   onToggleEnabled,
   onToggleMuted,
   onVolumeChange,
-  onPickDevice,
+  onSelectDevice,
   onContextMenu,
 }: BusRailProps) {
   const a = buses.filter((b) => b.id.startsWith("A"));
@@ -44,7 +45,7 @@ export function BusRail({
             onToggleEnabled={() => onToggleEnabled(bus.id)}
             onToggleMuted={() => onToggleMuted(bus.id)}
             onVolumeChange={(v) => onVolumeChange(bus.id, v)}
-            onPickDevice={() => onPickDevice(bus.id)}
+            onSelectDevice={(deviceId) => onSelectDevice(bus.id, deviceId)}
             onContextMenu={
               onContextMenu
                 ? (e) => {
@@ -67,7 +68,7 @@ export function BusRail({
             onToggleEnabled={() => onToggleEnabled(bus.id)}
             onToggleMuted={() => onToggleMuted(bus.id)}
             onVolumeChange={(v) => onVolumeChange(bus.id, v)}
-            onPickDevice={() => onPickDevice(bus.id)}
+            onSelectDevice={(deviceId) => onSelectDevice(bus.id, deviceId)}
             onContextMenu={
               onContextMenu
                 ? (e) => {

@@ -1,7 +1,11 @@
 pub mod bus;
 pub mod devices;
 pub mod graph;
+pub mod loopback;
 pub mod mixer;
 pub mod passthrough;
 pub mod recorder;
+pub mod resampler;
 pub mod routing;
+pub mod session;
+pub mod source;

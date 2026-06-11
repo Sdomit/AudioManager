@@ -15,10 +15,13 @@ const INPUTS: DeviceInfo[] = [
   { id: "amvc-cap-1", name: "AudioManager Cable 1 Recording", default_sample_rate: 48000, channels: 2, is_default: false },
 ];
 
+const SESSIONS = [{ pid: 4242, name: "chrome.exe", source_id: "app:chrome.exe" }];
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string) => {
     if (cmd === "list_output_devices") return OUTPUTS;
     if (cmd === "list_input_devices") return INPUTS;
+    if (cmd === "list_audio_sessions") return SESSIONS;
     return [];
   }),
 }));
@@ -161,5 +164,46 @@ describe("DevicePicker (input, app-capture)", () => {
 
     fireEvent.click(row!);
     expect(onPick).toHaveBeenCalledWith("amvc-cap-1");
+  });
+});
+
+describe("DevicePicker (input, loopback sources)", () => {
+  it("offers System sound + app sessions and picks their synthetic ids", async () => {
+    const onPick = vi.fn();
+    render(
+      <DevicePicker
+        open
+        kind="input"
+        title="Add input"
+        includeLoopbackSources
+        onPick={onPick}
+        onClose={() => {}}
+      />,
+    );
+
+    // App session resolved from list_audio_sessions.
+    const app = await screen.findByText("chrome.exe");
+    fireEvent.click(app.closest("button")!);
+    expect(onPick).toHaveBeenCalledWith("app:chrome.exe");
+
+    // "System sound" is a static loopback entry mapped to sys:default.
+    const sys = screen.getByText("System sound");
+    fireEvent.click(sys.closest("button")!);
+    expect(onPick).toHaveBeenCalledWith("sys:default");
+  });
+
+  it("does not fetch sessions for output pickers", async () => {
+    render(
+      <DevicePicker
+        open
+        kind="output"
+        title="Output device"
+        includeLoopbackSources
+        onPick={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    await screen.findByText("Speakers (Realtek)");
+    expect(screen.queryByText("System sound")).toBeNull();
   });
 });
