@@ -25,7 +25,7 @@ const AUDIOMANAGER_PREFIX = "audiomanager ";
 
 /** True when a device name belongs to AudioManager's own virtual cable. */
 export function isAudioManagerVirtualDevice(deviceName: string): boolean {
-  return deviceName.toLowerCase().includes(AUDIOMANAGER_PREFIX);
+  return deviceName.toLowerCase().startsWith(AUDIOMANAGER_PREFIX);
 }
 
 /**
