@@ -20,6 +20,7 @@ import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
+import { onDevicesChanged } from "../../ipc/events";
 import type { DeviceInfo } from "../../types/engine";
 import {
   hasAnyAmvcDevice,
@@ -152,6 +153,22 @@ export function AudioManager() {
 
   useEffect(() => {
     void refreshCableDevices();
+  }, [refreshCableDevices]);
+
+  // Hotplug: the backend watcher emits devices-changed when endpoints
+  // arrive or leave; re-pull the device caches so pickers, suggestions,
+  // and the cable notice track reality without a manual re-check.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onDevicesChanged(() => void refreshCableDevices()).then((un) => {
+      if (disposed) un();
+      else unlisten = un;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [refreshCableDevices]);
 
   const recommendedBusDevice = busPickerTarget

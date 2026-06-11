@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import * as ipc from "../../ipc/commands";
+import { onDevicesChanged } from "../../ipc/events";
 import type { AudioSessionInfo, DeviceInfo } from "../../types/engine";
 import {
   getVirtualDeviceHint,
@@ -70,6 +71,8 @@ export function DevicePicker({
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Bumped by the hotplug listener so the list re-fetches while open.
+  const [hotplugTick, setHotplugTick] = useState(0);
 
   const wantsLoopback = includeLoopbackSources && kind === "input";
 
@@ -94,7 +97,24 @@ export function DevicePicker({
     return () => {
       cancelled = true;
     };
-  }, [open, kind]);
+  }, [open, kind, hotplugTick]);
+
+  // Hotplug: refresh the visible list when devices arrive or leave, so a
+  // user staring at the picker sees a just-plugged endpoint without
+  // closing and reopening it.
+  useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onDevicesChanged(() => setHotplugTick((t) => t + 1)).then((un) => {
+      if (disposed) un();
+      else unlisten = un;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [open]);
 
   // App sessions are best-effort: a failure here (e.g. non-Windows) must not
   // break the device picker, so it has its own fetch that only clears the

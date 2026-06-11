@@ -426,3 +426,15 @@ export interface PhonePairedDevice {
   /** Unix seconds of the most recent successful connect. */
   lastSeenUtc: number;
 }
+
+/**
+ * Payload of the `devices-changed` Tauri event, emitted by the backend
+ * hotplug watcher (Phase 11) whenever audio endpoints arrive or leave.
+ * Mirrors `DeviceDiff` in `src-tauri/src/audio/device_watch.rs`.
+ */
+export interface DeviceDiff {
+  added_inputs: string[];
+  removed_inputs: string[];
+  added_outputs: string[];
+  removed_outputs: string[];
+}
