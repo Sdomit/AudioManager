@@ -330,7 +330,13 @@ export function AudioManager() {
         onOpenStreamSetup={am.openStreamSetup}
       />
 
-      <AmvcBanner busNames={state.buses.map((b) => b.label)} />
+      {/* Slot order A1/A2/B1/B2 is the sync-plan contract — don't trust
+          array order. */}
+      <AmvcBanner
+        busNames={(["A1", "A2", "B1", "B2"] as const).map(
+          (id) => state.buses.find((b) => b.id === id)?.label ?? id,
+        )}
+      />
 
       {state.presetBannerVisible && loadedPreset && (
         <PresetBanner preset={loadedPreset} onDismiss={am.dismissPresetBanner} />

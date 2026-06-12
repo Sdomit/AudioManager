@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AmvcQueryResult,
+  AmvcSyncPlan,
   AudioSessionInfo,
   BusDspConfig,
   BusId,
@@ -207,14 +208,17 @@ export const queryAmvcHelper = (): Promise<AmvcQueryResult> =>
 export const launchAmvcInstaller = (): Promise<void> =>
   invoke<void>("launch_amvc_installer");
 
-/** Rename the four AMVC render endpoints to match AudioManager bus names. */
-export const amvcRenameToBusNames = (
-  a1: string,
-  a2: string,
-  b1: string,
-  b2: string,
-): Promise<void> =>
-  invoke<void>("amvc_rename_to_bus_names", { a1, a2, b1, b2 });
+/** Plan endpoint-name sync (read-only; no elevation). busNames in A1/A2/B1/B2 order. */
+export const amvcPlanEndpointSync = (busNames: string[]): Promise<AmvcSyncPlan> =>
+  invoke<AmvcSyncPlan>("amvc_plan_endpoint_sync", { busNames });
+
+/** Apply endpoint-name sync (requires the app to run elevated). */
+export const amvcApplyEndpointSync = (busNames: string[]): Promise<AmvcSyncPlan> =>
+  invoke<AmvcSyncPlan>("amvc_apply_endpoint_sync", { busNames });
+
+/** Revert renamed endpoints to their backed-up originals. Returns count restored. */
+export const amvcRestoreEndpointNames = (): Promise<number> =>
+  invoke<number>("amvc_restore_endpoint_names");
 
 /** Set the output callback buffer size in frames for a bus. null = driver
  *  default. Valid range: 32–8192. Triggers an engine rebuild if running. */

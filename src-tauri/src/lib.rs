@@ -1,4 +1,5 @@
 mod amvc;
+mod amvc_sync;
 mod audio;
 mod presets;
 mod state;
@@ -776,28 +777,37 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let mut buses = Vec::with_capacity(inner.buses.len());
 
     for bus in inner.buses.values() {
-        let (output_peak, clipped_recently, underruns, overruns) = match bus.engine.as_ref() {
-            Some(engine) => {
-                let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
-                for (idx, info) in engine.inputs.iter().enumerate() {
-                    let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
-                    input_peaks_by_device
-                        .entry(info.device_name.clone())
-                        .and_modify(|current| {
-                            if peak > *current {
-                                *current = peak;
-                            }
-                        })
-                        .or_insert(peak);
+        let (output_peak, clipped_recently, underruns, overruns, loudness) =
+            match bus.engine.as_ref() {
+                Some(engine) => {
+                    let (input_peaks, output_peak, clipped_recently) =
+                        engine.read_and_reset_meters();
+                    for (idx, info) in engine.inputs.iter().enumerate() {
+                        let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
+                        input_peaks_by_device
+                            .entry(info.device_name.clone())
+                            .and_modify(|current| {
+                                if peak > *current {
+                                    *current = peak;
+                                }
+                            })
+                            .or_insert(peak);
+                    }
+                    let (un, ov) = engine.read_and_reset_xruns();
+                    (output_peak, clipped_recently, un, ov, engine.read_loudness())
                 }
-                let (un, ov) = engine.read_and_reset_xruns();
-                (output_peak, clipped_recently, un, ov)
-            }
-            None => (0.0, false, 0, 0),
-        };
+                None => (
+                    0.0,
+                    false,
+                    0,
+                    0,
+                    audio::meters::LoudnessSnapshot::default(),
+                ),
+            };
         let mut status = bus.status_from_meters(output_peak, clipped_recently);
         status.underruns = underruns;
         status.overruns = overruns;
+        status.loudness = loudness;
         buses.push(status);
     }
 
@@ -1386,6 +1396,9 @@ pub fn run() {
             amvc::query_amvc_helper,
             amvc::launch_amvc_installer,
             amvc::amvc_set_device_enabled,
+            amvc_sync::amvc_plan_endpoint_sync,
+            amvc_sync::amvc_apply_endpoint_sync,
+            amvc_sync::amvc_restore_endpoint_names,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

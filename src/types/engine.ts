@@ -161,6 +161,22 @@ export interface BusDspConfig {
   limiter: LimiterConfig;
 }
 
+/** Stream-confidence verdict (#38): a recommendation, not just numbers. */
+export type LoudnessVerdict = "no_signal" | "too_quiet" | "healthy" | "too_hot";
+
+/** Streaming loudness snapshot (#38). All levels floored at -70 (JSON-safe). */
+export interface LoudnessSnapshot {
+  /** Un-weighted short-term RMS, dBFS. */
+  rms_db: number;
+  /** K-weighted momentary loudness (400 ms), LUFS. */
+  lufs_momentary: number;
+  /** K-weighted short-term loudness (3 s), LUFS. */
+  lufs_short: number;
+  /** Highest 4x-oversampled inter-sample peak since the last poll, dBTP. */
+  true_peak_db: number;
+  verdict: LoudnessVerdict;
+}
+
 export interface BusStatus {
   id: BusId;
   name: string;
@@ -180,6 +196,8 @@ export interface BusStatus {
   overruns?: number;
   /** Output callback buffer size in frames. null = driver default (#35). */
   buffer_size_frames?: number | null;
+  /** Streaming loudness meters (#38). Absent on pre-#38 payloads. */
+  loudness?: LoudnessSnapshot;
 }
 
 export interface SystemStatus {
@@ -274,3 +292,25 @@ export interface AmvcStatus {
 export type AmvcQueryResult =
   | ({ kind: "ok" } & AmvcStatus)
   | { kind: "unavailable"; reason: string };
+
+/** Bus slot an AMVC render endpoint backs. */
+export type AmvcBusSlot = "a1" | "a2" | "b1" | "b2";
+
+/** One endpoint's current vs. desired Windows name token. */
+export interface AmvcEndpointPlan {
+  guid: string;
+  slot: AmvcBusSlot;
+  current: string;
+  target: string;
+  needs_change: boolean;
+}
+
+/**
+ * Result of planning/applying AMVC endpoint name sync.
+ * `aligned` = nothing to change. `can_write` = process can write HKLM (≈ elevated).
+ */
+export interface AmvcSyncPlan {
+  endpoints: AmvcEndpointPlan[];
+  aligned: boolean;
+  can_write: boolean;
+}

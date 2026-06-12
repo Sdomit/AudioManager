@@ -82,3 +82,18 @@
   background: rgba(255, 255, 255, 0.06);
   color: var(--am-text-primary);
 }
+
+.actionBtn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: var(--am-text-12);
+  font-weight: 500;
+  color: var(--am-text-primary);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm);
+}
+
+.actionBtn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
