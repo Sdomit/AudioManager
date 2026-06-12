@@ -172,7 +172,7 @@ export interface LoudnessSnapshot {
   lufs_momentary: number;
   /** K-weighted short-term loudness (3 s), LUFS. */
   lufs_short: number;
-  /** Highest 4x-oversampled inter-sample peak since the last poll, dBTP. */
+  /** Highest 4x-oversampled inter-sample peak over the last 400 ms, dBTP. */
   true_peak_db: number;
   verdict: LoudnessVerdict;
 }

@@ -98,8 +98,8 @@ struct MixerSharedMeters {
     bus_muted: AtomicBool,
     // Streaming loudness meters (#38). Published once per output block by the
     // analyzer in the callback; read+formatted by the IPC thread. rms/lufs are
-    // dBFS/LUFS (f32 bits); true_peak is the linear inter-sample max since the
-    // last read (store_max accumulates, take_peak resets).
+    // dBFS/LUFS (f32 bits); true_peak is the linear inter-sample max over the
+    // analyzer's 400 ms window (plain store/load — multi-reader safe).
     rms_db: AtomicU32,         // f32 bits, dBFS
     lufs_momentary: AtomicU32, // f32 bits, LUFS
     lufs_short: AtomicU32,     // f32 bits, LUFS
@@ -202,14 +202,16 @@ impl MixerEngine {
         (input_peaks, output_peak, clipped)
     }
 
-    /// Read the streaming loudness snapshot (#38) and reset the true-peak
-    /// accumulator. rms/lufs are sampled (the callback keeps republishing
-    /// them); true peak is drained so the next interval starts fresh.
+    /// Read the streaming loudness snapshot (#38). Pure loads — all four
+    /// values are windowed maxima/means republished by the callback, so any
+    /// number of pollers can read concurrently. (An earlier drain-on-read
+    /// true peak raced the meter poll against the state poll: one reader
+    /// stole the accumulator and the other displayed -inf mid-signal.)
     pub fn read_loudness(&self) -> LoudnessSnapshot {
         let rms_db = f32::from_bits(self.meters.rms_db.load(Ordering::Relaxed));
         let lufs_momentary = f32::from_bits(self.meters.lufs_momentary.load(Ordering::Relaxed));
         let lufs_short = f32::from_bits(self.meters.lufs_short.load(Ordering::Relaxed));
-        let tp_lin = take_peak(&self.meters.true_peak);
+        let tp_lin = f32::from_bits(self.meters.true_peak.load(Ordering::Relaxed));
         let true_peak_db = if tp_lin <= 1e-9 {
             SILENCE_FLOOR_DB
         } else {
@@ -905,8 +907,10 @@ pub fn start(
                             shared_meters.clipped.store(true, Ordering::Relaxed);
                         }
 
-                        // Publish loudness (#38). rms/lufs are republished every
-                        // block; true peak accumulates until the IPC thread drains it.
+                        // Publish loudness (#38). All four are plain stores of
+                        // windowed values — true peak is the analyzer's 400 ms
+                        // block max, so concurrent status readers never drain
+                        // each other.
                         shared_meters
                             .rms_db
                             .store(analyzer.rms_db().to_bits(), Ordering::Relaxed);
@@ -916,7 +920,9 @@ pub fn start(
                         shared_meters
                             .lufs_short
                             .store(analyzer.lufs_short().to_bits(), Ordering::Relaxed);
-                        store_max(&shared_meters.true_peak, analyzer.take_true_peak());
+                        shared_meters
+                            .true_peak
+                            .store(analyzer.true_peak_lin().to_bits(), Ordering::Relaxed);
                     },
                     |e| eprintln!("[audio] output stream error: {e}"),
                     None,

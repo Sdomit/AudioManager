@@ -111,7 +111,7 @@ pub struct LoudnessSnapshot {
     pub lufs_momentary: f32,
     /// K-weighted short-term loudness (3 s), LUFS. Floored at -70.
     pub lufs_short: f32,
-    /// Highest 4×-oversampled inter-sample peak since the last read, dBTP.
+    /// Highest 4×-oversampled inter-sample peak over the last 400 ms, dBTP.
     /// Floored at -70.
     pub true_peak_db: f32,
     /// Plain-language verdict derived from short-term loudness + true peak.
@@ -265,11 +265,18 @@ pub struct StreamAnalyzer {
     blocks_filled: usize,
 
     true_peak: TruePeakMeter,
+    // Per-block true-peak maxima over the momentary window. Published as a
+    // plain max so any number of status readers can poll without draining
+    // each other (a swap-reset here raced the meter poll against the state
+    // poll and showed -inf mid-signal).
+    tp_blocks: [f32; MOMENTARY_BLOCKS],
+    tp_idx: usize,
 
     // Published values, refreshed once per completed 100 ms block.
     rms_db: f32,
     lufs_momentary: f32,
     lufs_short: f32,
+    true_peak_lin: f32,
 }
 
 impl StreamAnalyzer {
@@ -293,9 +300,12 @@ impl StreamAnalyzer {
             block_idx: 0,
             blocks_filled: 0,
             true_peak: TruePeakMeter::default(),
+            tp_blocks: [0.0; MOMENTARY_BLOCKS],
+            tp_idx: 0,
             rms_db: SILENCE_FLOOR_DB,
             lufs_momentary: SILENCE_FLOOR_DB,
             lufs_short: SILENCE_FLOOR_DB,
+            true_peak_lin: 0.0,
         }
     }
 
@@ -356,6 +366,12 @@ impl StreamAnalyzer {
         self.lufs_momentary = mean_square_to_db(momentary_ms, -0.691);
         self.lufs_short = mean_square_to_db(short_ms, -0.691);
         self.rms_db = mean_square_to_db(rms_ms, 0.0);
+
+        // True peak: max over the momentary window (400 ms), so a quiet
+        // block doesn't instantly erase a hot transient.
+        self.tp_blocks[self.tp_idx] = self.true_peak.take_max();
+        self.tp_idx = (self.tp_idx + 1) % MOMENTARY_BLOCKS;
+        self.true_peak_lin = self.tp_blocks.iter().fold(0.0f32, |a, &b| a.max(b));
     }
 
     pub fn rms_db(&self) -> f32 {
@@ -370,9 +386,10 @@ impl StreamAnalyzer {
         self.lufs_short
     }
 
-    /// Highest inter-sample peak since the last call, linear. Resets.
-    pub fn take_true_peak(&mut self) -> f32 {
-        self.true_peak.take_max()
+    /// Highest inter-sample peak over the momentary window (400 ms), linear.
+    /// Pure read — safe for any number of pollers (no drain).
+    pub fn true_peak_lin(&self) -> f32 {
+        self.true_peak_lin
     }
 }
 
@@ -476,6 +493,25 @@ mod tests {
         }
         let max = tp.take_max();
         assert!((max - 0.5).abs() < 0.02, "DC true peak ≈ sample peak, got {max}");
+    }
+
+    #[test]
+    fn analyzer_true_peak_is_windowed_not_drained() {
+        // fs/4 sine sampled between extrema: inter-sample peak ≈ 1.0.
+        let mut an = StreamAnalyzer::new(FS);
+        for i in 0..(FS / 2) {
+            let x = (2.0 * std::f32::consts::PI * (i as f32 + 0.5) / 4.0).sin();
+            an.process_frame(x, x);
+        }
+        let p1 = an.true_peak_lin();
+        assert!(p1 > 0.9, "expected ~1.0 inter-sample peak, got {p1}");
+        // Repeated reads must NOT drain the value (multi-poller safety).
+        assert_eq!(an.true_peak_lin(), p1);
+        // After > 400 ms of silence the windowed max decays to zero.
+        for _ in 0..(FS / 2) {
+            an.process_frame(0.0, 0.0);
+        }
+        assert_eq!(an.true_peak_lin(), 0.0);
     }
 
     #[test]
