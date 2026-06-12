@@ -6,7 +6,6 @@ import {
   PlusIcon,
 } from "./Icon";
 import { InputDspControls } from "./DspControls";
-import { openEqPopout } from "./eqPopoutWindow";
 import { MeterCanvas } from "./MeterCanvas";
 import { RecordButton } from "./RecordButton";
 import type {
@@ -158,7 +157,6 @@ export function InputDetail({
           <InputDspControls
             dsp={input.dsp}
             onChange={onDspChange}
-            onPopOutEq={() => void openEqPopout(`input:${input.id}`, `EQ — ${input.name}`)}
           />
         </section>
       )}
