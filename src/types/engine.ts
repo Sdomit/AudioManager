@@ -173,3 +173,42 @@ export interface AmvcStatus {
 export type AmvcQueryResult =
   | ({ kind: "ok" } & AmvcStatus)
   | { kind: "unavailable"; reason: string };
+
+// ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
+
+/** Mirror of `net::session::SessionState` (serde kebab-case). */
+export type PhoneSessionState =
+  | "created"
+  | "pending-accept"
+  | "accepted"
+  | "reconnecting"
+  | "disconnected"
+  | "expired";
+
+/** Mirror of `net::PhoneServerStatus`. */
+export interface PhoneServerStatus {
+  running: boolean;
+  port: number | null;
+  lanIps: string[];
+}
+
+/** Mirror of `net::session::PhoneSessionStatus`. Never contains the token. */
+export interface PhoneSessionStatus {
+  id: string;
+  label: string;
+  state: PhoneSessionState;
+  clientKind: string | null;
+  clientOs: string | null;
+  expiresInSecs: number | null;
+}
+
+/**
+ * Returned by `phone_create_session`. `urls` carry the pairing token in the
+ * fragment — render as QR, never log.
+ */
+export interface PhoneSessionCreated {
+  id: string;
+  label: string;
+  port: number;
+  urls: string[];
+}

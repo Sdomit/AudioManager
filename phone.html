@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0d0f12" />
+    <title>AudioManager — Phone Mic</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #0d0f12;
+        color: #e8eaed;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        text-align: center;
+        max-width: 420px;
+      }
+      .card h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+      .state { font-size: 15px; color: #b6bcc4; }
+      .detail { font-size: 13px; color: #7c828b; line-height: 1.5; }
+      .dot { width: 14px; height: 14px; border-radius: 50%; }
+      .dot.idle { background: #7c828b; animation: pulse 1.4s ease-in-out infinite; }
+      .dot.warn { background: #f59e0b; animation: pulse 1.4s ease-in-out infinite; }
+      .dot.ok   { background: #22c55e; }
+      .dot.err  { background: #ef4444; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="card">
+        <div class="dot idle"></div>
+        <h1>AudioManager</h1>
+        <p class="state">Loading…</p>
+      </div>
+    </div>
+    <script type="module" src="/src/phone/main-phone.ts"></script>
+  </body>
+</html>

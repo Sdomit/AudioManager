@@ -7,6 +7,9 @@ import type {
   DeviceInfo,
   EngineStatus,
   InputChannel,
+  PhoneServerStatus,
+  PhoneSessionCreated,
+  PhoneSessionStatus,
   PresetLoadResult,
   PresetSummary,
   PassthroughStatus,
@@ -204,3 +207,30 @@ export const queryAmvcHelper = (): Promise<AmvcQueryResult> =>
 /** Spawn the amvc-helper installer in the background. */
 export const launchAmvcInstaller = (): Promise<void> =>
   invoke<void>("launch_amvc_installer");
+
+// ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
+
+/** Server status (running/port/LAN IPs) without side effects. */
+export const phoneServerStatus = (): Promise<PhoneServerStatus> =>
+  invoke<PhoneServerStatus>("phone_server_status");
+
+/**
+ * Start the phone server if needed and create a pairing session.
+ * The returned URLs embed the pairing token — render as QR, never log.
+ */
+export const phoneCreateSession = (
+  label?: string,
+): Promise<PhoneSessionCreated> =>
+  invoke<PhoneSessionCreated>("phone_create_session", { label: label ?? null });
+
+export const phoneListSessions = (): Promise<PhoneSessionStatus[]> =>
+  invoke<PhoneSessionStatus[]>("phone_list_sessions");
+
+export const phoneAcceptClient = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_accept_client", { sessionId });
+
+export const phoneRejectClient = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_reject_client", { sessionId });
+
+export const phoneRemoveSession = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_remove_session", { sessionId });

@@ -1,5 +1,6 @@
 mod amvc;
 mod audio;
+mod net;
 mod presets;
 mod state;
 
@@ -1210,6 +1211,71 @@ mod tests {
     }
 }
 
+// ── Phone Wireless Audio (#39-#45) ────────────────────────────────────────────
+// Pairing/session commands for the LAN phone client. Media (WebRTC) and the
+// mixer-side remote input land in later phases; see docs/phone/architecture.md.
+
+/// Payload returned by `phone_create_session`. The URL carries the pairing
+/// token in its fragment — render it as a QR code, never log it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhoneSessionCreated {
+    id: String,
+    label: String,
+    port: u16,
+    /// Pairing URL per LAN interface, primary first.
+    urls: Vec<String>,
+}
+
+#[tauri::command]
+fn phone_server_status() -> net::PhoneServerStatus {
+    net::server_status()
+}
+
+#[tauri::command]
+fn phone_create_session(
+    app: tauri::AppHandle,
+    label: Option<String>,
+) -> Result<PhoneSessionCreated, EngineError> {
+    let data_dir = app_local_dir(&app)?;
+    let port = net::ensure_server(&data_dir).map_err(|message| EngineError { message })?;
+    let (id, token) = net::session::create_session(label);
+    let urls: Vec<String> = net::lan_ips()
+        .iter()
+        .map(|ip| net::pairing_url(ip, port, &id, &token))
+        .collect();
+    let status = net::session::status(&id).ok_or_else(|| EngineError {
+        message: "session vanished after creation".to_string(),
+    })?;
+    Ok(PhoneSessionCreated {
+        id,
+        label: status.label,
+        port,
+        urls,
+    })
+}
+
+#[tauri::command]
+fn phone_list_sessions() -> Vec<net::session::PhoneSessionStatus> {
+    net::session::list()
+}
+
+#[tauri::command]
+fn phone_accept_client(session_id: String) -> Result<(), EngineError> {
+    net::session::accept(&session_id).map_err(|message| EngineError { message })
+}
+
+#[tauri::command]
+fn phone_reject_client(session_id: String) -> Result<(), EngineError> {
+    net::session::reject(&session_id, "user-declined").map_err(|message| EngineError { message })
+}
+
+#[tauri::command]
+fn phone_remove_session(session_id: String) -> Result<(), EngineError> {
+    net::session::remove(&session_id);
+    Ok(())
+}
+
 // ── Tauri entry point ─────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1257,6 +1323,12 @@ pub fn run() {
             open_recordings_folder,
             amvc::query_amvc_helper,
             amvc::launch_amvc_installer,
+            phone_server_status,
+            phone_create_session,
+            phone_list_sessions,
+            phone_accept_client,
+            phone_reject_client,
+            phone_remove_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

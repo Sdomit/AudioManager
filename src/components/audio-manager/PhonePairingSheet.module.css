@@ -1,0 +1,250 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--am-surface-overlay);
+  backdrop-filter: blur(2px);
+  z-index: var(--am-z-sheet);
+  animation: fadeIn var(--am-dur-base) var(--am-ease-out);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 100vw;
+  background: var(--am-surface-1);
+  border-left: 1px solid var(--am-border-default);
+  box-shadow: var(--am-elev-3);
+  z-index: calc(var(--am-z-sheet) + 1);
+  transform: translateX(100%);
+  transition: transform var(--am-dur-slow) var(--am-ease-out);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sheetOpen { transform: translateX(0); }
+
+/* ── Header ─────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--am-space-5);
+  border-bottom: 1px solid var(--am-border-subtle);
+}
+.eyebrow {
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-wide);
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+  margin-bottom: 4px;
+}
+.title {
+  font-size: var(--am-text-18);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-tight);
+  color: var(--am-text-primary);
+  margin: 0;
+}
+.closeBtn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-md);
+}
+.closeBtn:hover {
+  color: var(--am-text-primary);
+  background: var(--am-surface-3);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-5);
+  padding: var(--am-space-5);
+  overflow-y: auto;
+}
+
+/* ── QR card ────────────────────────────────────────────────────── */
+.qrCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--am-space-3);
+  padding: var(--am-space-5);
+  border-radius: var(--am-radius-md);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-subtle);
+}
+.qrCanvas {
+  border-radius: var(--am-radius-sm);
+  background: #fff;
+  padding: var(--am-space-2);
+}
+.qrHint {
+  font-size: var(--am-text-13);
+  color: var(--am-text-secondary);
+  text-align: center;
+}
+.qrUrl {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  font-family: var(--am-font-mono, monospace);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qrNote {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  text-align: center;
+  line-height: 1.45;
+}
+
+/* ── Error box ──────────────────────────────────────────────────── */
+.errorBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-3);
+  padding: var(--am-space-4);
+  border-radius: var(--am-radius-md);
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.06), transparent 60%), var(--am-surface-2);
+}
+.errorTitle {
+  font-size: var(--am-text-13);
+  font-weight: 600;
+  color: var(--am-danger);
+}
+.errorDetail {
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+  word-break: break-word;
+}
+
+/* ── Sessions ───────────────────────────────────────────────────── */
+.sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--am-space-2);
+}
+.sectionLabel {
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-wide);
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+}
+.emptySessions {
+  font-size: var(--am-text-12);
+  color: var(--am-text-tertiary);
+  padding: var(--am-space-3) 0;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-3);
+  padding: var(--am-space-3);
+  border-radius: var(--am-radius-md);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-subtle);
+}
+.tone_ok {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.04), transparent 60%), var(--am-surface-2);
+}
+.tone_warn {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.05), transparent 60%), var(--am-surface-2);
+}
+.tone_neutral {}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot_ok { background: var(--am-success); }
+.dot_warn { background: var(--am-warning); }
+.dot_neutral { background: var(--am-text-tertiary); }
+
+.sessionText {
+  flex: 1;
+  min-width: 0;
+}
+.sessionLabel {
+  font-size: var(--am-text-13);
+  font-weight: 600;
+  color: var(--am-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sessionMeta {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+}
+
+.sessionActions {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.acceptBtn {
+  padding: 6px 12px;
+  border-radius: var(--am-radius-sm);
+  font-size: var(--am-text-12);
+  font-weight: 600;
+  color: #06140a;
+  background: var(--am-success);
+}
+.acceptBtn:hover { filter: brightness(1.08); }
+
+.rejectBtn {
+  padding: 6px 12px;
+  border-radius: var(--am-radius-sm);
+  font-size: var(--am-text-12);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+}
+.rejectBtn:hover { color: var(--am-danger); border-color: rgba(239, 68, 68, 0.4); }
+
+.removeBtn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--am-radius-sm);
+  color: var(--am-text-tertiary);
+}
+.removeBtn:hover { color: var(--am-danger); background: var(--am-surface-3); }
+
+.secondaryBtn {
+  padding: 6px 12px;
+  border-radius: var(--am-radius-sm);
+  font-size: var(--am-text-12);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+}
+.secondaryBtn:hover { color: var(--am-text-primary); }
