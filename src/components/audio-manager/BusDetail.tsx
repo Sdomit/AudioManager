@@ -17,6 +17,8 @@ import type {
   Bus,
   EqConfig,
   LimiterConfig,
+  LoudnessSnapshot,
+  LoudnessVerdict,
   Send,
   TapSpec,
 } from "./types";
@@ -118,6 +120,9 @@ export function BusDetail({
           {bus.state === "running" || bus.state === "clipping" ? levelToDb(bus.level) : "—"}
         </div>
       </div>
+
+      {/* Streaming loudness meters (#38) */}
+      {engineRunning && bus.loudness && <LoudnessPanel loudness={bus.loudness} />}
 
       {/* Master controls */}
       <section className={styles.section}>
@@ -255,4 +260,84 @@ function StatePill({ state }: { state: Bus["state"] }) {
     case "idle":
     default:             return <Pill tone="neutral">Idle</Pill>;
   }
+}
+
+const VERDICT_META: Record<LoudnessVerdict, { label: string; color: string }> = {
+  no_signal: { label: "No signal", color: "var(--am-text-tertiary)" },
+  too_quiet: { label: "Too quiet", color: "var(--am-warning)" },
+  healthy: { label: "Healthy", color: "var(--am-success)" },
+  too_hot: { label: "Too hot", color: "var(--am-meter-clip)" },
+};
+
+/** Floored levels (≤ -70 dB) read as -∞ rather than a misleading number. */
+function fmtLoud(v: number): string {
+  return v <= -69.5 ? "−∞" : v.toFixed(1);
+}
+
+function LoudnessStat({ label, value, unit }: { label: string; value: string; unit: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span
+        style={{
+          fontSize: "var(--am-text-11)",
+          color: "var(--am-text-tertiary)",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontFamily: "var(--am-font-mono)",
+          fontSize: "var(--am-text-14)",
+          color: "var(--am-text-primary)",
+        }}
+      >
+        {value}
+        <span style={{ fontSize: "var(--am-text-11)", color: "var(--am-text-tertiary)", marginLeft: 3 }}>
+          {unit}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** Streaming loudness readout (#38): RMS / LUFS / true peak + verdict badge. */
+function LoudnessPanel({ loudness }: { loudness: LoudnessSnapshot }) {
+  const verdict = VERDICT_META[loudness.verdict];
+  return (
+    <section className={styles.section}>
+      <div className={styles.sectionTitle}>Loudness</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <LoudnessStat label="Short" value={fmtLoud(loudness.lufs_short)} unit="LUFS" />
+        <LoudnessStat label="Momentary" value={fmtLoud(loudness.lufs_momentary)} unit="LUFS" />
+        <LoudnessStat label="RMS" value={fmtLoud(loudness.rms_db)} unit="dBFS" />
+        <LoudnessStat label="True peak" value={fmtLoud(loudness.true_peak_db)} unit="dBTP" />
+      </div>
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "3px 10px",
+          borderRadius: 999,
+          background: `color-mix(in srgb, ${verdict.color} 16%, transparent)`,
+          color: verdict.color,
+          fontSize: "var(--am-text-12)",
+          fontWeight: 600,
+        }}
+      >
+        <span style={{ width: 7, height: 7, borderRadius: 999, background: verdict.color }} />
+        {verdict.label}
+      </div>
+    </section>
+  );
 }

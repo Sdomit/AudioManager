@@ -11,6 +11,7 @@ use crate::audio::dsp::{
     BusDspConfig, DspConfig,
 };
 use crate::audio::loopback::{self, Subscription};
+use crate::audio::meters::{verdict_for, LoudnessSnapshot, StreamAnalyzer, SILENCE_FLOOR_DB};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::source::InputSourceSpec;
 
@@ -95,6 +96,14 @@ struct MixerSharedMeters {
     // update them without restarting the engine.
     bus_volume: AtomicU32, // f32 bits, default 1.0
     bus_muted: AtomicBool,
+    // Streaming loudness meters (#38). Published once per output block by the
+    // analyzer in the callback; read+formatted by the IPC thread. rms/lufs are
+    // dBFS/LUFS (f32 bits); true_peak is the linear inter-sample max since the
+    // last read (store_max accumulates, take_peak resets).
+    rms_db: AtomicU32,         // f32 bits, dBFS
+    lufs_momentary: AtomicU32, // f32 bits, LUFS
+    lufs_short: AtomicU32,     // f32 bits, LUFS
+    true_peak: AtomicU32,      // f32 bits, linear
 }
 
 /// Live handle to a running mixer engine.
@@ -191,6 +200,28 @@ impl MixerEngine {
         let output_peak = take_peak(&self.meters.output_peak);
         let clipped = self.meters.clipped.swap(false, Ordering::Relaxed);
         (input_peaks, output_peak, clipped)
+    }
+
+    /// Read the streaming loudness snapshot (#38) and reset the true-peak
+    /// accumulator. rms/lufs are sampled (the callback keeps republishing
+    /// them); true peak is drained so the next interval starts fresh.
+    pub fn read_loudness(&self) -> LoudnessSnapshot {
+        let rms_db = f32::from_bits(self.meters.rms_db.load(Ordering::Relaxed));
+        let lufs_momentary = f32::from_bits(self.meters.lufs_momentary.load(Ordering::Relaxed));
+        let lufs_short = f32::from_bits(self.meters.lufs_short.load(Ordering::Relaxed));
+        let tp_lin = take_peak(&self.meters.true_peak);
+        let true_peak_db = if tp_lin <= 1e-9 {
+            SILENCE_FLOOR_DB
+        } else {
+            (20.0 * tp_lin.log10()).max(SILENCE_FLOOR_DB)
+        };
+        LoudnessSnapshot {
+            rms_db,
+            lufs_momentary,
+            lufs_short,
+            true_peak_db,
+            verdict: verdict_for(lufs_short, true_peak_db),
+        }
     }
 
     /// Publish new DSP parameters for input at `index`. Lock-free: the audio
@@ -343,6 +374,10 @@ pub fn start(
         clipped: AtomicBool::new(false),
         bus_volume: AtomicU32::new(bus_volume.to_bits()),
         bus_muted: AtomicBool::new(bus_muted),
+        rms_db: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
+        lufs_momentary: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
+        lufs_short: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
+        true_peak: AtomicU32::new(0.0f32.to_bits()),
     });
 
     let (result_tx, result_rx) = mpsc::channel::<Result<StartInfo, EngineError>>();
@@ -624,6 +659,11 @@ pub fn start(
             let bus_dsp_shared_cb = Arc::clone(&bus_dsp_shared_arc);
             let mut bus_dsp_slots = BusDspSlots::new(sr);
 
+            // Streaming loudness analyzer (#38). Owned by the output callback,
+            // fed the final post-clamp frame; publishes to shared atomics once
+            // per output block. Constructed at the output stream's rate.
+            let mut analyzer = StreamAnalyzer::new(out_sample_rate.0);
+
             // Per-input scratch for bulk ring reads: one `pop_slice` per input per
             // block instead of one atomic `pop()` per sample. Sized to the ring
             // capacity so a block can never exceed it; reused across callbacks so
@@ -840,6 +880,15 @@ pub fn start(
                                 clamped_frame[ch] = clamped;
                             }
 
+                            // Streaming meters (#38): feed the final post-clamp
+                            // frame. Mono output duplicates ch0 into both legs.
+                            let meter_r = if out_channels > 1 {
+                                clamped_frame[1]
+                            } else {
+                                clamped_frame[0]
+                            };
+                            analyzer.process_frame(clamped_frame[0], meter_r);
+
                             if !active_taps.is_empty() {
                                 for tap in active_taps.iter_mut() {
                                     if matches!(tap.kind, CallbackTapKind::BusOut) {
@@ -855,6 +904,19 @@ pub fn start(
                         if block_clipped {
                             shared_meters.clipped.store(true, Ordering::Relaxed);
                         }
+
+                        // Publish loudness (#38). rms/lufs are republished every
+                        // block; true peak accumulates until the IPC thread drains it.
+                        shared_meters
+                            .rms_db
+                            .store(analyzer.rms_db().to_bits(), Ordering::Relaxed);
+                        shared_meters
+                            .lufs_momentary
+                            .store(analyzer.lufs_momentary().to_bits(), Ordering::Relaxed);
+                        shared_meters
+                            .lufs_short
+                            .store(analyzer.lufs_short().to_bits(), Ordering::Relaxed);
+                        store_max(&shared_meters.true_peak, analyzer.take_true_peak());
                     },
                     |e| eprintln!("[audio] output stream error: {e}"),
                     None,
@@ -981,6 +1043,10 @@ mod tests {
                 clipped: AtomicBool::new(clipped),
                 bus_volume: AtomicU32::new(1.0f32.to_bits()),
                 bus_muted: AtomicBool::new(false),
+                rms_db: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
+                lufs_momentary: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
+                lufs_short: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
+                true_peak: AtomicU32::new(0.0f32.to_bits()),
             }),
             dsp_shared: vec![],
             bus_dsp_shared: Arc::new(BusDspShared::new(&BusDspConfig::default(), 48_000.0)),

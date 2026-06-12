@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::dsp::BusDspConfig;
+use crate::audio::meters::LoudnessSnapshot;
 use crate::audio::mixer::MixerEngine;
 
 /// Stable, hashable identifier for the four fixed output buses.
@@ -123,6 +124,10 @@ pub struct BusStatus {
     /// Current output buffer size setting, mirrored from `BusConfig`. `None`
     /// means the driver default is in use.
     pub buffer_size_frames: Option<u32>,
+    /// Streaming loudness snapshot (#38): RMS, momentary/short LUFS, true peak,
+    /// and a plain-language verdict. Defaults to the silence floor when the bus
+    /// has no running engine.
+    pub loudness: LoudnessSnapshot,
 }
 
 /// Per-bus runtime state owned by `AppInner`.
@@ -170,6 +175,9 @@ impl BusRuntime {
         let mut status = self.status_from_meters(output_peak, clipped_recently);
         status.underruns = underruns;
         status.overruns = overruns;
+        if let Some(eng) = self.engine.as_ref() {
+            status.loudness = eng.read_loudness();
+        }
         status
     }
 
@@ -189,6 +197,7 @@ impl BusRuntime {
             underruns: 0,
             overruns: 0,
             buffer_size_frames: self.config.buffer_size_frames,
+            loudness: LoudnessSnapshot::default(),
         }
     }
 }

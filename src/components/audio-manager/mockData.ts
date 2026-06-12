@@ -18,7 +18,7 @@ import type {
 
 const rawBuses: Omit<
   Bus,
-  "bufferSizeFrames" | "underruns" | "overruns" | "limiter" | "eq"
+  "bufferSizeFrames" | "underruns" | "overruns" | "limiter" | "eq" | "loudness"
 >[] = [
   {
     id: "A1",
@@ -81,6 +81,7 @@ export const mockBuses: Bus[] = rawBuses.map((b) => ({
   overruns: 0,
   eq: defaultEq(),
   limiter: defaultLimiter(),
+  loudness: null,
 }));
 
 const rawInputs: Omit<AudioInput, "dsp">[] = [

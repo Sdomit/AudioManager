@@ -5,9 +5,20 @@
  * shapes returned by your Rust backend. Adapt in tauriCommands.ts when wiring.
  */
 
-import type { DspConfig, EqConfig, LimiterConfig } from "../../types/engine";
+import type {
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
+  LoudnessSnapshot,
+} from "../../types/engine";
 
-export type { DspConfig, EqConfig, LimiterConfig } from "../../types/engine";
+export type {
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
+  LoudnessSnapshot,
+  LoudnessVerdict,
+} from "../../types/engine";
 
 export type BusId = "A1" | "A2" | "B1" | "B2";
 
@@ -46,6 +57,8 @@ export interface Bus {
   eq: EqConfig;
   /** Per-bus final limiter (#32). */
   limiter: LimiterConfig;
+  /** Streaming loudness meters (#38). null until the engine reports. */
+  loudness: LoudnessSnapshot | null;
 }
 
 export type InputSourceKind =

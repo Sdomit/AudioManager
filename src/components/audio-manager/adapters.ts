@@ -82,6 +82,7 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
     overruns: b.overruns ?? 0,
     eq: b.dsp?.eq ?? defaultEq(),
     limiter: b.dsp?.limiter ?? defaultLimiter(),
+    loudness: b.loudness ?? null,
   };
 }
 

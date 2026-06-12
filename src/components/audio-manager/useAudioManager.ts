@@ -400,6 +400,7 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
               overruns: 0,
               eq: defaultEq(),
               limiter: defaultLimiter(),
+              loudness: null,
             };
         return {
           ...merged,
