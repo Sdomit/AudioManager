@@ -260,11 +260,12 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
   );
 }
 
-const LATENCY_MODES: ipc.PhoneLatencyMode[] = ["fastest", "balanced", "stable"];
+const LATENCY_MODES: ipc.PhoneLatencyMode[] = ["fastest", "balanced", "stable", "adaptive"];
 const LATENCY_LABELS: Record<ipc.PhoneLatencyMode, string> = {
   fastest: "Fastest",
   balanced: "Balanced",
   stable: "Stable",
+  adaptive: "Podcast (Adaptive)",
 };
 
 /** One Opus frame is ~20 ms; the jitter window is the dominant added delay. */

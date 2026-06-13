@@ -184,36 +184,64 @@ async fn read_track(
         stats.record_packet(payload.len(), lost);
 
         jb.insert(seq, payload.to_vec());
-        let target = LatencyMode::from_u8(latency.load(Ordering::Relaxed)).target_frames();
-        while let Some(action) = jb.drain_one(target) {
-            let decoded = match action {
-                Tick::Decode(p) => match Packet::try_from(&p[..]) {
-                    Ok(pkt) => decode_into(&mut decoder, Some(pkt), &mut pcm),
-                    Err(_) => None,
-                },
-                Tick::Conceal => decode_into(&mut decoder, None, &mut pcm),
-            };
-            if let Some(n) = decoded {
-                // decode_float returns samples per channel; the buffer holds
-                // `n * DECODE_CHANNELS` interleaved samples.
-                let filled = n * DECODE_CHANNELS;
-                let mut peak = 0.0f32;
-                for &s in &pcm[..filled] {
-                    let a = s.abs();
-                    if a > peak {
-                        peak = a;
+        let mode = LatencyMode::from_u8(latency.load(Ordering::Relaxed));
+        let adaptive = mode == LatencyMode::Adaptive;
+        if adaptive {
+            // Podcast (Adaptive): floating depth + Opus FEC recovery.
+            while let Some(action) = jb.drain_one_adaptive() {
+                let decoded = match action {
+                    Tick::Decode(p) => decode_payload(&mut decoder, &p, &mut pcm, false),
+                    Tick::Conceal => decode_into(&mut decoder, None, &mut pcm),
+                    Tick::RecoverFec { next_payload } => {
+                        // Reconstruct the lost frame from its successor's in-band FEC.
+                        decode_payload(&mut decoder, &next_payload, &mut pcm, true)
                     }
-                }
-                stats.record_peak(peak);
-                remote::push_decoded_48k(&session_id, &pcm[..filled], peak);
+                };
+                emit_pcm(decoded, &pcm, &stats, &session_id, true);
+            }
+        } else {
+            // Fixed modes: verbatim original path (no FEC, no drift integrator).
+            let target = mode.target_frames();
+            while let Some(action) = jb.drain_one(target) {
+                let decoded = match action {
+                    Tick::Decode(p) => decode_payload(&mut decoder, &p, &mut pcm, false),
+                    Tick::Conceal => decode_into(&mut decoder, None, &mut pcm),
+                    Tick::RecoverFec { .. } => None, // unreachable for fixed modes
+                };
+                emit_pcm(decoded, &pcm, &stats, &session_id, false);
             }
         }
         stats.set_jitter(jb.depth() as u32, jb.plc);
     }
 }
 
-/// Decode one frame (or conceal when `input` is None) into `pcm`; returns the
-/// per-channel sample count on success.
+/// Peak-meter and push a decoded block into the mixer feed. `adaptive` gates the
+/// remote drift compensator (Podcast mode only).
+fn emit_pcm(decoded: Option<usize>, pcm: &[f32], stats: &PhoneStats, session_id: &str, adaptive: bool) {
+    let Some(n) = decoded else { return };
+    // decode_float returns samples per channel; the buffer holds
+    // `n * DECODE_CHANNELS` interleaved samples.
+    let filled = n * DECODE_CHANNELS;
+    let mut peak = 0.0f32;
+    for &s in &pcm[..filled] {
+        let a = s.abs();
+        if a > peak {
+            peak = a;
+        }
+    }
+    stats.record_peak(peak);
+    remote::push_decoded_48k(session_id, &pcm[..filled], peak, adaptive);
+}
+
+/// Decode one Opus payload into `pcm`. `fec` reconstructs the *previous* lost
+/// frame from this packet's in-band FEC. Returns per-channel sample count.
+fn decode_payload(decoder: &mut Decoder, payload: &[u8], pcm: &mut [f32], fec: bool) -> Option<usize> {
+    let pkt = Packet::try_from(payload).ok()?;
+    let out = MutSignals::try_from(&mut pcm[..]).ok()?;
+    decoder.decode_float(Some(pkt), out, fec).ok()
+}
+
+/// Conceal (PLC) when `input` is None; returns the per-channel sample count.
 fn decode_into(decoder: &mut Decoder, input: Option<Packet<'_>>, pcm: &mut [f32]) -> Option<usize> {
     let out = MutSignals::try_from(&mut pcm[..]).ok()?;
     decoder.decode_float(input, out, false).ok()

@@ -16,12 +16,15 @@
 use std::collections::BTreeMap;
 
 /// User-facing latency/robustness trade. Larger target depth = more buffering =
-/// more delay but fewer dropouts on jittery WiFi.
+/// more delay but fewer dropouts on jittery WiFi. `Adaptive` ("Podcast
+/// (Adaptive)") is the opt-in robust mode: the buffer depth floats with the
+/// network, Opus in-band FEC recovers losses, and clock drift is compensated.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LatencyMode {
     Fastest,
     Balanced,
     Stable,
+    Adaptive,
 }
 
 impl LatencyMode {
@@ -29,6 +32,7 @@ impl LatencyMode {
         match v {
             0 => LatencyMode::Fastest,
             2 => LatencyMode::Stable,
+            3 => LatencyMode::Adaptive,
             _ => LatencyMode::Balanced,
         }
     }
@@ -38,6 +42,7 @@ impl LatencyMode {
             LatencyMode::Fastest => 0,
             LatencyMode::Balanced => 1,
             LatencyMode::Stable => 2,
+            LatencyMode::Adaptive => 3,
         }
     }
 
@@ -46,6 +51,7 @@ impl LatencyMode {
             "fastest" => Some(LatencyMode::Fastest),
             "balanced" => Some(LatencyMode::Balanced),
             "stable" => Some(LatencyMode::Stable),
+            "adaptive" => Some(LatencyMode::Adaptive),
             _ => None,
         }
     }
@@ -55,20 +61,31 @@ impl LatencyMode {
             LatencyMode::Fastest => "fastest",
             LatencyMode::Balanced => "balanced",
             LatencyMode::Stable => "stable",
+            LatencyMode::Adaptive => "adaptive",
         }
     }
 
     /// Reorder/jitter window held before release, in ~20 ms frames. The mixer
     /// ring adds only a few ms on top, so these set the dominant added latency:
-    /// Fastest ~20 ms, Balanced ~40 ms, Stable ~100 ms.
+    /// Fastest ~20 ms, Balanced ~40 ms, Stable ~100 ms. Adaptive's value here is
+    /// only a static fallback — its live depth comes from the buffer's controller.
     pub fn target_frames(self) -> usize {
         match self {
             LatencyMode::Fastest => 1,
             LatencyMode::Balanced => 2,
             LatencyMode::Stable => 5,
+            LatencyMode::Adaptive => ADAPT_FLOOR,
         }
     }
 }
+
+/// Adaptive-depth bounds and ballistics (Adaptive mode only).
+const ADAPT_FLOOR: usize = 2;
+const ADAPT_CEIL: usize = 12;
+/// Frames to grow the window per loss event (fast attack).
+const ADAPT_BUMP: usize = 2;
+/// Clean releases before shrinking the window by one (~5 s at 50 fps; slow release).
+const ADAPT_SHRINK_AFTER: u32 = 250;
 
 /// One released playout step.
 #[derive(Debug, PartialEq, Eq)]
@@ -77,6 +94,10 @@ pub enum Tick {
     Decode(Vec<u8>),
     /// A frame was lost (gap); run Opus PLC for one frame to bridge it.
     Conceal,
+    /// Adaptive only: the lost frame's successor is buffered, so decode it with
+    /// Opus in-band FEC to *reconstruct* the lost frame instead of concealing.
+    /// The successor itself is decoded normally on the next drain.
+    RecoverFec { next_payload: Vec<u8> },
 }
 
 /// Start extended sequences well above 0 so the first wrap-backwards can't underflow.
@@ -91,6 +112,14 @@ pub struct JitterBuffer {
     started: bool,
     pub plc: u64,
     pub late_drops: u64,
+    pub reorder: u64,
+    // ── Adaptive controller state (only read/written by drain_one_adaptive) ──
+    /// Live reorder/jitter window for Adaptive mode; floats in [FLOOR, CEIL].
+    adaptive_target: usize,
+    /// Consecutive clean releases since the last loss (drives slow shrink).
+    clean_run: u32,
+    /// Frames reconstructed via Opus in-band FEC.
+    pub fec_recovered: u64,
 }
 
 impl Default for JitterBuffer {
@@ -108,11 +137,21 @@ impl JitterBuffer {
             started: false,
             plc: 0,
             late_drops: 0,
+            reorder: 0,
+            adaptive_target: ADAPT_FLOOR,
+            clean_run: 0,
+            fec_recovered: 0,
         }
     }
 
     pub fn depth(&self) -> usize {
         self.frames.len()
+    }
+
+    /// Current Adaptive-mode window depth (frames). Observability / Phase 3.
+    #[allow(dead_code)] // surfaced in Phase 3
+    pub fn adaptive_target(&self) -> usize {
+        self.adaptive_target
     }
 
     /// Queue one RTP payload by its 16-bit sequence number.
@@ -122,6 +161,10 @@ impl JitterBuffer {
             None => INITIAL_EXT + u64::from(seq),
             Some(h) => extend(h, seq),
         };
+        // Arrived below the highest seen but still ahead of playout = reordered.
+        if self.highest.is_some_and(|h| ext < h) {
+            self.reorder += 1;
+        }
         self.highest = Some(self.highest.map_or(ext, |h| h.max(ext)));
         // Drop frames we have already played past (late or duplicate).
         if let Some(n) = self.next {
@@ -162,6 +205,60 @@ impl JitterBuffer {
             Some(Tick::Conceal)
         }
     }
+
+    /// Adaptive-mode drain: same reorder/hold logic as [`drain_one`] but the hold
+    /// depth floats (`adaptive_target`), and on a single-frame gap whose successor
+    /// is buffered it emits [`Tick::RecoverFec`] so the caller can reconstruct the
+    /// lost frame from the next packet's in-band FEC instead of concealing.
+    ///
+    /// Never called for the fixed modes, so their path is untouched.
+    pub fn drain_one_adaptive(&mut self) -> Option<Tick> {
+        if self.frames.len() <= self.adaptive_target {
+            return None;
+        }
+        if !self.started {
+            self.started = true;
+            self.next = self.frames.keys().next().copied();
+        }
+        let n = self.next?;
+        if let Some(payload) = self.frames.remove(&n) {
+            self.note_clean();
+            self.next = Some(n + 1);
+            return Some(Tick::Decode(payload));
+        }
+        // Gap at `n`. Look at the oldest buffered frame.
+        let oldest = *self.frames.keys().next()?;
+        self.note_loss();
+        if oldest == n + 1 {
+            // The immediately-next frame is present: reconstruct `n` from its FEC.
+            // Leave it buffered; `next = n+1` so the following drain decodes it
+            // normally. Counts as a recovery, not a concealment.
+            self.next = Some(n + 1);
+            self.fec_recovered += 1;
+            let next_payload = self.frames.get(&(n + 1)).cloned()?;
+            Some(Tick::RecoverFec { next_payload })
+        } else {
+            // Multi-frame gap (or N+1 also lost): skip the gap, conceal once.
+            self.next = Some(oldest);
+            self.plc += 1;
+            Some(Tick::Conceal)
+        }
+    }
+
+    /// A clean release: ratchet the adaptive window down on a sustained-clean link.
+    fn note_clean(&mut self) {
+        self.clean_run += 1;
+        if self.clean_run >= ADAPT_SHRINK_AFTER {
+            self.adaptive_target = self.adaptive_target.saturating_sub(1).max(ADAPT_FLOOR);
+            self.clean_run = 0;
+        }
+    }
+
+    /// A loss event: grow the window fast so the next loss has FEC headroom.
+    fn note_loss(&mut self) {
+        self.adaptive_target = (self.adaptive_target + ADAPT_BUMP).min(ADAPT_CEIL);
+        self.clean_run = 0;
+    }
 }
 
 /// Extend a 16-bit sequence to monotonic 64-bit relative to the highest seen,
@@ -182,10 +279,17 @@ mod tests {
 
     #[test]
     fn modes_round_trip_and_have_increasing_depth() {
-        for m in [LatencyMode::Fastest, LatencyMode::Balanced, LatencyMode::Stable] {
+        for m in [
+            LatencyMode::Fastest,
+            LatencyMode::Balanced,
+            LatencyMode::Stable,
+            LatencyMode::Adaptive,
+        ] {
             assert_eq!(LatencyMode::from_u8(m.as_u8()), m);
             assert_eq!(LatencyMode::from_str(m.as_str()), Some(m));
         }
+        assert_eq!(LatencyMode::from_u8(3), LatencyMode::Adaptive);
+        assert_eq!(LatencyMode::Adaptive.as_str(), "adaptive");
         assert!(
             LatencyMode::Fastest.target_frames() < LatencyMode::Balanced.target_frames()
                 && LatencyMode::Balanced.target_frames() < LatencyMode::Stable.target_frames()
@@ -302,5 +406,85 @@ mod tests {
         jb.insert(200, frame(9));
         assert_eq!(jb.late_drops, 1);
         assert_eq!(drain(&mut jb, 0), vec![]);
+    }
+
+    // ── Adaptive mode (Podcast) ──
+
+    fn drain_adaptive(jb: &mut JitterBuffer) -> Vec<Tick> {
+        let mut out = Vec::new();
+        while let Some(t) = jb.drain_one_adaptive() {
+            out.push(t);
+        }
+        out
+    }
+
+    #[test]
+    fn adaptive_recovers_lost_frame_via_fec_when_successor_present() {
+        let mut jb = JitterBuffer::new();
+        // 12 lost; 13 (its successor) is buffered, so FEC can reconstruct 12.
+        for s in [10u16, 11, 13, 14, 15] {
+            jb.insert(s, frame(s as u8));
+        }
+        // The loss at 12 grows the window, so this pass stops after recovering it.
+        let out = drain_adaptive(&mut jb);
+        assert_eq!(
+            out,
+            vec![
+                Tick::Decode(frame(10)),
+                Tick::Decode(frame(11)),
+                Tick::RecoverFec { next_payload: frame(13) }, // reconstruct 12 from 13
+            ]
+        );
+        assert_eq!(jb.fec_recovered, 1);
+        assert_eq!(jb.plc, 0);
+        // 13 is still buffered; once the window is exceeded again it decodes normally.
+        jb.insert(16, frame(16));
+        jb.insert(17, frame(17));
+        assert_eq!(jb.drain_one_adaptive(), Some(Tick::Decode(frame(13))));
+    }
+
+    #[test]
+    fn adaptive_conceals_multiframe_gap_no_fec() {
+        let mut jb = JitterBuffer::new();
+        // 12 AND 13 lost (successor of 12 is absent) → cannot FEC, conceal once.
+        for s in [10u16, 11, 14, 15, 16] {
+            jb.insert(s, frame(s as u8));
+        }
+        let out = drain_adaptive(&mut jb);
+        assert_eq!(
+            out,
+            vec![
+                Tick::Decode(frame(10)),
+                Tick::Decode(frame(11)),
+                Tick::Conceal,
+            ]
+        );
+        assert_eq!(jb.fec_recovered, 0);
+        assert_eq!(jb.plc, 1);
+    }
+
+    #[test]
+    fn fixed_mode_drain_never_recovers_fec() {
+        let mut jb = JitterBuffer::new();
+        for s in [10u16, 11, 13, 14, 15] {
+            jb.insert(s, frame(s as u8));
+        }
+        let out = drain(&mut jb, 2);
+        assert!(out.iter().all(|t| !matches!(t, Tick::RecoverFec { .. })));
+        assert!(out.iter().any(|t| *t == Tick::Conceal)); // it conceals the gap instead
+    }
+
+    #[test]
+    fn adaptive_depth_grows_on_loss_and_shrinks_when_clean() {
+        let mut jb = JitterBuffer::new();
+        assert_eq!(jb.adaptive_target(), ADAPT_FLOOR);
+        for _ in 0..10 {
+            jb.note_loss();
+        }
+        assert_eq!(jb.adaptive_target(), ADAPT_CEIL); // +2 each, capped
+        for _ in 0..(ADAPT_SHRINK_AFTER as usize * (ADAPT_CEIL - ADAPT_FLOOR + 1)) {
+            jb.note_clean();
+        }
+        assert_eq!(jb.adaptive_target(), ADAPT_FLOOR); // bleeds back to floor
     }
 }

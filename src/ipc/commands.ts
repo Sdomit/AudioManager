@@ -235,7 +235,7 @@ export const phoneRejectClient = (sessionId: string): Promise<void> =>
 export const phoneRemoveSession = (sessionId: string): Promise<void> =>
   invoke<void>("phone_remove_session", { sessionId });
 
-export type PhoneLatencyMode = "fastest" | "balanced" | "stable";
+export type PhoneLatencyMode = "fastest" | "balanced" | "stable" | "adaptive";
 
 export const phoneSetLatencyMode = (
   sessionId: string,
