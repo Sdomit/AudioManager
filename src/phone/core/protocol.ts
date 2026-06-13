@@ -107,8 +107,16 @@ export function candidateMessage(c: RTCIceCandidateInit): ClientCandidate {
   };
 }
 
-export function statsMessage(micLevel: number, visible: boolean, muted = false): ClientStats {
-  return { v: PROTOCOL_VERSION, type: "stats", micLevel, visible, muted };
+export function statsMessage(
+  micLevel: number,
+  visible: boolean,
+  muted = false,
+  batterySaver = false,
+): ClientStats {
+  const msg: ClientStats = { v: PROTOCOL_VERSION, type: "stats", micLevel, visible, muted };
+  // Only include when set, so the common case stays minimal.
+  if (batterySaver) msg.batterySaver = true;
+  return msg;
 }
 
 export function byeMessage(reason: string): ClientBye {

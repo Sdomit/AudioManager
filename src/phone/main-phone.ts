@@ -22,6 +22,7 @@ import {
   DEFAULT_CAPTURE,
   keepAwake,
   listMics,
+  onDeviceChange,
   startMic,
   type CaptureOptions,
   type MicCapture,
@@ -43,6 +44,12 @@ let meterTimer: ReturnType<typeof setInterval> | null = null;
 let muted = false;
 let mics: MicDevice[] = [];
 let captureOpts: CaptureOptions = { ...DEFAULT_CAPTURE };
+let lowBandwidth = false;
+let deviceUnsub: (() => void) | null = null;
+
+/** Phone is in OS data-saver mode (best-effort; absent on some browsers). */
+const batterySaver =
+  (navigator as unknown as { connection?: { saveData?: boolean } }).connection?.saveData === true;
 let switching = false;
 
 if (!pairing) {
@@ -122,11 +129,25 @@ if (!pairing) {
       });
       const sdp = await transport.createOffer();
       signaling.send(offerMessage(sdp));
+      void transport.setLowBandwidth(lowBandwidth);
       startMeter();
       // Labels are only available post-permission, so enumerate now.
       void listMics().then((list) => {
         mics = list;
         rerender();
+      });
+      // Recover from a mid-stream route change (headset/BT unplug) by falling
+      // back to the default mic if the active device disappears.
+      deviceUnsub = onDeviceChange(() => {
+        void listMics().then((list) => {
+          mics = list;
+          const active = mic?.deviceId;
+          if (active && !list.some((d) => d.deviceId === active)) {
+            void applyCapture({ deviceId: undefined });
+          } else {
+            rerender();
+          }
+        });
       });
     } catch (e: unknown) {
       const name = (e as { name?: string })?.name;
@@ -153,7 +174,16 @@ if (!pairing) {
     muted = !muted;
     mic.track.enabled = !muted;
     // Push the new state immediately so the desktop badge does not lag the poll.
-    signaling.send(statsMessage(muted ? 0 : level, document.visibilityState === "visible", muted));
+    signaling.send(
+      statsMessage(muted ? 0 : level, document.visibilityState === "visible", muted, batterySaver),
+    );
+    rerender();
+  }
+
+  function toggleLowBandwidth() {
+    if (!transport) return;
+    lowBandwidth = !lowBandwidth;
+    void transport.setLowBandwidth(lowBandwidth); // no mic re-acquire, no renegotiation
     rerender();
   }
 
@@ -200,7 +230,9 @@ if (!pairing) {
       paintMeter();
       tick += 1;
       if (tick % 10 === 0) {
-        signaling.send(statsMessage(level, document.visibilityState === "visible", muted));
+        signaling.send(
+          statsMessage(level, document.visibilityState === "visible", muted, batterySaver),
+        );
       }
     }, 100);
   }
@@ -210,8 +242,11 @@ if (!pairing) {
       clearInterval(meterTimer);
       meterTimer = null;
     }
+    deviceUnsub?.();
+    deviceUnsub = null;
     level = 0;
     muted = false;
+    lowBandwidth = false;
     mics = [];
     transport?.close();
     transport = null;
@@ -228,6 +263,7 @@ if (!pairing) {
       onMute: toggleMute,
       onToggle: (key) => void applyCapture({ [key]: !captureOpts[key] }),
       onPickMic: (deviceId) => void applyCapture({ deviceId }),
+      onLowBandwidth: toggleLowBandwidth,
     });
   }
 
@@ -248,6 +284,7 @@ interface Handlers {
   onMute(): void;
   onToggle(key: ToggleKey): void;
   onPickMic(deviceId: string): void;
+  onLowBandwidth(): void;
 }
 
 function renderShell(state: PhoneState, reason: string | null, handlers?: Handlers) {
@@ -315,7 +352,15 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
                      } ${dis}/> ${t.label}</label>`,
                  )
                  .join("")}
+               <label class="chk"><input type="checkbox" id="lowbw" ${
+                 lowBandwidth ? "checked" : ""
+               }/> Low bandwidth</label>
              </div>`
+          : ""
+      }
+      ${
+        showMeter && batterySaver
+          ? `<p class="detail">Battery saver is on — it can throttle the mic. Turn it off for the most stable stream.</p>`
           : ""
       }
       ${
@@ -344,6 +389,8 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
     for (const box of Array.from(document.querySelectorAll<HTMLInputElement>("input[data-tk]"))) {
       box.onchange = () => handlers.onToggle(box.dataset.tk as ToggleKey);
     }
+    const lowbw = document.getElementById("lowbw");
+    if (lowbw) lowbw.onchange = () => handlers.onLowBandwidth();
     const micSel = document.getElementById("micSel") as HTMLSelectElement | null;
     if (micSel) micSel.onchange = () => handlers.onPickMic(micSel.value);
   }

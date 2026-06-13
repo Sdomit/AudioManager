@@ -26,6 +26,17 @@ export interface MicDevice {
 }
 
 /**
+ * Subscribe to device-change events (headset/Bluetooth/route swap). Returns an
+ * unsubscribe fn. Framework-free so a Capacitor shell reuses it.
+ */
+export function onDeviceChange(handler: () => void): () => void {
+  const md = navigator.mediaDevices;
+  if (!md?.addEventListener) return () => {};
+  md.addEventListener("devicechange", handler);
+  return () => md.removeEventListener("devicechange", handler);
+}
+
+/**
  * List available microphones. Labels are only populated once mic permission has
  * been granted (browsers hide them before), so call this after `startMic`.
  */

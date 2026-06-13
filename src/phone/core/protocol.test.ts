@@ -51,6 +51,12 @@ describe("client message builders", () => {
     });
     expect(statsMessage(0, true, true).muted).toBe(true);
   });
+
+  it("statsMessage includes batterySaver only when set", () => {
+    expect(statsMessage(0, true).batterySaver).toBeUndefined();
+    expect(statsMessage(0, true, false, false).batterySaver).toBeUndefined();
+    expect(statsMessage(0, true, false, true).batterySaver).toBe(true);
+  });
 });
 
 describe("parseServerMessage", () => {

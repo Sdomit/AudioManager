@@ -214,6 +214,28 @@ mod tests {
     }
 
     #[test]
+    fn stats_carries_muted_and_battery_saver() {
+        let text = r#"{"v":1,"type":"stats","micLevel":0.4,"visible":true,"muted":true,"batterySaver":true}"#;
+        match parse_client_message(text).unwrap() {
+            ClientMessage::Stats {
+                muted,
+                battery_saver,
+                ..
+            } => {
+                assert_eq!(muted, Some(true));
+                assert_eq!(battery_saver, Some(true));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        // Both optional: a minimal stats frame still parses.
+        let bare = r#"{"v":1,"type":"stats","micLevel":0.0,"visible":false}"#;
+        assert!(matches!(
+            parse_client_message(bare),
+            Ok(ClientMessage::Stats { muted: None, battery_saver: None, .. })
+        ));
+    }
+
+    #[test]
     fn unknown_fields_are_ignored() {
         let text = r#"{"v":1,"type":"bye","reason":"user-stop","extra":42}"#;
         assert!(matches!(

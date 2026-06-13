@@ -316,13 +316,16 @@ async fn handle_socket(socket: WebSocket) {
                                     .await;
                                 }
                             }
-                            Ok(ClientMessage::Stats { muted, .. }) => {
+                            Ok(ClientMessage::Stats { muted, battery_saver, .. }) => {
                                 // Desktop derives its own meter from decoded audio;
-                                // the one stat we surface is the phone's mute state,
-                                // for a badge in the pairing sheet.
-                                if let Some(m) = muted {
-                                    if let Some(stats) = session::stats_handle(&session_id) {
+                                // the stats we surface are the phone's mute and
+                                // data-saver state, for badges in the pairing sheet.
+                                if let Some(stats) = session::stats_handle(&session_id) {
+                                    if let Some(m) = muted {
                                         stats.set_muted(m);
+                                    }
+                                    if let Some(b) = battery_saver {
+                                        stats.set_battery_saver(b);
                                     }
                                 }
                             }

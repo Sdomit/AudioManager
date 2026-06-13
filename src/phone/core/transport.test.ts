@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { enableOpusStereo } from "./transport";
+import { enableOpusStereo, PhoneTransport } from "./transport";
 
 const OFFER = [
   "v=0",
@@ -43,5 +43,72 @@ describe("enableOpusStereo", () => {
   it("leaves SDP without opus untouched", () => {
     const noOpus = ["a=rtpmap:0 PCMU/8000", ""].join("\r\n");
     expect(enableOpusStereo(noOpus)).toBe(noOpus);
+  });
+});
+
+// ── setLowBandwidth (sender bitrate cap) ──
+
+class FakeSender {
+  track = { kind: "audio" };
+  params: RTCRtpSendParameters = { encodings: [{}] } as RTCRtpSendParameters;
+  getParameters() {
+    return this.params;
+  }
+  setParameters(p: RTCRtpSendParameters) {
+    this.params = p;
+    return Promise.resolve();
+  }
+  replaceTrack() {
+    return Promise.resolve();
+  }
+}
+
+class FakePC {
+  sender = new FakeSender();
+  createOffer = vi.fn();
+  addTransceiver() {}
+  getSenders() {
+    return [this.sender];
+  }
+  setLocalDescription() {
+    return Promise.resolve();
+  }
+  close() {}
+}
+
+describe("PhoneTransport.setLowBandwidth", () => {
+  afterEach(() => {
+    delete (globalThis as { RTCPeerConnection?: unknown }).RTCPeerConnection;
+  });
+
+  function makeTransport() {
+    const pc = new FakePC();
+    // A real (non-arrow) function so `new RTCPeerConnection(...)` returns our pc.
+    (globalThis as { RTCPeerConnection?: unknown }).RTCPeerConnection = function () {
+      return pc;
+    } as unknown;
+    const t = new PhoneTransport({ kind: "audio" } as MediaStreamTrack, {
+      onLocalCandidate() {},
+      onConnected() {},
+      onFailed() {},
+    });
+    return { t, pc };
+  }
+
+  it("sets and clears the sender maxBitrate without renegotiating", async () => {
+    const { t, pc } = makeTransport();
+    await t.setLowBandwidth(true);
+    expect(pc.sender.params.encodings?.[0].maxBitrate).toBe(28_000);
+    await t.setLowBandwidth(false);
+    expect(pc.sender.params.encodings?.[0].maxBitrate).toBeUndefined();
+    expect(pc.createOffer).not.toHaveBeenCalled();
+  });
+
+  it("re-asserts the cap after replaceTrack", async () => {
+    const { t, pc } = makeTransport();
+    await t.setLowBandwidth(true);
+    pc.sender.params.encodings![0].maxBitrate = undefined; // simulate sender reset
+    await t.replaceTrack({ kind: "audio" } as MediaStreamTrack);
+    expect(pc.sender.params.encodings?.[0].maxBitrate).toBe(28_000);
   });
 });

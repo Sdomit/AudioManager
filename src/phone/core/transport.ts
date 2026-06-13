@@ -14,6 +14,7 @@ export interface TransportCallbacks {
 
 export class PhoneTransport {
   private readonly pc: RTCPeerConnection;
+  private lowBandwidth = false;
 
   constructor(track: MediaStreamTrack, cb: TransportCallbacks) {
     this.pc = new RTCPeerConnection({ iceServers: [] });
@@ -47,6 +48,32 @@ export class PhoneTransport {
   async replaceTrack(track: MediaStreamTrack): Promise<void> {
     const sender = this.pc.getSenders().find((s) => s.track?.kind === "audio");
     if (sender) await sender.replaceTrack(track);
+    await this.applyEncodings(); // re-assert the bitrate cap on the (same) sender
+  }
+
+  /**
+   * Cap the Opus send bitrate for slow WiFi (~28 kb/s, still fine for speech).
+   * Pure sender-side via setParameters — NO renegotiation. Off = WebRTC default.
+   */
+  async setLowBandwidth(on: boolean): Promise<void> {
+    this.lowBandwidth = on;
+    await this.applyEncodings();
+  }
+
+  private async applyEncodings(): Promise<void> {
+    const sender = this.pc.getSenders().find((s) => s.track?.kind === "audio");
+    if (!sender) return;
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.encodings[0].maxBitrate = this.lowBandwidth ? 28_000 : undefined;
+    try {
+      await sender.setParameters(params);
+    } catch {
+      // Some browsers reject setParameters before the first negotiation; the
+      // next replaceTrack/toggle re-applies it harmlessly.
+    }
   }
 
   async addCandidate(candidate: RTCIceCandidateInit): Promise<void> {

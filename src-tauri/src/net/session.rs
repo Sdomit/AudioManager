@@ -42,6 +42,8 @@ pub struct PhoneStats {
     plc: AtomicU64,
     /// Phone-reported mute state (from its 1 Hz stats), for a desktop badge.
     muted: AtomicBool,
+    /// Phone-reported OS data-saver state (#44 Phase 2); surfaced in Phase 3.
+    battery_saver: AtomicBool,
 }
 
 impl PhoneStats {
@@ -84,9 +86,14 @@ impl PhoneStats {
         self.muted.store(muted, Ordering::Relaxed);
     }
 
-    /// (packets, lost, peak, jitter_depth, plc, muted). Peak is the live decaying
-    /// meter value (record_peak owns the release), read without reset.
-    fn read(&self) -> (u64, u64, f32, u32, u64, bool) {
+    /// Record the phone's self-reported OS data-saver state.
+    pub fn set_battery_saver(&self, on: bool) {
+        self.battery_saver.store(on, Ordering::Relaxed);
+    }
+
+    /// (packets, lost, peak, jitter_depth, plc, muted, battery_saver). Peak is the
+    /// live decaying meter value (record_peak owns the release), read without reset.
+    fn read(&self) -> (u64, u64, f32, u32, u64, bool, bool) {
         (
             self.packets.load(Ordering::Relaxed),
             self.lost.load(Ordering::Relaxed),
@@ -94,6 +101,7 @@ impl PhoneStats {
             self.depth.load(Ordering::Relaxed),
             self.plc.load(Ordering::Relaxed),
             self.muted.load(Ordering::Relaxed),
+            self.battery_saver.load(Ordering::Relaxed),
         )
     }
 }
@@ -171,6 +179,8 @@ pub struct PhoneSessionStatus {
     pub codec: Option<String>,
     /// Phone has muted itself (from its self-reported stats).
     pub muted: bool,
+    /// Phone is in OS data-saver mode (self-reported).
+    pub battery_saver: bool,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
@@ -399,7 +409,7 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
             .map(|d| RECONNECT_GRACE.saturating_sub(d.elapsed()).as_secs()),
         _ => None,
     };
-    let (packets, lost, level, jitter_depth, plc, muted) = s.stats.read();
+    let (packets, lost, level, jitter_depth, plc, muted, battery_saver) = s.stats.read();
     PhoneSessionStatus {
         id: s.id.clone(),
         label: s.label.clone(),
@@ -419,6 +429,7 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
         // We only ever negotiate Opus; report it once media is actually flowing.
         codec: (packets > 0).then(|| "opus".to_string()),
         muted,
+        battery_saver,
     }
 }
 

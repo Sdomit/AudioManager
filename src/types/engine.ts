@@ -220,6 +220,8 @@ export interface PhoneSessionStatus {
   codec: string | null;
   /** Phone has muted itself (self-reported). */
   muted: boolean;
+  /** Phone is in OS data-saver mode (self-reported). */
+  batterySaver: boolean;
 }
 
 /**

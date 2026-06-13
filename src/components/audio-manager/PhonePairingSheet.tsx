@@ -368,6 +368,7 @@ function describe(s: PhoneSessionStatus): string {
           : `Paired${device} · waiting for audio`;
       const tags: string[] = [];
       if (s.codec) tags.push(s.codec);
+      if (s.batterySaver) tags.push("battery saver");
       if (s.reconnectCount > 0)
         tags.push(`${s.reconnectCount} reconnect${s.reconnectCount === 1 ? "" : "s"}`);
       return tags.length > 0 ? `${base} · ${tags.join(" · ")}` : base;
