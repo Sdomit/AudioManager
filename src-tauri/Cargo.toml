@@ -38,6 +38,13 @@ rust-embed = "8"
 local-ip-address = "0.6"
 futures-util = "0.3"
 
+# Phase 2 (#41/#42): receive the phone's WebRTC Opus track and decode it.
+# webrtc-rs is pure Rust on `ring` (no cmake/NASM/openssl on MSVC). audiopus
+# 0.3.0-rc.0 ships a prebuilt static libopus for MSVC; if it fails to link on
+# this toolchain the spike falls back to `opus` (builds libopus via cmake).
+webrtc = "0.17"
+audiopus = "=0.3.0-rc.0"
+
 # WASAPI loopback capture (system + per-process). Windows-only; pulls in the
 # `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).
 [target.'cfg(windows)'.dependencies]

@@ -44,16 +44,38 @@ best-trodden path (WHIP/WHEP servers).
 **Revisit if** webrtc-rs shows connection-setup bugs or unmaintainable latency in
 Phase 2/4 measurements.
 
-## D3 — Opus decode: `audiopus` 0.3.0-rc.0
+## D3 — Opus decode: `audiopus` 0.3.0-rc.0 (libopus), accepting a CMake build dep
 
-**Decision.** `audiopus` + `audiopus_sys` ship a prebuilt static libopus for Windows
-MSVC (no cmake), support PLC (`decode(None, …)`) and in-band FEC, and are proven in
-production (songbird/serenity). Decode happens in our jitter feeder task, not inside
-the WebRTC stack.
+**Decision.** Pin `audiopus = "=0.3.0-rc.0"` for reference-grade Opus decode with PLC
+(`decode(None, …)`) and in-band FEC, proven in production (songbird/serenity). Decode
+happens in our jitter feeder task, not inside the WebRTC stack.
 
-**Fallback.** `opus` 0.3.1 (builds libopus from source; requires cmake on the build
-machine). The **first commit of Phase 2 is a build spike** proving whichever crate links
-on this machine before any feature code lands.
+**Spike correction (2026-06-13).** The earlier assumption that audiopus ships a *prebuilt,
+no-cmake* static libopus for MSVC was **wrong**. `audiopus_sys` builds libopus from C
+source via the `cmake` crate. The spike confirmed `webrtc 0.17.1` + `audiopus 0.3.0-rc.0`
+compile and link, but **only inside an MSVC dev environment** — cl + cmake + ninja on
+PATH. A bare `cargo build` (or cmake-only on PATH) fails at the libopus build script.
+rustc finds its own linker, so the rest of the app is unaffected; this requirement is
+isolated to the libopus build.
+
+**Build-env requirement (accepted cost).**
+- Local: build from a configured shell — `. scripts/win-dev-shell.ps1` then `pnpm tauri
+  dev`/`cargo build`, or `scripts/win-dev-shell.ps1 cargo build`. The script discovers VS
+  via vswhere, imports vcvars64, and adds VS's bundled cmake + ninja to PATH.
+- CI: `.github/workflows/ci.yml` runs `ilammy/msvc-dev-cmd@v1` before the Rust build.
+
+**Alternatives evaluated and rejected (pure-Rust, would keep bare `cargo`):**
+- `moosicbox_opus 0.3.0` — compiles with no C toolchain, but pulls the full Symphonia
+  stack (mp3/flac/mkv/ogg demuxers we never use) and exposes a Symphonia *decoder-trait*
+  API built for container playback, not raw RTP frames; no clean packet-loss-concealment
+  path, which the latency design (D5, Phase 4) depends on.
+- `opus-wave 3.0.1` — pure Rust with deep-PLC, but **license is unspecified** on
+  crates.io — a distribution blocker.
+- `opus-decoder 0.1.1` — pure Rust, MIT/Apache, but v0.1.x (single-author, unproven) and
+  no PLC.
+
+**Revisit if** a pure-Rust decoder reaches reference parity with PLC + a clear license —
+the swap is localized to the jitter feeder's decode call.
 
 ## D4 — Tokio hosting: one dedicated lazy runtime
 
