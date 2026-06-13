@@ -5,6 +5,7 @@
 //! `lib.rs` calls the sync functions below; async work lives on `runtime()`.
 
 pub mod jitter;
+pub mod paired;
 pub mod server;
 pub mod session;
 pub mod signaling;
@@ -12,11 +13,11 @@ pub mod tls;
 pub mod webrtc_peer;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Ports tried in order; first free one wins.
 pub const PORT_RANGE: std::ops::Range<u16> = 47800..47810;
@@ -237,6 +238,51 @@ pub fn shutdown_server() {
 /// fragment so they never appear in HTTP request lines or server logs.
 pub fn pairing_url(ip: &IpAddr, port: u16, session_id: &str, token: &str) -> String {
     format!("https://{ip}:{port}/#s={session_id}&t={token}")
+}
+
+/// User-facing phone-pairing settings, persisted next to presets/recorder
+/// settings under `app_local_data_dir`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhoneSettings {
+    /// Opt-in (default false): bring the LAN phone server up at app launch so a
+    /// trusted phone can reconnect without the user opening the pairing sheet.
+    /// Default-false keeps the current MVP boot behavior (the server starts only
+    /// on demand from `phone_create_session`).
+    #[serde(default)]
+    pub autostart: bool,
+}
+
+impl Default for PhoneSettings {
+    fn default() -> Self {
+        Self { autostart: false }
+    }
+}
+
+impl PhoneSettings {
+    fn settings_file(app_local_data: &Path) -> PathBuf {
+        app_local_data.join("phone_settings.json")
+    }
+
+    /// Load settings, falling back to defaults on a missing/corrupt file (never
+    /// fails — the boot path must not be blocked by a bad settings file).
+    pub fn load_or_default(app_local_data: &Path) -> Self {
+        let path = Self::settings_file(app_local_data);
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<PhoneSettings>(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, app_local_data: &Path) -> Result<(), String> {
+        let path = Self::settings_file(app_local_data);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("create settings dir '{}': {e}", dir.display()))?;
+        }
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("serialize phone settings: {e}"))?;
+        std::fs::write(&path, json).map_err(|e| format!("write '{}': {e}", path.display()))
+    }
 }
 
 #[cfg(test)]

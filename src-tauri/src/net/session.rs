@@ -238,7 +238,7 @@ fn simple_uuid() -> String {
 /// byte, so a network attacker cannot time-probe the token a character at a time.
 /// Length is not secret (tokens are fixed 32-char uuids), so a length mismatch
 /// returns early — only the equal-length content comparison is constant-time.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

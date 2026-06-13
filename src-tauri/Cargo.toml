@@ -48,6 +48,9 @@ audiopus = "=0.3.0-rc.0"
 # both compiled in, rustls cannot auto-pick a provider. Depend on rustls
 # directly with `ring` so net/mod.rs can install it as the process default.
 rustls = { version = "0.23", features = ["ring"] }
+# pairing-v2 #1: hash the 122-bit pairing token (SHA-256, never stored plaintext)
+# for the persisted trusted-device store. Pure Rust, no cmake/build deps.
+sha2 = "0.10"
 
 # WASAPI loopback capture (system + per-process). Windows-only; pulls in the
 # `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).

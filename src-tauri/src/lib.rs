@@ -1322,6 +1322,25 @@ fn phone_remove_session(
     Ok(())
 }
 
+/// Whether boot-time autostart of the phone server is enabled (opt-in, default
+/// false). The UI ("Paired devices") reads this to render the toggle.
+#[tauri::command]
+fn phone_get_autostart(app: tauri::AppHandle) -> Result<bool, EngineError> {
+    let dir = app_local_dir(&app)?;
+    Ok(net::PhoneSettings::load_or_default(&dir).autostart)
+}
+
+/// Enable/disable bringing the phone server up at app launch so trusted phones
+/// can reconnect without opening the pairing sheet. Persisted; takes effect on
+/// next launch. Additive — does not touch the current session's server.
+#[tauri::command]
+fn phone_set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), EngineError> {
+    let dir = app_local_dir(&app)?;
+    let mut settings = net::PhoneSettings::load_or_default(&dir);
+    settings.autostart = enabled;
+    settings.save(&dir).map_err(|message| EngineError { message })
+}
+
 /// Set a phone session's latency mode ("fastest" | "balanced" | "stable"). The
 /// jitter feeder picks the new target depth live — no reconnect needed.
 #[tauri::command]
@@ -1345,6 +1364,29 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
+        .setup(|app| {
+            // pairing-v2 #1: load the persisted trusted-device store so a
+            // returning phone can auto-reconnect (Phase 2 consumes it).
+            // Panic-free by contract — any failure leaves an empty store and the
+            // app still launches with default QR pairing intact.
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                net::paired::init(dir.join(net::paired::STORE_FILE_NAME));
+                // Opt-in (default false): only when the user has enabled
+                // autostart AND we authoritatively loaded a non-empty trusted
+                // store do we bring the LAN server up at boot. Otherwise this is
+                // a no-op and boot is byte-for-byte the current MVP. The
+                // on-demand ensure_server (pairing sheet) is unchanged and
+                // idempotent, so the two coexist.
+                if net::PhoneSettings::load_or_default(&dir).autostart
+                    && net::paired::has_trusted_devices()
+                {
+                    if let Err(e) = net::ensure_server(&dir) {
+                        eprintln!("[phone] boot autostart failed: {e}");
+                    }
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_input_devices,
             list_output_devices,
@@ -1392,6 +1434,8 @@ pub fn run() {
             phone_reject_client,
             phone_remove_session,
             phone_set_latency_mode,
+            phone_get_autostart,
+            phone_set_autostart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
