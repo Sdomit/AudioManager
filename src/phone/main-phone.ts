@@ -208,7 +208,9 @@ if (!pairing) {
             clearSavedPairing();
             fail("missing-pairing");
           } else {
-            // Transient reasons recover via the machine's reconnect.
+            // Non-revoke bye (e.g. "disconnected") ends this session but keeps
+            // the saved creds — reopening the page auto-resumes from them (this
+            // is terminal, not a live machine reconnect).
             fail(msg.reason);
           }
           break;
