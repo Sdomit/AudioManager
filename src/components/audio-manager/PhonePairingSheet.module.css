@@ -302,12 +302,14 @@
 .latencyRow {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--am-space-2);
   margin-top: var(--am-space-2);
 }
 
 .latencyModes {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   padding: 2px;
   gap: 2px;
   border-radius: var(--am-radius-sm);
@@ -320,6 +322,7 @@
   border-radius: calc(var(--am-radius-sm) - 2px);
   font-size: var(--am-text-12);
   font-weight: 600;
+  white-space: nowrap;
   color: var(--am-text-secondary);
   background: transparent;
 }

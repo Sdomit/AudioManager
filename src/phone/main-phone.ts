@@ -89,11 +89,11 @@ function saveName(name: string) {
 const app = document.getElementById("app")!;
 const fromHash = pairingFromHash(location.hash);
 const pairing = fromHash ?? loadSavedPairing();
-// True only when we're relying on PERSISTED creds (no fresh QR this load). A
-// fresh-QR attempt must NOT clear creds saved for another desktop, and is
-// persisted only once that desktop accepts (see the "accepted" case) — so
-// scanning desktop B's QR can't wipe desktop A's saved trust if B rejects.
-const usingSavedCreds = !fromHash && pairing !== null;
+// Whether the creds we're using are persisted for THIS desktop — true if we
+// loaded them from storage, OR once this desktop accepts a fresh QR (set below).
+// A revocation of persisted creds clears them + drops to scan-QR; a fresh-QR
+// failure BEFORE acceptance must NOT wipe creds saved for another desktop.
+let credsArePersisted = !fromHash && pairing !== null;
 // In-memory device name used for the next hello; edited via the name input.
 let deviceName = loadName() ?? defaultDeviceName();
 
@@ -148,10 +148,14 @@ if (!pairing) {
           // rejected. Reuse on the next reload to reconnect without a QR scan.
           savePairing(pairing);
           saveName(deviceName);
+          // These creds are now trusted by this desktop, so a later revocation
+          // (kick / session-removed) should clear them and drop to scan-QR even
+          // though this load came from a fresh QR.
+          credsArePersisted = true;
           machine.dispatch({ kind: "accepted" });
           break;
         case "rejected":
-          if (usingSavedCreds) {
+          if (credsArePersisted) {
             // Saved creds are dead — clear them and show the scan-QR screen
             // rather than a terminal "session ended" needing a manual reload.
             clearSavedPairing();
@@ -173,7 +177,7 @@ if (!pairing) {
           break;
         case "error":
           if (
-            usingSavedCreds &&
+            credsArePersisted &&
             (msg.code === "unknown-session" || msg.code === "bad-token")
           ) {
             // Saved session gone/invalid — clear creds and fall back to the
@@ -186,7 +190,7 @@ if (!pairing) {
           if (isFatalErrorCode(msg.code)) fail(`${msg.code}: ${msg.message}`);
           break;
         case "bye":
-          if (usingSavedCreds && msg.reason === "session-removed") {
+          if (credsArePersisted && msg.reason === "session-removed") {
             // The desktop kicked this trusted device — clear creds, show scan-QR.
             clearSavedPairing();
             fail("missing-pairing");
