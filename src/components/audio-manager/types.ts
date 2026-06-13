@@ -50,6 +50,10 @@ export interface Bus {
   error: string | null;
   /** Output callback buffer size in frames. null = driver default (#35). */
   bufferSizeFrames: number | null;
+  /** Named latency mode for bufferSizeFrames, or null for a custom value (#35).
+   *  Optional: absent in mock/pre-load buses; the adapter always sets it from
+   *  live status. */
+  latencyMode?: string | null;
   /** Dropout sample counts since the last poll (#35/#36 telemetry). */
   underruns: number;
   overruns: number;
@@ -166,6 +170,9 @@ export interface AudioManagerActions {
    * Triggers an engine rebuild, so it is not throttled.
    */
   setBusBufferSize: (id: BusId, frames: number | null) => void;
+  /** Set the bus latency mode (#35) — a preset over the raw buffer size.
+   *  "stable" | "low" | "ultra-low". Triggers an engine rebuild. */
+  setBusLatencyMode: (id: BusId, mode: string) => void;
   /** Update the per-bus final limiter (#32). Live, no restart. */
   setBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
   setBusEq: (id: BusId, eq: EqConfig) => void;

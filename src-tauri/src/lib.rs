@@ -938,6 +938,34 @@ fn set_bus_buffer_size(
     Ok(bus.read_status())
 }
 
+/// Set a bus's output latency mode (#35) — a named preset over the raw buffer
+/// size: Stable = driver default, Low = 256 frames, UltraLow = 128 frames. Sets
+/// `buffer_size_frames` accordingly and rebuilds the bus if running.
+#[tauri::command]
+fn set_bus_latency_mode(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    mode: String,
+) -> Result<BusStatus, EngineError> {
+    let parsed = audio::bus::LatencyMode::parse(&mode).ok_or_else(|| EngineError {
+        message: format!("unknown latency mode: {mode}"),
+    })?;
+    let mut inner = state.inner.lock().unwrap();
+    {
+        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
+            message: format!("Unknown bus: {bus_id:?}"),
+        })?;
+        bus.config.buffer_size_frames = parsed.frames();
+    }
+    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+        let _ = store_last_error(&mut inner, err.clone());
+        let bus = inner.buses.get(&bus_id).expect("bus exists");
+        return Ok(bus.read_status());
+    }
+    let bus = inner.buses.get(&bus_id).expect("bus exists");
+    Ok(bus.read_status())
+}
+
 /// Update a running engine's DSP parameters for one input, live. Stores the
 /// clamped config in the graph (so rebuild picks it up later) and publishes to
 /// the engine's seqlock if the engine is running — the audio callback reloads
@@ -1381,6 +1409,7 @@ pub fn run() {
             set_bus_enabled,
             rename_bus,
             set_bus_buffer_size,
+            set_bus_latency_mode,
             update_input_dsp,
             update_bus_dsp,
             start_recording,

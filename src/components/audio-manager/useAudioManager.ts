@@ -857,6 +857,21 @@ export function useAudioManager(): UseAudioManager {
     [getBus, refresh],
   );
 
+  const setBusLatencyMode = useCallback(
+    (id: BusId, mode: string) => {
+      // Rebuilds the engine (sets buffer_size_frames behind the scenes), so
+      // refresh to pick up the resulting running/error + derived mode state.
+      ipc
+        .setBusLatencyMode(id, mode)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("setBusLatencyMode failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
   const setBusLimiter = useCallback(
     (id: BusId, limiter: LimiterConfig) => {
       dispatch({ type: "set_bus_limiter", id, limiter });
@@ -1351,6 +1366,7 @@ export function useAudioManager(): UseAudioManager {
     renameBus,
     setBusRoleOverride,
     setBusBufferSize,
+    setBusLatencyMode,
     setBusLimiter,
     setBusEq,
     startRecording,

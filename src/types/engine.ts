@@ -216,6 +216,9 @@ export interface BusStatus {
   buffer_size_frames?: number | null;
   /** Streaming loudness meters (#38). Absent on pre-#38 payloads. */
   loudness?: LoudnessSnapshot;
+  /** Named latency mode buffer_size_frames maps to, or null for a custom
+   *  frame count that matches no preset (#35). "stable" | "low" | "ultra-low". */
+  latency_mode?: string | null;
 }
 
 export interface SystemStatus {
