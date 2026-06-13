@@ -4,6 +4,7 @@
 //! Tauri's runtime — the whole module is testable headless. The IPC layer in
 //! `lib.rs` calls the sync functions below; async work lives on `runtime()`.
 
+pub mod jitter;
 pub mod server;
 pub mod session;
 pub mod signaling;

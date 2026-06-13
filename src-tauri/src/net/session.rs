@@ -15,13 +15,14 @@
 //! Tauri state. Tokens are uuid-v4 (122 bits); they are never logged.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::jitter::LatencyMode;
 use super::signaling::ServerMessage;
 
 /// Live receive counters for one phone session, written by the WebRTC reader
@@ -35,6 +36,10 @@ pub struct PhoneStats {
     /// Most recent decoded block peak as f32 bits; reset to 0 on snapshot read
     /// so the sheet shows a "since last poll" meter rather than an all-time max.
     peak_bits: AtomicU32,
+    /// Current jitter-buffer depth in frames (Phase 4), updated by the feeder.
+    depth: AtomicU32,
+    /// Cumulative concealed (PLC) frames — a dropout indicator.
+    plc: AtomicU64,
 }
 
 impl PhoneStats {
@@ -63,13 +68,20 @@ impl PhoneStats {
         }
     }
 
-    /// (packets, bytes, lost, peak). Reading the peak resets it to 0.
-    fn read(&self) -> (u64, u64, u64, f32) {
+    /// Publish the jitter buffer's live depth and cumulative PLC count.
+    pub fn set_jitter(&self, depth: u32, plc: u64) {
+        self.depth.store(depth, Ordering::Relaxed);
+        self.plc.store(plc, Ordering::Relaxed);
+    }
+
+    /// (packets, lost, peak, jitter_depth, plc). Reading the peak resets it to 0.
+    fn read(&self) -> (u64, u64, f32, u32, u64) {
         (
             self.packets.load(Ordering::Relaxed),
-            self.bytes.load(Ordering::Relaxed),
             self.lost.load(Ordering::Relaxed),
             f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed)),
+            self.depth.load(Ordering::Relaxed),
+            self.plc.load(Ordering::Relaxed),
         )
     }
 }
@@ -112,6 +124,9 @@ pub struct PhoneSession {
     /// Receive counters, shared with the WebRTC reader task (Phase 2). Survives
     /// reconnects so the meter is continuous across a dropped socket.
     pub stats: Arc<PhoneStats>,
+    /// Latency mode (Phase 4) as `LatencyMode::as_u8`; shared with the jitter
+    /// feeder so the user can retune a live stream. Defaults to Balanced.
+    pub latency: Arc<AtomicU8>,
 }
 
 /// Snapshot for IPC / the pairing sheet. Token intentionally absent.
@@ -130,6 +145,12 @@ pub struct PhoneSessionStatus {
     pub lost: u64,
     /// Decoded peak level (0..1) since the last poll — drives the "we hear you" meter.
     pub level: f32,
+    /// Active latency mode (Phase 4): "fastest" | "balanced" | "stable".
+    pub latency_mode: String,
+    /// Current jitter-buffer depth in frames.
+    pub jitter_depth: u32,
+    /// Cumulative concealed (PLC) frames — rises when packets are lost.
+    pub plc: u64,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
@@ -160,6 +181,7 @@ pub fn create_session(label: Option<String>) -> (String, String) {
         tx: None,
         conn_epoch: 0,
         stats: Arc::new(PhoneStats::default()),
+        latency: Arc::new(AtomicU8::new(LatencyMode::Balanced.as_u8())),
     };
     registry().lock().unwrap().insert(id.clone(), session);
     (id, token)
@@ -340,7 +362,7 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
             .map(|d| RECONNECT_GRACE.saturating_sub(d.elapsed()).as_secs()),
         _ => None,
     };
-    let (packets, _bytes, lost, level) = s.stats.read();
+    let (packets, lost, level, jitter_depth, plc) = s.stats.read();
     PhoneSessionStatus {
         id: s.id.clone(),
         label: s.label.clone(),
@@ -351,6 +373,11 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
         packets,
         lost,
         level,
+        latency_mode: LatencyMode::from_u8(s.latency.load(Ordering::Relaxed))
+            .as_str()
+            .to_string(),
+        jitter_depth,
+        plc,
     }
 }
 
@@ -362,6 +389,27 @@ pub fn stats_handle(session_id: &str) -> Option<Arc<PhoneStats>> {
         .unwrap()
         .get(session_id)
         .map(|s| Arc::clone(&s.stats))
+}
+
+/// Clone the latency-mode handle for a session (shared with the jitter feeder).
+pub fn latency_handle(session_id: &str) -> Option<Arc<AtomicU8>> {
+    registry()
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .map(|s| Arc::clone(&s.latency))
+}
+
+/// Set the latency mode for a live session. Returns false if unknown.
+pub fn set_latency(session_id: &str, mode: LatencyMode) -> bool {
+    let reg = registry().lock().unwrap();
+    match reg.get(session_id) {
+        Some(s) => {
+            s.latency.store(mode.as_u8(), Ordering::Relaxed);
+            true
+        }
+        None => false,
+    }
 }
 
 /// Advance time-driven transitions. Called opportunistically from every

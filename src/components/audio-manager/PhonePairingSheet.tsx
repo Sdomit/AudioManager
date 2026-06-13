@@ -179,12 +179,15 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
         <div className={styles.sessionLabel}>{session.label}</div>
         <div className={styles.sessionMeta}>{describe(session)}</div>
         {session.state === "accepted" && (
-          <div className={styles.levelMeter} aria-hidden>
-            <div
-              className={styles.levelFill}
-              style={{ width: `${Math.round(Math.min(1, session.level) * 100)}%` }}
-            />
-          </div>
+          <>
+            <div className={styles.levelMeter} aria-hidden>
+              <div
+                className={styles.levelFill}
+                style={{ width: `${Math.round(Math.min(1, session.level) * 100)}%` }}
+              />
+            </div>
+            <LatencyControl session={session} />
+          </>
         )}
       </div>
       <div className={styles.sessionActions}>
@@ -214,6 +217,40 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+const LATENCY_MODES: ipc.PhoneLatencyMode[] = ["fastest", "balanced", "stable"];
+const LATENCY_LABELS: Record<ipc.PhoneLatencyMode, string> = {
+  fastest: "Fastest",
+  balanced: "Balanced",
+  stable: "Stable",
+};
+
+/** Latency mode selector + a packet-loss readout for a live phone. */
+function LatencyControl({ session }: { session: PhoneSessionStatus }) {
+  return (
+    <div className={styles.latencyRow}>
+      <div className={styles.latencyModes} role="group" aria-label="Latency mode">
+        {LATENCY_MODES.map((mode) => (
+          <button
+            key={mode}
+            className={`${styles.latencyBtn} ${
+              session.latencyMode === mode ? styles.latencyBtnActive : ""
+            }`}
+            aria-pressed={session.latencyMode === mode}
+            onClick={() => void ipc.phoneSetLatencyMode(session.id, mode)}
+          >
+            {LATENCY_LABELS[mode]}
+          </button>
+        ))}
+      </div>
+      {session.plc > 0 && (
+        <span className={styles.latencyStat} title="Concealed (lost) audio frames">
+          {session.plc} drops
+        </span>
+      )}
     </div>
   );
 }

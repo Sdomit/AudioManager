@@ -206,6 +206,12 @@ export interface PhoneSessionStatus {
   lost: number;
   /** Decoded peak level 0..1 since the last poll — the "we hear you" meter. */
   level: number;
+  /** Active latency mode (Phase 4). */
+  latencyMode: "fastest" | "balanced" | "stable";
+  /** Current jitter-buffer depth in frames. */
+  jitterDepth: number;
+  /** Cumulative concealed (PLC) frames — rises on packet loss. */
+  plc: number;
 }
 
 /**

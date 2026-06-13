@@ -234,3 +234,11 @@ export const phoneRejectClient = (sessionId: string): Promise<void> =>
 
 export const phoneRemoveSession = (sessionId: string): Promise<void> =>
   invoke<void>("phone_remove_session", { sessionId });
+
+export type PhoneLatencyMode = "fastest" | "balanced" | "stable";
+
+export const phoneSetLatencyMode = (
+  sessionId: string,
+  mode: PhoneLatencyMode,
+): Promise<void> =>
+  invoke<void>("phone_set_latency_mode", { sessionId, mode });

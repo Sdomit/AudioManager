@@ -1322,6 +1322,22 @@ fn phone_remove_session(
     Ok(())
 }
 
+/// Set a phone session's latency mode ("fastest" | "balanced" | "stable"). The
+/// jitter feeder picks the new target depth live — no reconnect needed.
+#[tauri::command]
+fn phone_set_latency_mode(session_id: String, mode: String) -> Result<(), EngineError> {
+    let parsed = net::jitter::LatencyMode::from_str(&mode).ok_or_else(|| EngineError {
+        message: format!("unknown latency mode: {mode}"),
+    })?;
+    if net::session::set_latency(&session_id, parsed) {
+        Ok(())
+    } else {
+        Err(EngineError {
+            message: "unknown session".to_string(),
+        })
+    }
+}
+
 // ── Tauri entry point ─────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1375,6 +1391,7 @@ pub fn run() {
             phone_accept_client,
             phone_reject_client,
             phone_remove_session,
+            phone_set_latency_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

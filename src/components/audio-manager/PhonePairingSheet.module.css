@@ -264,3 +264,43 @@
   background: linear-gradient(90deg, var(--am-success), #84cc16 70%, var(--am-warning));
   transition: width 120ms linear;
 }
+
+/* ── Latency mode control (Phase 4) ─────────────────────────────── */
+.latencyRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  margin-top: var(--am-space-2);
+}
+
+.latencyModes {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--am-radius-sm);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+}
+
+.latencyBtn {
+  padding: 3px 8px;
+  border-radius: calc(var(--am-radius-sm) - 2px);
+  font-size: var(--am-text-12);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  background: transparent;
+}
+
+.latencyBtn:hover {
+  color: var(--am-text-primary);
+}
+
+.latencyBtnActive {
+  color: var(--am-text-primary);
+  background: var(--am-surface-1);
+}
+
+.latencyStat {
+  font-size: var(--am-text-12);
+  color: var(--am-warning);
+}

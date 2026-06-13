@@ -206,11 +206,15 @@ async fn handle_socket(socket: WebSocket) {
                                 // Build (or rebuild, on renegotiation) the receiver
                                 // and answer. Stats flow into the session so the
                                 // pairing sheet can show a live level meter.
-                                match session::stats_handle(&session_id) {
-                                    Some(stats) => match webrtc_peer::answer_offer(
+                                match (
+                                    session::stats_handle(&session_id),
+                                    session::latency_handle(&session_id),
+                                ) {
+                                    (Some(stats), Some(latency)) => match webrtc_peer::answer_offer(
                                         session_id.clone(),
                                         sdp,
                                         stats,
+                                        latency,
                                     )
                                     .await
                                     {
@@ -232,7 +236,7 @@ async fn handle_socket(socket: WebSocket) {
                                             .await;
                                         }
                                     },
-                                    None => break, // session vanished mid-handshake
+                                    _ => break, // session vanished mid-handshake
                                 }
                             }
                             Ok(ClientMessage::Candidate {
