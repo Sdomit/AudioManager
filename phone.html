@@ -42,14 +42,31 @@
       }
       .btn:active { opacity: 0.85; }
       .btn.ghost { background: #1b1e24; color: #b6bcc4; font-weight: 500; }
+      .btn.danger { background: #b91c1c; color: #fff; }
       .meter {
         width: 220px; height: 12px; border-radius: 6px;
         background: #1b1e24; overflow: hidden;
       }
+      .meter.muted { opacity: 0.4; }
       .meterFill {
         height: 100%; width: 0%;
         background: linear-gradient(90deg, #22c55e, #84cc16 70%, #f59e0b);
         transition: width 80ms linear;
+      }
+      .controls {
+        display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 16px;
+        max-width: 280px;
+      }
+      .chk {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 13px; color: #b6bcc4; cursor: pointer;
+      }
+      .chk input { width: 16px; height: 16px; accent-color: #2563eb; }
+      .sel {
+        appearance: none; width: 220px; max-width: 100%;
+        padding: 10px 12px; border-radius: 10px;
+        background: #1b1e24; color: #e8eaed; border: 1px solid #2a2e36;
+        font-size: 14px; touch-action: manipulation;
       }
       .dot { width: 14px; height: 14px; border-radius: 50%; }
       .dot.idle { background: #7c828b; animation: pulse 1.4s ease-in-out infinite; }

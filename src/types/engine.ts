@@ -218,6 +218,8 @@ export interface PhoneSessionStatus {
   reconnectCount: number;
   /** Active audio codec once media flows, else null. */
   codec: string | null;
+  /** Phone has muted itself (self-reported). */
+  muted: boolean;
 }
 
 /**

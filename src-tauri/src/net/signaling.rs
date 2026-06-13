@@ -41,6 +41,8 @@ pub enum ClientMessage {
         mic_level: f32,
         visible: bool,
         #[serde(default)]
+        muted: Option<bool>,
+        #[serde(default)]
         battery_saver: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]

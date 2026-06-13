@@ -15,7 +15,7 @@
 //! Tauri state. Tokens are uuid-v4 (122 bits); they are never logged.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,8 @@ pub struct PhoneStats {
     depth: AtomicU32,
     /// Cumulative concealed (PLC) frames — a dropout indicator.
     plc: AtomicU64,
+    /// Phone-reported mute state (from its 1 Hz stats), for a desktop badge.
+    muted: AtomicBool,
 }
 
 impl PhoneStats {
@@ -74,14 +76,20 @@ impl PhoneStats {
         self.plc.store(plc, Ordering::Relaxed);
     }
 
-    /// (packets, lost, peak, jitter_depth, plc). Reading the peak resets it to 0.
-    fn read(&self) -> (u64, u64, f32, u32, u64) {
+    /// Record the phone's self-reported mute state.
+    pub fn set_muted(&self, muted: bool) {
+        self.muted.store(muted, Ordering::Relaxed);
+    }
+
+    /// (packets, lost, peak, jitter_depth, plc, muted). Reading the peak resets it.
+    fn read(&self) -> (u64, u64, f32, u32, u64, bool) {
         (
             self.packets.load(Ordering::Relaxed),
             self.lost.load(Ordering::Relaxed),
             f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed)),
             self.depth.load(Ordering::Relaxed),
             self.plc.load(Ordering::Relaxed),
+            self.muted.load(Ordering::Relaxed),
         )
     }
 }
@@ -157,6 +165,8 @@ pub struct PhoneSessionStatus {
     pub reconnect_count: u32,
     /// Active audio codec once media is flowing, else null.
     pub codec: Option<String>,
+    /// Phone has muted itself (from its self-reported stats).
+    pub muted: bool,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
@@ -385,7 +395,7 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
             .map(|d| RECONNECT_GRACE.saturating_sub(d.elapsed()).as_secs()),
         _ => None,
     };
-    let (packets, lost, level, jitter_depth, plc) = s.stats.read();
+    let (packets, lost, level, jitter_depth, plc, muted) = s.stats.read();
     PhoneSessionStatus {
         id: s.id.clone(),
         label: s.label.clone(),
@@ -404,6 +414,7 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
         reconnect_count: s.reconnect_count,
         // We only ever negotiate Opus; report it once media is actually flowing.
         codec: (packets > 0).then(|| "opus".to_string()),
+        muted,
     }
 }
 

@@ -349,8 +349,11 @@ function describe(s: PhoneSessionStatus): string {
     case "pending-accept":
       return `Wants to join${device}`;
     case "accepted": {
-      const base =
-        s.packets > 0 ? `Paired${device} · hearing audio` : `Paired${device} · waiting for audio`;
+      const base = s.muted
+        ? `Paired${device} · muted`
+        : s.packets > 0
+          ? `Paired${device} · hearing audio`
+          : `Paired${device} · waiting for audio`;
       const tags: string[] = [];
       if (s.codec) tags.push(s.codec);
       if (s.reconnectCount > 0)

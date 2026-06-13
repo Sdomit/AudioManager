@@ -41,13 +41,15 @@ describe("client message builders", () => {
       sdpMLineIndex: null,
     });
   });
-  it("statsMessage carries level and visibility", () => {
+  it("statsMessage carries level, visibility, and mute state", () => {
     expect(statsMessage(0.5, true)).toEqual({
       v: PROTOCOL_VERSION,
       type: "stats",
       micLevel: 0.5,
       visible: true,
+      muted: false,
     });
+    expect(statsMessage(0, true, true).muted).toBe(true);
   });
 });
 

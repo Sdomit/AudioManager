@@ -56,6 +56,7 @@ export interface ClientStats {
   type: "stats";
   micLevel: number;
   visible: boolean;
+  muted?: boolean;
   batterySaver?: boolean;
 }
 
@@ -106,8 +107,8 @@ export function candidateMessage(c: RTCIceCandidateInit): ClientCandidate {
   };
 }
 
-export function statsMessage(micLevel: number, visible: boolean): ClientStats {
-  return { v: PROTOCOL_VERSION, type: "stats", micLevel, visible };
+export function statsMessage(micLevel: number, visible: boolean, muted = false): ClientStats {
+  return { v: PROTOCOL_VERSION, type: "stats", micLevel, visible, muted };
 }
 
 export function byeMessage(reason: string): ClientBye {

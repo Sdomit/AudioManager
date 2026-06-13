@@ -40,6 +40,15 @@ export class PhoneTransport {
     await this.pc.setRemoteDescription({ type: "answer", sdp });
   }
 
+  /**
+   * Swap the outgoing mic track in place (mic picker / processing-toggle
+   * re-acquire) without renegotiating — replaceTrack keeps the same sender.
+   */
+  async replaceTrack(track: MediaStreamTrack): Promise<void> {
+    const sender = this.pc.getSenders().find((s) => s.track?.kind === "audio");
+    if (sender) await sender.replaceTrack(track);
+  }
+
   async addCandidate(candidate: RTCIceCandidateInit): Promise<void> {
     try {
       await this.pc.addIceCandidate(candidate);

@@ -316,10 +316,15 @@ async fn handle_socket(socket: WebSocket) {
                                     .await;
                                 }
                             }
-                            Ok(ClientMessage::Stats { .. }) => {
-                                // Phone-reported mic level / visibility — desktop
-                                // derives its own meter from decoded audio, so
-                                // these are advisory only for now.
+                            Ok(ClientMessage::Stats { muted, .. }) => {
+                                // Desktop derives its own meter from decoded audio;
+                                // the one stat we surface is the phone's mute state,
+                                // for a badge in the pairing sheet.
+                                if let Some(m) = muted {
+                                    if let Some(stats) = session::stats_handle(&session_id) {
+                                        stats.set_muted(m);
+                                    }
+                                }
                             }
                             Ok(ClientMessage::Bye { .. }) => break,
                             Err(ProtocolError::Version { got }) => {

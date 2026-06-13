@@ -10,6 +10,8 @@ export interface CaptureOptions {
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
+  /** Specific input device; omitted = the browser's default mic. */
+  deviceId?: string;
 }
 
 export const DEFAULT_CAPTURE: CaptureOptions = {
@@ -18,8 +20,27 @@ export const DEFAULT_CAPTURE: CaptureOptions = {
   autoGainControl: false,
 };
 
+export interface MicDevice {
+  deviceId: string;
+  label: string;
+}
+
+/**
+ * List available microphones. Labels are only populated once mic permission has
+ * been granted (browsers hide them before), so call this after `startMic`.
+ */
+export async function listMics(): Promise<MicDevice[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices
+    .filter((d) => d.kind === "audioinput" && d.deviceId)
+    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+}
+
 export interface MicCapture {
   readonly track: MediaStreamTrack;
+  /** Device id actually in use (from the track settings), or "" if unknown. */
+  readonly deviceId: string;
   /** Instantaneous input level in 0..1, from a time-domain analyser. */
   level(): number;
   stop(): void;
@@ -46,6 +67,7 @@ export async function startMic(opts: CaptureOptions = DEFAULT_CAPTURE): Promise<
       // Prefer stereo where the device offers it (two-channel capture); mono
       // phones simply return one channel. `ideal` so the request never fails.
       channelCount: { ideal: 2 },
+      ...(opts.deviceId ? { deviceId: { exact: opts.deviceId } } : {}),
     },
     video: false,
   });
@@ -63,6 +85,7 @@ export async function startMic(opts: CaptureOptions = DEFAULT_CAPTURE): Promise<
 
   return {
     track,
+    deviceId: track.getSettings().deviceId ?? "",
     level() {
       analyser.getByteTimeDomainData(buf);
       let peak = 0;

@@ -18,7 +18,16 @@ import {
   statsMessage,
 } from "./core/protocol";
 import { SignalingClient } from "./core/signaling";
-import { DEFAULT_CAPTURE, keepAwake, startMic, type MicCapture, type WakeLock } from "./core/capture";
+import {
+  DEFAULT_CAPTURE,
+  keepAwake,
+  listMics,
+  startMic,
+  type CaptureOptions,
+  type MicCapture,
+  type MicDevice,
+  type WakeLock,
+} from "./core/capture";
 import { PhoneTransport } from "./core/transport";
 
 const app = document.getElementById("app")!;
@@ -31,6 +40,10 @@ let micError: string | null = null;
 let starting = false;
 let level = 0;
 let meterTimer: ReturnType<typeof setInterval> | null = null;
+let muted = false;
+let mics: MicDevice[] = [];
+let captureOpts: CaptureOptions = { ...DEFAULT_CAPTURE };
+let switching = false;
 
 if (!pairing) {
   renderShell("ended", "missing-pairing");
@@ -93,7 +106,8 @@ if (!pairing) {
     micError = null;
     rerender();
     try {
-      mic = await startMic(DEFAULT_CAPTURE);
+      mic = await startMic(captureOpts);
+      mic.track.enabled = !muted;
       wake = await keepAwake();
       transport = new PhoneTransport(mic.track, {
         onLocalCandidate(c) {
@@ -109,6 +123,11 @@ if (!pairing) {
       const sdp = await transport.createOffer();
       signaling.send(offerMessage(sdp));
       startMeter();
+      // Labels are only available post-permission, so enumerate now.
+      void listMics().then((list) => {
+        mics = list;
+        rerender();
+      });
     } catch (e: unknown) {
       const name = (e as { name?: string })?.name;
       micError =
@@ -129,14 +148,51 @@ if (!pairing) {
     signaling.close();
   }
 
+  function toggleMute() {
+    if (!mic) return;
+    muted = !muted;
+    mic.track.enabled = !muted;
+    // Push the new state immediately so the desktop badge does not lag the poll.
+    signaling.send(statsMessage(muted ? 0 : level, document.visibilityState === "visible", muted));
+    rerender();
+  }
+
+  // Re-acquire the mic with merged options (processing toggle / mic pick) and
+  // hot-swap it into the live sender without renegotiating.
+  async function applyCapture(partial: Partial<CaptureOptions>) {
+    if (switching || !transport) return;
+    switching = true;
+    micError = null;
+    rerender();
+    const previous = captureOpts;
+    captureOpts = { ...captureOpts, ...partial };
+    try {
+      const next = await startMic(captureOpts);
+      next.track.enabled = !muted;
+      await transport.replaceTrack(next.track);
+      mic?.stop();
+      mic = next;
+      void listMics().then((list) => {
+        mics = list;
+        rerender();
+      });
+    } catch (e: unknown) {
+      captureOpts = previous; // revert on failure
+      micError = `Could not switch microphone: ${(e as { message?: string })?.message ?? String(e)}`;
+    } finally {
+      switching = false;
+      rerender();
+    }
+  }
+
   function startMeter() {
     if (meterTimer !== null) return;
     let tick = 0;
     meterTimer = setInterval(() => {
-      level = mic?.level() ?? 0;
+      level = muted ? 0 : (mic?.level() ?? 0);
       tick += 1;
       if (tick % 10 === 0) {
-        signaling.send(statsMessage(level, document.visibilityState === "visible"));
+        signaling.send(statsMessage(level, document.visibilityState === "visible", muted));
       }
       rerender();
     }, 100);
@@ -148,6 +204,8 @@ if (!pairing) {
       meterTimer = null;
     }
     level = 0;
+    muted = false;
+    mics = [];
     transport?.close();
     transport = null;
     mic?.stop();
@@ -157,7 +215,13 @@ if (!pairing) {
   }
 
   function rerender() {
-    renderShell(machine.state, machine.reason, { onStart: beginCapture, onStop: stopStreaming });
+    renderShell(machine.state, machine.reason, {
+      onStart: beginCapture,
+      onStop: stopStreaming,
+      onMute: toggleMute,
+      onToggle: (key) => void applyCapture({ [key]: !captureOpts[key] }),
+      onPickMic: (deviceId) => void applyCapture({ deviceId }),
+    });
   }
 
   machine.subscribe(() => rerender());
@@ -169,9 +233,14 @@ if (!pairing) {
   });
 }
 
+type ToggleKey = "echoCancellation" | "noiseSuppression" | "autoGainControl";
+
 interface Handlers {
   onStart(): void;
   onStop(): void;
+  onMute(): void;
+  onToggle(key: ToggleKey): void;
+  onPickMic(deviceId: string): void;
 }
 
 function renderShell(state: PhoneState, reason: string | null, handlers?: Handlers) {
@@ -208,14 +277,52 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
   const showMeter = (state === "negotiating" || state === "live") && !!mic;
   const showKeepAwake = state === "live" || (state === "negotiating" && !!mic);
 
+  const toggles: { key: ToggleKey; label: string }[] = [
+    { key: "noiseSuppression", label: "Noise suppression" },
+    { key: "echoCancellation", label: "Echo cancel" },
+    { key: "autoGainControl", label: "Auto gain" },
+  ];
+  const dis = switching ? "disabled" : "";
+
   app.innerHTML = `
     <div class="card">
-      <div class="dot ${tone}"></div>
+      <div class="dot ${muted && showMeter ? "warn" : tone}"></div>
       <h1>AudioManager</h1>
-      <p class="state">${starting ? "Requesting microphone…" : stateLabel[state]}</p>
+      <p class="state">${starting ? "Requesting microphone…" : muted && showMeter ? "Muted" : stateLabel[state]}</p>
       ${micError ? `<p class="detail err">${micError}</p>` : ""}
       ${showStart ? `<button id="startBtn" class="btn">Start microphone</button>` : ""}
-      ${showMeter ? `<div class="meter"><div class="meterFill" style="width:${Math.round(level * 100)}%"></div></div>` : ""}
+      ${showMeter ? `<div class="meter ${muted ? "muted" : ""}"><div class="meterFill" style="width:${Math.round(level * 100)}%"></div></div>` : ""}
+      ${
+        showMeter
+          ? `<button id="muteBtn" class="btn ${muted ? "danger" : "ghost"}">${muted ? "Unmute" : "Mute"}</button>`
+          : ""
+      }
+      ${
+        showMeter
+          ? `<div class="controls">
+               ${toggles
+                 .map(
+                   (t) =>
+                     `<label class="chk"><input type="checkbox" data-tk="${t.key}" ${
+                       captureOpts[t.key] ? "checked" : ""
+                     } ${dis}/> ${t.label}</label>`,
+                 )
+                 .join("")}
+             </div>`
+          : ""
+      }
+      ${
+        showMeter && mics.length > 1
+          ? `<select id="micSel" class="sel" ${dis}>${mics
+              .map(
+                (m) =>
+                  `<option value="${escapeAttr(m.deviceId)}" ${
+                    mic && mic.deviceId === m.deviceId ? "selected" : ""
+                  }>${escapeHtml(m.label)}</option>`,
+              )
+              .join("")}</select>`
+          : ""
+      }
       ${showMeter ? `<button id="stopBtn" class="btn ghost">Stop streaming</button>` : ""}
       ${showKeepAwake ? `<p class="detail">Keep this screen on — locking the phone stops the mic in a browser.</p>` : ""}
     </div>`;
@@ -225,5 +332,22 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
     if (startBtn) startBtn.onclick = () => handlers.onStart();
     const stopBtn = document.getElementById("stopBtn");
     if (stopBtn) stopBtn.onclick = () => handlers.onStop();
+    const muteBtn = document.getElementById("muteBtn");
+    if (muteBtn) muteBtn.onclick = () => handlers.onMute();
+    for (const box of Array.from(document.querySelectorAll<HTMLInputElement>("input[data-tk]"))) {
+      box.onchange = () => handlers.onToggle(box.dataset.tk as ToggleKey);
+    }
+    const micSel = document.getElementById("micSel") as HTMLSelectElement | null;
+    if (micSel) micSel.onchange = () => handlers.onPickMic(micSel.value);
   }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
+  );
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/"/g, "&quot;");
 }
