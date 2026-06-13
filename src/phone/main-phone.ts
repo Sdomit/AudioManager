@@ -30,9 +30,69 @@ import {
   type WakeLock,
 } from "./core/capture";
 import { PhoneTransport } from "./core/transport";
+import type { PairingParams } from "./core/protocol";
+
+// ── Persistence (shell-only; core/ stays storage-free) ──────────────────────
+// Saved across reloads so a transient drop or page refresh reconnects without a
+// fresh QR scan. All access is guarded — Safari private mode / disabled storage
+// must not crash the page.
+const PAIRING_KEY = "am.phone.pairing";
+const NAME_KEY = "am.phone.name";
+
+function loadSavedPairing(): PairingParams | null {
+  try {
+    const raw = localStorage.getItem(PAIRING_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<PairingParams>;
+    if (typeof v?.session === "string" && typeof v?.token === "string") {
+      return { session: v.session, token: v.token };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function savePairing(p: PairingParams) {
+  try {
+    localStorage.setItem(PAIRING_KEY, JSON.stringify({ session: p.session, token: p.token }));
+  } catch {
+    // ignore
+  }
+}
+
+function clearSavedPairing() {
+  try {
+    localStorage.removeItem(PAIRING_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function loadName(): string | null {
+  try {
+    const v = localStorage.getItem(NAME_KEY);
+    return v && v.trim() ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveName(name: string) {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    // ignore
+  }
+}
 
 const app = document.getElementById("app")!;
-const pairing = pairingFromHash(location.hash);
+const fromHash = pairingFromHash(location.hash);
+// A fresh QR scan overwrites stale saved creds; otherwise reuse the saved pair.
+if (fromHash) savePairing(fromHash);
+const pairing = fromHash ?? loadSavedPairing();
+// In-memory device name used for the next hello; edited via the name input.
+let deviceName = loadName() ?? defaultDeviceName();
 
 let mic: MicCapture | null = null;
 let transport: PhoneTransport | null = null;
@@ -53,7 +113,18 @@ const batterySaver =
 let switching = false;
 
 if (!pairing) {
-  renderShell("ended", "missing-pairing");
+  // No creds yet: still let the user name the device before scanning the QR.
+  renderShell("ended", "missing-pairing", {
+    onStart() {},
+    onStop() {},
+    onMute() {},
+    onToggle() {},
+    onPickMic() {},
+    onLowBandwidth() {},
+    onName(name: string) {
+      saveName(name.trim() || defaultDeviceName());
+    },
+  });
 } else {
   const machine = new PhoneMachine();
 
@@ -61,7 +132,7 @@ if (!pairing) {
     onOpen() {
       machine.dispatch({ kind: "ws-open" });
       signaling.send(
-        helloMessage(pairing, { kind: "browser", name: defaultDeviceName(), appVersion: "0.1.0" }),
+        helloMessage(pairing, { kind: "browser", name: deviceName, appVersion: "0.1.0" }),
       );
     },
     onMessage(msg) {
@@ -70,9 +141,14 @@ if (!pairing) {
           machine.dispatch({ kind: "hello-ack", acceptRequired: msg.acceptRequired });
           break;
         case "accepted":
+          // Persist only once the desktop accepts — never store creds that get
+          // rejected. Reuse on the next reload to reconnect without a QR scan.
+          savePairing(pairing);
+          saveName(deviceName);
           machine.dispatch({ kind: "accepted" });
           break;
         case "rejected":
+          clearSavedPairing(); // revoked at the desktop — fall back to QR next load
           fail(`rejected: ${msg.reason}`);
           break;
         case "answer":
@@ -86,9 +162,16 @@ if (!pairing) {
           });
           break;
         case "error":
+          // Session is genuinely gone — drop saved creds so the next load shows
+          // the QR prompt instead of retrying dead creds. Other fatal codes
+          // (e.g. busy/version) keep creds: the session may still be valid.
+          if (msg.code === "unknown-session" || msg.code === "bad-token") clearSavedPairing();
           if (isFatalErrorCode(msg.code)) fail(`${msg.code}: ${msg.message}`);
           break;
         case "bye":
+          // Only a real removal invalidates creds; transient reasons recover via
+          // the machine's reconnect, so leave creds in place for those.
+          if (msg.reason === "session-removed") clearSavedPairing();
           fail(msg.reason);
           break;
         case "latency":
@@ -264,6 +347,10 @@ if (!pairing) {
       onToggle: (key) => void applyCapture({ [key]: !captureOpts[key] }),
       onPickMic: (deviceId) => void applyCapture({ deviceId }),
       onLowBandwidth: toggleLowBandwidth,
+      onName: (name) => {
+        deviceName = name.trim() || defaultDeviceName();
+        saveName(deviceName); // takes effect on the next hello; no live re-send
+      },
     });
   }
 
@@ -285,6 +372,7 @@ interface Handlers {
   onToggle(key: ToggleKey): void;
   onPickMic(deviceId: string): void;
   onLowBandwidth(): void;
+  onName(name: string): void;
 }
 
 function renderShell(state: PhoneState, reason: string | null, handlers?: Handlers) {
@@ -320,6 +408,13 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
   const showStart = state === "negotiating" && !mic && !starting;
   const showMeter = (state === "negotiating" || state === "live") && !!mic;
   const showKeepAwake = state === "live" || (state === "negotiating" && !!mic);
+  // Editable device name in the pre-live states where it still matters: before
+  // pairing (missing-pairing), while waiting for accept, and after accept before
+  // the mic starts. Edits apply on the next hello, so hide it once live.
+  const showName =
+    (state === "ended" && reason === "missing-pairing") ||
+    state === "waiting-accept" ||
+    (state === "negotiating" && !mic);
 
   const toggles: { key: ToggleKey; label: string }[] = [
     { key: "noiseSuppression", label: "Noise suppression" },
@@ -334,6 +429,15 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
       <h1>AudioManager</h1>
       <p class="state">${starting ? "Requesting microphone…" : muted && showMeter ? "Muted" : stateLabel[state]}</p>
       ${micError ? `<p class="detail err">${micError}</p>` : ""}
+      ${
+        showName
+          ? `<label class="nameField">Device name
+               <input id="nameInput" class="nameInput" type="text" inputmode="text"
+                 autocomplete="off" autocapitalize="words" maxlength="40"
+                 value="${escapeHtml(deviceName)}" placeholder="${escapeHtml(defaultDeviceName())}" />
+             </label>`
+          : ""
+      }
       ${showStart ? `<button id="startBtn" class="btn">Start microphone</button>` : ""}
       ${showMeter ? `<div class="meter ${muted ? "muted" : ""}"><div class="meterFill" style="width:${Math.round(meterScale(level) * 100)}%"></div></div>` : ""}
       ${
@@ -393,6 +497,12 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
     if (lowbw) lowbw.onchange = () => handlers.onLowBandwidth();
     const micSel = document.getElementById("micSel") as HTMLSelectElement | null;
     if (micSel) micSel.onchange = () => handlers.onPickMic(micSel.value);
+    const nameInput = document.getElementById("nameInput") as HTMLInputElement | null;
+    if (nameInput) {
+      const onName = () => handlers.onName(nameInput.value);
+      nameInput.oninput = onName;
+      nameInput.onchange = onName;
+    }
   }
 }
 
