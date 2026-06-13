@@ -153,6 +153,39 @@
   padding: var(--am-space-3) 0;
 }
 
+/* ── Paired devices (persisted trust) ───────────────────────────── */
+.autostartRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--am-space-2);
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+  cursor: pointer;
+  padding: var(--am-space-2) 0;
+}
+.autostartRow input {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: var(--am-accent, #2563eb);
+  flex: none;
+}
+.autostartHint {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  line-height: 1.45;
+}
+.serverIndicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .session {
   display: flex;
   align-items: center;
@@ -269,12 +302,14 @@
 .latencyRow {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--am-space-2);
   margin-top: var(--am-space-2);
 }
 
 .latencyModes {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   padding: 2px;
   gap: 2px;
   border-radius: var(--am-radius-sm);
@@ -287,6 +322,7 @@
   border-radius: calc(var(--am-radius-sm) - 2px);
   font-size: var(--am-text-12);
   font-weight: 600;
+  white-space: nowrap;
   color: var(--am-text-secondary);
   background: transparent;
 }

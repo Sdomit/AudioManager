@@ -238,7 +238,7 @@ fn simple_uuid() -> String {
 /// byte, so a network attacker cannot time-probe the token a character at a time.
 /// Length is not secret (tokens are fixed 32-char uuids), so a length mismatch
 /// returns early — only the equal-length content comparison is constant-time.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -255,6 +255,15 @@ pub fn create_session(label: Option<String>) -> (String, String) {
     sweep();
     let id = simple_uuid();
     let token = simple_uuid();
+    // The persisted trust store (net::paired) hashes this token with a single
+    // unsalted SHA-256, which is only safe because the token is a 122-bit uuid
+    // v4 (uniformly random). If token generation ever changes to a lower-entropy
+    // or predictable scheme, paired.rs must reintroduce a salt + slow KDF.
+    debug_assert!(
+        uuid::Uuid::parse_str(&token).map(|u| u.get_version())
+            == Ok(Some(uuid::Version::Random)),
+        "pairing token must be a uuid v4 (122-bit random); paired.rs hashing depends on it"
+    );
     let session = PhoneSession {
         id: id.clone(),
         token: token.clone(),
@@ -353,7 +362,22 @@ pub fn handle_hello(
             HelloOutcome::PendingAccept
         }
     };
-    (outcome, s.conn_epoch)
+    let epoch = s.conn_epoch;
+    let resumed = matches!(outcome, HelloOutcome::ResumeAccepted);
+    // Capture the (possibly renamed) label set above from hello.name so the
+    // store stays in sync, not just the live session row.
+    let label = s.label.clone();
+    drop(reg);
+    // Refresh persisted recency + label on an in-process reconnect too — not only
+    // the store-recovery path (try_resume_trusted). Otherwise an actively-used
+    // phone whose registry entry survived is never re-touched and `maintain()`
+    // prunes it at 30 days, the UI shows a stale "last seen", and a rename never
+    // reaches the paired list. Done AFTER releasing the registry lock: registry
+    // and store mutexes are never held together.
+    if resumed {
+        super::paired::record_resume(session_id, &label);
+    }
+    (outcome, epoch)
 }
 
 /// Detach a connection (socket closed). Only the epoch owner may transition.
@@ -379,23 +403,114 @@ pub fn handle_disconnect(session_id: &str, epoch: u64) {
     }
 }
 
-/// User clicked Accept in the pairing sheet. Pushes `accepted` to the phone.
-pub fn accept(session_id: &str) -> Result<(), String> {
-    let mut reg = registry().lock().unwrap();
-    let s = reg
-        .get_mut(session_id)
-        .ok_or_else(|| "unknown session".to_string())?;
-    match s.state {
-        SessionState::PendingAccept | SessionState::Accepted => {
-            s.state = SessionState::Accepted;
-            s.dropped_at = None;
-            if let Some(tx) = &s.tx {
-                let _ = tx.send(ServerMessage::Accepted {});
+/// User clicked Accept in the pairing sheet. Pushes `accepted` to the phone and
+/// records the device in the persisted trust store so it auto-reconnects across
+/// restarts. Returns whether trust was DURABLY persisted (`false` if the store
+/// was non-authoritative or the write failed — the phone still works this
+/// session, but the caller should surface that auto-reconnect won't survive a
+/// restart). `Err` only for a bad session/state.
+pub fn accept(session_id: &str) -> Result<bool, String> {
+    // Build the persisted record while we hold the registry lock (the token
+    // lives in the session), then upsert AFTER releasing it. Lock discipline:
+    // the registry and paired-store mutexes are never held simultaneously.
+    let device = {
+        let mut reg = registry().lock().unwrap();
+        let s = reg
+            .get_mut(session_id)
+            .ok_or_else(|| "unknown session".to_string())?;
+        match s.state {
+            SessionState::PendingAccept | SessionState::Accepted => {
+                s.state = SessionState::Accepted;
+                s.dropped_at = None;
+                if let Some(tx) = &s.tx {
+                    let _ = tx.send(ServerMessage::Accepted {});
+                }
+                super::paired::device_from_pairing(
+                    &s.id,
+                    &s.token,
+                    &s.label,
+                    s.client_kind.as_deref(),
+                    s.client_os.as_deref(),
+                )
             }
-            Ok(())
+            other => {
+                return Err(format!("session not awaiting acceptance (state {other:?})"))
+            }
         }
-        other => Err(format!("session not awaiting acceptance (state {other:?})")),
+    };
+    // Persist trust. Runs on the Tauri command thread (phone_accept_client), so
+    // the synchronous disk write is fine here (never on the async WS task).
+    Ok(super::paired::upsert(device))
+}
+
+/// A returning trusted device whose in-memory session was lost (e.g. the app
+/// restarted) is unknown to the registry but known to the persisted store. The
+/// server calls this when `handle_hello` returns `UnknownSession`: verify the
+/// token against the store (constant-time) and, on a match, rehydrate an
+/// already-`Accepted` session so the phone resumes with no re-prompt.
+///
+/// Lock discipline: the paired-store lookups (`verify`/`label_of`) run BEFORE
+/// the registry lock is taken, and the revocation recheck reads a lock-free
+/// atomic — so the registry and store mutexes are never held at once.
+pub fn try_resume_trusted(
+    session_id: &str,
+    token: &str,
+    client_kind: &str,
+    client_os: &str,
+    name: Option<&str>,
+    tx: UnboundedSender<ServerMessage>,
+) -> (HelloOutcome, u64) {
+    // Capture the revocation epoch BEFORE verifying so a `forget` that lands
+    // between our verify and our insert is detected and the resume refused — a
+    // kicked device must never come back live (no zombie session).
+    let epoch_before = super::paired::revoke_epoch();
+    if !super::paired::verify(session_id, token) {
+        return (HelloOutcome::UnknownSession, 0);
     }
+    // The phone usually sends its saved name; fall back to the stored label.
+    let label = name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| n.chars().take(64).collect::<String>())
+        .or_else(|| super::paired::label_of(session_id))
+        .unwrap_or_else(|| "Phone".to_string());
+
+    let mut reg = registry().lock().unwrap();
+    // Recheck revocation under the registry lock (lock-free atomic read — does
+    // NOT take the store lock, so we never hold both mutexes).
+    if super::paired::revoke_epoch() != epoch_before {
+        return (HelloOutcome::UnknownSession, 0);
+    }
+    // Only rehydrate on a genuine miss; never clobber a session the registry
+    // already tracks (the caller reaches us only on UnknownSession, but be safe).
+    if reg.contains_key(session_id) {
+        return (HelloOutcome::UnknownSession, 0);
+    }
+    let session = PhoneSession {
+        id: session_id.to_string(),
+        token: token.to_string(),
+        label: label.clone(),
+        state: SessionState::Accepted,
+        client_kind: Some(client_kind.to_string()),
+        client_os: Some(client_os.to_string()),
+        created_at: Instant::now(),
+        dropped_at: None,
+        token_failures: 0,
+        tx: Some(tx),
+        conn_epoch: 1,
+        reconnect_count: 0,
+        stats: Arc::new(PhoneStats::default()),
+        latency: Arc::new(AtomicU8::new(LatencyMode::Balanced.as_u8())),
+    };
+    reg.insert(session_id.to_string(), session);
+    drop(reg);
+
+    // In-memory recency + label sync (no disk IO on this async path).
+    super::paired::record_resume(session_id, &label);
+    // Re-add the phone's mixer input — the desktop's graph was also reset on
+    // restart. The net layer has no graph access, so lib.rs supplies this hook.
+    super::fire_resume_hook(session_id);
+    (HelloOutcome::ResumeAccepted, 1)
 }
 
 /// User clicked Reject. Pushes `rejected` and expires the session.
@@ -414,13 +529,17 @@ pub fn reject(session_id: &str, reason: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove a session entirely (user deleted the input / closed pairing).
-pub fn remove(session_id: &str) {
+/// Remove a session entirely. `reason` is the `bye` pushed to a still-live
+/// phone, and it carries intent: use "session-removed" for a real revoke/kick
+/// (the phone clears its saved creds and drops to the QR screen) and a transient
+/// reason like "disconnected" for a plain disconnect (the phone keeps its trust
+/// and can auto-reconnect later).
+pub fn remove(session_id: &str, reason: &str) {
     let mut reg = registry().lock().unwrap();
     if let Some(s) = reg.remove(session_id) {
         if let Some(tx) = &s.tx {
             let _ = tx.send(ServerMessage::Bye {
-                reason: "session-removed".to_string(),
+                reason: reason.to_string(),
             });
         }
     }
@@ -538,13 +657,20 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc::unbounded_channel;
 
-    /// The registry is process-global; cargo runs tests in parallel. Each
-    /// test holds this lock and starts from a cleared registry.
-    fn setup() -> std::sync::MutexGuard<'static, ()> {
+    /// The registry is process-global; cargo runs tests in parallel. Each test
+    /// holds this lock and starts from a cleared registry. `accept` now also
+    /// writes the paired store, so hold its test lock too (always in this order:
+    /// session lock first, then paired) and start from an empty store.
+    fn setup() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
         static LOCK: Mutex<()> = Mutex::new(());
-        let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g_session = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let g_paired = crate::net::paired::global_test_lock();
+        crate::net::paired::reset_for_test();
         registry().lock().unwrap().clear();
-        guard
+        (g_session, g_paired)
     }
 
     fn hello(
@@ -711,5 +837,78 @@ mod tests {
         let (sid, token) = create_session(None);
         let json = serde_json::to_string(&status(&sid).unwrap()).unwrap();
         assert!(!json.contains(&token));
+    }
+
+    #[test]
+    fn accept_persists_trusted_device() {
+        let _g = setup();
+        let (sid, token) = create_session(None);
+        let (_o, _e, _rx) = hello(&sid, &token);
+        accept(&sid).unwrap();
+        // The accepted device is now trusted and verifies by its token.
+        assert!(crate::net::paired::verify(&sid, &token));
+    }
+
+    #[test]
+    fn trusted_device_resumes_on_registry_miss() {
+        let _g = setup(); // empty registry + empty paired store
+        crate::net::paired::upsert(crate::net::paired::device_from_pairing(
+            "sid-r",
+            "tok-r",
+            "Saved Phone",
+            Some("browser"),
+            Some("Android"),
+        ));
+        // Registry is empty (as after an app restart): a normal hello would miss.
+        let (tx, _rx) = unbounded_channel();
+        let (outcome, epoch) =
+            try_resume_trusted("sid-r", "tok-r", "browser", "Android", Some("Live Name"), tx);
+        assert!(matches!(outcome, HelloOutcome::ResumeAccepted));
+        assert_eq!(epoch, 1);
+        let st = status("sid-r").unwrap();
+        assert_eq!(st.state, SessionState::Accepted);
+        assert_eq!(st.label, "Live Name"); // the hello name wins over the stored label
+    }
+
+    #[test]
+    fn resume_uses_stored_label_when_hello_omits_name() {
+        let _g = setup();
+        crate::net::paired::upsert(crate::net::paired::device_from_pairing(
+            "sid-l", "tok-l", "Stored Label", None, None,
+        ));
+        let (tx, _rx) = unbounded_channel();
+        let (outcome, _e) = try_resume_trusted("sid-l", "tok-l", "browser", "iOS", None, tx);
+        assert!(matches!(outcome, HelloOutcome::ResumeAccepted));
+        assert_eq!(status("sid-l").unwrap().label, "Stored Label");
+    }
+
+    #[test]
+    fn resume_rejects_wrong_token_and_unknown_id() {
+        let _g = setup();
+        crate::net::paired::upsert(crate::net::paired::device_from_pairing(
+            "sid-w", "right", "P", None, None,
+        ));
+        let (tx1, _r1) = unbounded_channel();
+        let (o1, _) = try_resume_trusted("sid-w", "wrong", "browser", "iOS", None, tx1);
+        assert!(matches!(o1, HelloOutcome::UnknownSession));
+        assert!(status("sid-w").is_none()); // nothing inserted on a bad token
+
+        let (tx2, _r2) = unbounded_channel();
+        let (o2, _) = try_resume_trusted("nope", "right", "browser", "iOS", None, tx2);
+        assert!(matches!(o2, HelloOutcome::UnknownSession));
+    }
+
+    #[test]
+    fn kicked_device_cannot_resume() {
+        let _g = setup();
+        crate::net::paired::upsert(crate::net::paired::device_from_pairing(
+            "sid-k", "tok-k", "P", None, None,
+        ));
+        // Revoke (kick) before the device tries to come back.
+        assert!(crate::net::paired::forget("sid-k").unwrap());
+        let (tx, _rx) = unbounded_channel();
+        let (o, _) = try_resume_trusted("sid-k", "tok-k", "browser", "iOS", None, tx);
+        assert!(matches!(o, HelloOutcome::UnknownSession));
+        assert!(status("sid-k").is_none());
     }
 }

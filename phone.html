@@ -9,80 +9,90 @@
     <meta name="theme-color" content="#0d0f12" />
     <title>AudioManager — Phone Mic</title>
     <style>
-      :root { color-scheme: dark; }
-      * { margin: 0; padding: 0; box-sizing: border-box; }
+      :root {
+        color-scheme: dark;
+        --bg: #0d0f12; --surface: #111419; --surface2: #15181e; --line: #262a32;
+        --txt: #e8eaed; --txt2: #b6bcc4; --txt3: #7c828b;
+        --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       body {
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        background: #0d0f12;
-        color: #e8eaed;
-        min-height: 100vh;
-        min-height: 100dvh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
+        background: var(--bg); color: var(--txt);
+        min-height: 100vh; min-height: 100dvh;
+        display: flex; align-items: flex-start; justify-content: center;
+        padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+                 max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
       }
-      .card {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 14px;
-        text-align: center;
-        max-width: 420px;
+      .screen { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 16px; padding-top: 8px; }
+
+      .topbar { display: flex; align-items: center; justify-content: space-between; }
+      .brand { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--txt3); }
+      .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--surface2); color: var(--txt2); }
+      .pdot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+      .pill.ok { background: #0f2417; color: #3ddc84; }
+      .pill.warn { background: #2a1f08; color: #f4b740; }
+      .pill.err { background: #2a1214; color: #f1707a; }
+      .pill.idle { color: var(--txt3); }
+
+      .devName { text-align: center; font-size: 17px; font-weight: 500; }
+      .nameField { display: flex; flex-direction: column; gap: 7px; font-size: 13px; color: var(--txt3); }
+      .nameInput { appearance: none; width: 100%; padding: 13px; border-radius: 12px; background: var(--surface2); color: var(--txt); border: 1px solid var(--line); font-size: 16px; }
+      .nameInput:focus { outline: none; border-color: var(--green); }
+
+      .hero { position: relative; width: 208px; height: 208px; margin: 4px auto; }
+      .ring { width: 208px; height: 208px; transform: rotate(-90deg); }
+      .ringTrack { fill: none; stroke: #1b1e24; stroke-width: 13; }
+      .ringArc { fill: none; stroke-width: 13; stroke-linecap: round; transition: stroke-dashoffset 90ms linear, stroke 200ms; }
+      .hub { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+      .hubBtn {
+        width: 122px; height: 122px; border-radius: 50%; border: 1px solid var(--line);
+        background: var(--surface2); color: var(--green);
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+        cursor: pointer; touch-action: manipulation;
+        transition: transform 80ms, background 200ms, color 200ms, border-color 200ms;
       }
-      .card h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
-      .state { font-size: 15px; color: #b6bcc4; }
-      .detail { font-size: 13px; color: #7c828b; line-height: 1.5; }
+      .hubBtn:active { transform: scale(0.96); }
+      .hubBtn.muted { color: var(--red); background: #1a1116; border-color: #3a2228; }
+      .hubLabel { font-size: 13px; color: var(--txt2); }
+      .glyph { color: var(--txt3); display: flex; align-items: center; justify-content: center; }
+      .spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--amber); animation: spin 0.9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .status { text-align: center; font-size: 15px; color: var(--txt2); }
+      .status.err { color: #f1707a; }
+      .detail { text-align: center; font-size: 13px; color: var(--txt3); line-height: 1.5; }
       .detail.err { color: #f87171; }
-      .btn {
-        appearance: none; border: 0; border-radius: 10px;
-        padding: 14px 22px; font-size: 16px; font-weight: 600;
-        background: #2563eb; color: #fff; cursor: pointer;
-        touch-action: manipulation; min-width: 200px;
-      }
-      .btn:active { opacity: 0.85; }
-      .btn.ghost { background: #1b1e24; color: #b6bcc4; font-weight: 500; }
-      .btn.danger { background: #b91c1c; color: #fff; }
-      .meter {
-        width: 220px; height: 12px; border-radius: 6px;
-        background: #1b1e24; overflow: hidden;
-      }
-      .meter.muted { opacity: 0.4; }
-      .meterFill {
-        height: 100%; width: 0%;
-        background: linear-gradient(90deg, #22c55e, #84cc16 70%, #f59e0b);
-        transition: width 80ms linear;
-      }
-      .controls {
-        display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 16px;
-        max-width: 280px;
-      }
-      .chk {
-        display: inline-flex; align-items: center; gap: 6px;
-        font-size: 13px; color: #b6bcc4; cursor: pointer;
-      }
-      .chk input { width: 16px; height: 16px; accent-color: #2563eb; }
-      .sel {
-        appearance: none; width: 220px; max-width: 100%;
-        padding: 10px 12px; border-radius: 10px;
-        background: #1b1e24; color: #e8eaed; border: 1px solid #2a2e36;
-        font-size: 14px; touch-action: manipulation;
-      }
-      .dot { width: 14px; height: 14px; border-radius: 50%; }
-      .dot.idle { background: #7c828b; animation: pulse 1.4s ease-in-out infinite; }
-      .dot.warn { background: #f59e0b; animation: pulse 1.4s ease-in-out infinite; }
-      .dot.ok   { background: #22c55e; }
-      .dot.err  { background: #ef4444; }
-      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+      .hint { text-align: center; font-size: 12px; color: var(--txt3); line-height: 1.5; }
+
+      .settings { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+      .settings summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; padding: 13px; font-size: 13px; font-weight: 500; color: var(--txt); }
+      .settings summary::-webkit-details-marker { display: none; }
+      .chev { width: 9px; height: 9px; border-right: 2px solid var(--txt3); border-bottom: 2px solid var(--txt3); transform: rotate(45deg); transition: transform 0.2s; }
+      .settings[open] .chev { transform: rotate(-135deg); }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 13px 11px; }
+      .tog { display: flex; align-items: center; justify-content: space-between; background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; font-size: 13px; color: var(--txt2); cursor: pointer; }
+      .tog input { position: absolute; opacity: 0; width: 0; height: 0; }
+      .sw { width: 38px; height: 22px; border-radius: 11px; background: #262a32; position: relative; flex: none; transition: background 0.2s; }
+      .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #e8eaed; transition: left 0.2s; }
+      .tog input:checked ~ .sw { background: #16331f; }
+      .tog input:checked ~ .sw::after { left: 19px; background: var(--green); }
+      .sel { appearance: none; display: block; width: calc(100% - 26px); margin: 0 13px 13px; padding: 11px 13px; border-radius: 12px; background: var(--surface2); color: var(--txt); border: 1px solid var(--line); font-size: 14px; touch-action: manipulation; }
+      .stopBtn { width: 100%; background: #1a1116; border: 1px solid #3a2228; color: #f1707a; font-size: 15px; font-weight: 500; padding: 14px; border-radius: 13px; cursor: pointer; touch-action: manipulation; }
+      .stopBtn:active { opacity: 0.85; }
     </style>
   </head>
   <body>
     <div id="app">
-      <div class="card">
-        <div class="dot idle"></div>
-        <h1>AudioManager</h1>
-        <p class="state">Loading…</p>
-      </div>
+      <main class="screen">
+        <div class="hero">
+          <svg class="ring" viewBox="0 0 208 208" aria-hidden="true">
+            <circle class="ringTrack" cx="104" cy="104" r="92"></circle>
+          </svg>
+          <div class="hub"><span class="spin"></span></div>
+        </div>
+        <p class="status">Starting…</p>
+      </main>
     </div>
     <script type="module" src="/src/phone/main-phone.ts"></script>
   </body>

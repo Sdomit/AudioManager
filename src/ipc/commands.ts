@@ -7,6 +7,7 @@ import type {
   DeviceInfo,
   EngineStatus,
   InputChannel,
+  PhonePairedDevice,
   PhoneServerStatus,
   PhoneSessionCreated,
   PhoneSessionStatus,
@@ -242,3 +243,18 @@ export const phoneSetLatencyMode = (
   mode: PhoneLatencyMode,
 ): Promise<void> =>
   invoke<void>("phone_set_latency_mode", { sessionId, mode });
+
+/** Persisted trusted devices for the "Paired devices" management list. */
+export const phoneListPaired = (): Promise<PhonePairedDevice[]> =>
+  invoke<PhonePairedDevice[]>("phone_list_paired");
+
+/** Revoke a paired device: deletes persisted trust so it cannot auto-reconnect. */
+export const phoneForget = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_forget", { sessionId });
+
+/** Whether the phone server auto-starts at app launch (opt-in, default false). */
+export const phoneGetAutostart = (): Promise<boolean> =>
+  invoke<boolean>("phone_get_autostart");
+
+export const phoneSetAutostart = (enabled: boolean): Promise<void> =>
+  invoke<void>("phone_set_autostart", { enabled });

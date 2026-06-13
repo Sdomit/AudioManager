@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 
 import * as ipc from "../../ipc/commands";
 import type {
+  PhonePairedDevice,
   PhoneServerStatus,
   PhoneSessionCreated,
   PhoneSessionStatus,
@@ -29,6 +30,8 @@ const POLL_MS = 250;
 export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
   const [created, setCreated] = useState<PhoneSessionCreated | null>(null);
   const [sessions, setSessions] = useState<PhoneSessionStatus[]>([]);
+  const [paired, setPaired] = useState<PhonePairedDevice[]>([]);
+  const [autostart, setAutostart] = useState<boolean>(false);
   const [server, setServer] = useState<PhoneServerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -48,6 +51,28 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
       setError(extractMessage(e));
     }
   }, []);
+
+  const forgetPaired = useCallback(async (id: string) => {
+    try {
+      await ipc.phoneForget(id);
+      setPaired((prev) => prev.filter((d) => d.id !== id));
+    } catch (e) {
+      setError(extractMessage(e));
+    }
+  }, []);
+
+  const toggleAutostart = useCallback(
+    async (next: boolean) => {
+      setAutostart(next); // optimistic
+      try {
+        await ipc.phoneSetAutostart(next);
+      } catch (e) {
+        setAutostart(!next); // revert on failure
+        setError(extractMessage(e));
+      }
+    },
+    [],
+  );
 
   // Create a fresh session each time the sheet opens; drop it on close if it
   // was never scanned (state still "created").
@@ -74,8 +99,14 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
     let cancelled = false;
     const tick = async () => {
       try {
-        const list = await ipc.phoneListSessions();
-        if (!cancelled) setSessions(list);
+        const [list, pairedList] = await Promise.all([
+          ipc.phoneListSessions(),
+          ipc.phoneListPaired(),
+        ]);
+        if (!cancelled) {
+          setSessions(list);
+          setPaired(pairedList);
+        }
       } catch {
         // Transient IPC failure: keep the last snapshot.
       }
@@ -107,6 +138,21 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
       cancelled = true;
     };
   }, [open, created]);
+
+  // Load the autostart preference once per open.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void ipc
+      .phoneGetAutostart()
+      .then((v) => {
+        if (!cancelled) setAutostart(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Render the QR whenever the pairing URL changes.
   useEffect(() => {
@@ -200,8 +246,58 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
               </div>
             )}
             {visibleSessions.map((s) => (
-              <SessionRow key={s.id} session={s} />
+              <SessionRow key={s.id} session={s} onError={setError} />
             ))}
+          </section>
+
+          <section className={styles.sessions} aria-label="Paired devices">
+            <div className={styles.sectionLabel}>Paired devices</div>
+            <label className={styles.autostartRow}>
+              <input
+                type="checkbox"
+                checked={autostart}
+                onChange={(e) => void toggleAutostart(e.target.checked)}
+              />
+              <span>
+                Reconnect trusted phones at startup
+                <span className={styles.autostartHint}>
+                  Runs the phone server when AudioManager launches so paired
+                  phones rejoin without re-scanning.
+                </span>
+              </span>
+            </label>
+            {server?.running && (
+              <div className={styles.serverIndicator}>
+                <span className={`${styles.dot} ${styles.dot_ok}`} aria-hidden />
+                Phone server running{server.port ? ` · port ${server.port}` : ""}
+              </div>
+            )}
+            {paired.length === 0 ? (
+              <div className={styles.emptySessions}>
+                No paired devices yet. Accept a phone to remember it.
+              </div>
+            ) : (
+              paired.map((d) => (
+                <div key={d.id} className={styles.session}>
+                  <div className={styles.sessionText}>
+                    <div className={styles.sessionLabel}>{d.label}</div>
+                    <div className={styles.sessionMeta}>
+                      {d.clientOs ? `${d.clientOs} · ` : ""}last seen{" "}
+                      {formatLastSeen(d.lastSeenUtc)}
+                    </div>
+                  </div>
+                  <div className={styles.sessionActions}>
+                    <button
+                      className={styles.removeBtn}
+                      aria-label={`Remove ${d.label}`}
+                      onClick={() => void forgetPaired(d.id)}
+                    >
+                      <XIcon size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </section>
         </div>
       </aside>
@@ -209,7 +305,13 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
   );
 }
 
-function SessionRow({ session }: { session: PhoneSessionStatus }) {
+function SessionRow({
+  session,
+  onError,
+}: {
+  session: PhoneSessionStatus;
+  onError: (msg: string) => void;
+}) {
   const tone = toneFor(session);
   return (
     <div className={`${styles.session} ${styles[`tone_${tone}`]}`}>
@@ -234,7 +336,11 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
           <>
             <button
               className={styles.acceptBtn}
-              onClick={() => void ipc.phoneAcceptClient(session.id)}
+              onClick={() => {
+                // Accept succeeds for the live session even if trust couldn't be
+                // persisted; surface that storage warning to the user.
+                ipc.phoneAcceptClient(session.id).catch((e) => onError(extractMessage(e)));
+              }}
             >
               Accept
             </button>
@@ -398,6 +504,15 @@ function formatSecs(total: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+/** Relative "last seen" from a Unix-seconds timestamp, for the paired list. */
+function formatLastSeen(utcSecs: number): string {
+  const age = Math.max(0, Date.now() / 1000 - utcSecs);
+  if (age < 60) return "just now";
+  if (age < 3600) return `${Math.floor(age / 60)}m ago`;
+  if (age < 86400) return `${Math.floor(age / 3600)}h ago`;
+  return `${Math.floor(age / 86400)}d ago`;
 }
 
 function extractMessage(e: unknown): string {
