@@ -86,6 +86,16 @@ pub fn lan_ips() -> Vec<IpAddr> {
     ips
 }
 
+/// Install the `ring` rustls crypto provider as the process default, once.
+/// Idempotent: a second call (or a provider already installed elsewhere) is a
+/// no-op rather than an error.
+fn ensure_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Start the HTTPS server if it is not already running. Sync; safe to call
 /// from the IPC thread. Returns the bound port.
 pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
@@ -101,6 +111,12 @@ pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
         return Err("no LAN network interface found — connect to WiFi/Ethernet first".into());
     }
     let material = tls::load_or_generate(&tls::tls_dir(app_local_data), &ips)?;
+
+    // The dependency graph now compiles in BOTH rustls crypto backends — `ring`
+    // (via axum-server) and `aws-lc-rs` (via webrtc). With two providers present
+    // rustls refuses to auto-select one and panics on first TLS use, so pin
+    // `ring` as the process default exactly once before any TLS work starts.
+    ensure_crypto_provider();
 
     let rustls_config = runtime()
         .block_on(axum_server::tls_rustls::RustlsConfig::from_pem(

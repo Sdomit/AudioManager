@@ -44,6 +44,10 @@ futures-util = "0.3"
 # this toolchain the spike falls back to `opus` (builds libopus via cmake).
 webrtc = "0.17"
 audiopus = "=0.3.0-rc.0"
+# webrtc pulls rustls's aws-lc-rs backend while axum-server pulls ring; with
+# both compiled in, rustls cannot auto-pick a provider. Depend on rustls
+# directly with `ring` so net/mod.rs can install it as the process default.
+rustls = { version = "0.23", features = ["ring"] }
 
 # WASAPI loopback capture (system + per-process). Windows-only; pulls in the
 # `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).
