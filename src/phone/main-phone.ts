@@ -86,6 +86,17 @@ function saveName(name: string) {
   }
 }
 
+// Hero level-meter ring: circumference of r=92 (2π·92 ≈ 578). The live arc's
+// stroke-dashoffset is driven from this.
+const RING_C = 578;
+
+// Inline SVG icons (no icon font — keeps the phone bundle tiny). currentColor +
+// the parent's font-size drive their look.
+const MIC_ON = `<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21.5"/></svg>`;
+const MIC_OFF = `<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 9.3V5.5a3 3 0 0 0-5.8-1.1"/><path d="M9 9.2V11a3 3 0 0 0 4.5 2.6"/><path d="M5 11a7 7 0 0 0 10.9 5.8"/><line x1="12" y1="18" x2="12" y2="21.5"/><line x1="3.5" y1="3.5" x2="20.5" y2="20.5"/></svg>`;
+const QR_GLYPH = `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7"/></svg>`;
+const CLOCK_GLYPH = `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5l3 2"/></svg>`;
+
 const app = document.getElementById("app")!;
 const fromHash = pairingFromHash(location.hash);
 const pairing = fromHash ?? loadSavedPairing();
@@ -109,6 +120,8 @@ let mics: MicDevice[] = [];
 let captureOpts: CaptureOptions = { ...DEFAULT_CAPTURE };
 let lowBandwidth = false;
 let deviceUnsub: (() => void) | null = null;
+// "Audio settings" collapsible open state, preserved across re-renders.
+let controlsOpen = false;
 
 /** Phone is in OS data-saver mode (best-effort; absent on some browsers). */
 const batterySaver =
@@ -324,8 +337,10 @@ if (!pairing) {
   }
 
   function paintMeter() {
-    const fill = app.querySelector<HTMLElement>(".meterFill");
-    if (fill) fill.style.width = `${Math.round(meterScale(level) * 100)}%`;
+    const arc = app.querySelector<SVGCircleElement>("#meterArc");
+    if (arc) {
+      arc.setAttribute("stroke-dashoffset", String(Math.round(RING_C * (1 - meterScale(level)))));
+    }
   }
 
   function startMeter() {
@@ -442,71 +457,121 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
     (state === "negotiating" && !mic);
 
   const toggles: { key: ToggleKey; label: string }[] = [
-    { key: "noiseSuppression", label: "Noise suppression" },
-    { key: "echoCancellation", label: "Echo cancel" },
+    { key: "noiseSuppression", label: "Noise" },
+    { key: "echoCancellation", label: "Echo" },
     { key: "autoGainControl", label: "Auto gain" },
   ];
   const dis = switching ? "disabled" : "";
 
+  const muteState = muted && showMeter;
+  const pillTone = muteState ? "warn" : tone;
+  const pillLabel = showMeter
+    ? muted
+      ? "Muted"
+      : state === "live"
+        ? "Live"
+        : "Connecting"
+    : state === "waiting-accept"
+      ? "Waiting"
+      : state === "reconnecting"
+        ? "Reconnecting"
+        : state === "negotiating"
+          ? "Ready"
+          : state === "ended"
+            ? reason === "missing-pairing"
+              ? "Pair"
+              : "Ended"
+            : "Connecting";
+  const statusText = starting ? "Requesting microphone…" : muteState ? "Muted" : stateLabel[state];
+
+  // Hero ring shows the live level arc while streaming, else an empty track with
+  // a state glyph/spinner in the hub.
+  const ringOffset = Math.round(RING_C * (1 - (showMeter ? meterScale(level) : 0)));
+
+  let hub: string;
+  if (showMeter) {
+    hub = `<button id="muteBtn" class="hubBtn ${muted ? "muted" : ""}" aria-label="${
+      muted ? "Unmute microphone" : "Mute microphone"
+    }">${muted ? MIC_OFF : MIC_ON}<span class="hubLabel">${muted ? "Unmute" : "Tap to mute"}</span></button>`;
+  } else if (showStart) {
+    hub = `<button id="startBtn" class="hubBtn" aria-label="Start microphone">${MIC_ON}<span class="hubLabel">Start</span></button>`;
+  } else {
+    const glyph =
+      state === "ended"
+        ? reason === "missing-pairing"
+          ? QR_GLYPH
+          : `<span class="spin" style="animation:none;border-color:#262a32"></span>`
+        : state === "waiting-accept"
+          ? CLOCK_GLYPH
+          : `<span class="spin"></span>`;
+    hub = `<div class="glyph">${glyph}</div>`;
+  }
+
+  const nameBlock = showName
+    ? `<label class="nameField">Device name<input id="nameInput" class="nameInput" type="text" inputmode="text" autocomplete="off" autocapitalize="words" maxlength="40" value="${escapeHtml(
+        deviceName,
+      )}" placeholder="${escapeHtml(defaultDeviceName())}" /></label>`
+    : showMeter
+      ? `<div class="devName">${escapeHtml(deviceName)}</div>`
+      : "";
+
   app.innerHTML = `
-    <div class="card">
-      <div class="dot ${muted && showMeter ? "warn" : tone}"></div>
-      <h1>AudioManager</h1>
-      <p class="state">${starting ? "Requesting microphone…" : muted && showMeter ? "Muted" : stateLabel[state]}</p>
+    <main class="screen">
+      <div class="topbar">
+        <span class="brand">AudioManager</span>
+        <span class="pill ${pillTone}"><span class="pdot"></span>${pillLabel}</span>
+      </div>
+      ${nameBlock}
+      <div class="hero">
+        <svg class="ring" viewBox="0 0 208 208" aria-hidden="true">
+          <circle class="ringTrack" cx="104" cy="104" r="92"></circle>
+          <circle class="ringArc" id="meterArc" cx="104" cy="104" r="92" style="stroke:#22c55e;stroke-dasharray:${RING_C};stroke-dashoffset:${ringOffset}"></circle>
+        </svg>
+        <div class="hub">${hub}</div>
+      </div>
+      <p class="status ${pillTone === "err" ? "err" : ""}">${statusText}</p>
       ${micError ? `<p class="detail err">${micError}</p>` : ""}
-      ${
-        showName
-          ? `<label class="nameField">Device name
-               <input id="nameInput" class="nameInput" type="text" inputmode="text"
-                 autocomplete="off" autocapitalize="words" maxlength="40"
-                 value="${escapeHtml(deviceName)}" placeholder="${escapeHtml(defaultDeviceName())}" />
-             </label>`
-          : ""
-      }
-      ${showStart ? `<button id="startBtn" class="btn">Start microphone</button>` : ""}
-      ${showMeter ? `<div class="meter ${muted ? "muted" : ""}"><div class="meterFill" style="width:${Math.round(meterScale(level) * 100)}%"></div></div>` : ""}
+      ${showMeter && !muted ? `<p class="detail">Hearing you clearly</p>` : ""}
       ${
         showMeter
-          ? `<button id="muteBtn" class="btn ${muted ? "danger" : "ghost"}">${muted ? "Unmute" : "Mute"}</button>`
+          ? `<details class="settings" ${controlsOpen ? "open" : ""}>
+               <summary><span>Audio settings</span><span class="chev"></span></summary>
+               <div class="grid">
+                 ${toggles
+                   .map(
+                     (t) =>
+                       `<label class="tog"><span>${t.label}</span><input type="checkbox" data-tk="${
+                         t.key
+                       }" ${captureOpts[t.key] ? "checked" : ""} ${dis}/><span class="sw"></span></label>`,
+                   )
+                   .join("")}
+                 <label class="tog"><span>Low data</span><input type="checkbox" id="lowbw" ${
+                   lowBandwidth ? "checked" : ""
+                 }/><span class="sw"></span></label>
+               </div>
+               ${
+                 mics.length > 1
+                   ? `<select id="micSel" class="sel" ${dis}>${mics
+                       .map(
+                         (m) =>
+                           `<option value="${escapeAttr(m.deviceId)}" ${
+                             mic && mic.deviceId === m.deviceId ? "selected" : ""
+                           }>${escapeHtml(m.label)}</option>`,
+                       )
+                       .join("")}</select>`
+                   : ""
+               }
+               ${
+                 batterySaver
+                   ? `<p class="detail" style="padding:0 13px 13px">Battery saver can throttle the mic — turn it off for the most stable stream.</p>`
+                   : ""
+               }
+             </details>`
           : ""
       }
-      ${
-        showMeter
-          ? `<div class="controls">
-               ${toggles
-                 .map(
-                   (t) =>
-                     `<label class="chk"><input type="checkbox" data-tk="${t.key}" ${
-                       captureOpts[t.key] ? "checked" : ""
-                     } ${dis}/> ${t.label}</label>`,
-                 )
-                 .join("")}
-               <label class="chk"><input type="checkbox" id="lowbw" ${
-                 lowBandwidth ? "checked" : ""
-               }/> Low bandwidth</label>
-             </div>`
-          : ""
-      }
-      ${
-        showMeter && batterySaver
-          ? `<p class="detail">Battery saver is on — it can throttle the mic. Turn it off for the most stable stream.</p>`
-          : ""
-      }
-      ${
-        showMeter && mics.length > 1
-          ? `<select id="micSel" class="sel" ${dis}>${mics
-              .map(
-                (m) =>
-                  `<option value="${escapeAttr(m.deviceId)}" ${
-                    mic && mic.deviceId === m.deviceId ? "selected" : ""
-                  }>${escapeHtml(m.label)}</option>`,
-              )
-              .join("")}</select>`
-          : ""
-      }
-      ${showMeter ? `<button id="stopBtn" class="btn ghost">Stop streaming</button>` : ""}
-      ${showKeepAwake ? `<p class="detail">Keep this screen on — locking the phone stops the mic in a browser.</p>` : ""}
-    </div>`;
+      ${showMeter ? `<button id="stopBtn" class="stopBtn">Stop streaming</button>` : ""}
+      ${showKeepAwake ? `<p class="hint">Keep this screen on — locking the phone stops the mic in a browser.</p>` : ""}
+    </main>`;
 
   if (handlers) {
     const startBtn = document.getElementById("startBtn");
@@ -528,6 +593,8 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
       nameInput.oninput = onName;
       nameInput.onchange = onName;
     }
+    const settings = document.querySelector<HTMLDetailsElement>("details.settings");
+    if (settings) settings.ontoggle = () => (controlsOpen = settings.open);
   }
 }
 
