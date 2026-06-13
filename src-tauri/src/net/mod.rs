@@ -22,6 +22,30 @@ use serde::{Deserialize, Serialize};
 /// Ports tried in order; first free one wins.
 pub const PORT_RANGE: std::ops::Range<u16> = 47800..47810;
 
+/// Hook fired when a trusted device auto-resumes (Phase 2). `lib.rs` installs it
+/// in `.setup()` to re-add the phone's mixer-graph input, which the desktop lost
+/// on restart — the net layer has no access to the audio graph itself. Receives
+/// the session id (`<sid>`; the caller forms the `phone:<sid>` source id).
+type ResumeHook = Box<dyn Fn(&str) + Send + Sync + 'static>;
+
+fn resume_hook() -> &'static OnceLock<ResumeHook> {
+    static H: OnceLock<ResumeHook> = OnceLock::new();
+    &H
+}
+
+/// Install the auto-resume hook (idempotent; a second call is ignored).
+pub fn set_resume_hook(f: ResumeHook) {
+    let _ = resume_hook().set(f);
+}
+
+/// Fire the auto-resume hook if one is installed. Called off the registry/store
+/// locks; the hook itself only touches the audio graph (no disk IO).
+pub(crate) fn fire_resume_hook(session_id: &str) {
+    if let Some(f) = resume_hook().get() {
+        f(session_id);
+    }
+}
+
 pub fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| {

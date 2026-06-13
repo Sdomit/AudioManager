@@ -174,8 +174,24 @@ async fn handle_socket(socket: WebSocket) {
         &client.kind,
         &client.os,
         name.as_deref(),
-        tx,
+        tx.clone(),
     );
+    // A trusted device whose in-memory session was lost (e.g. the desktop app
+    // restarted) is unknown to the registry but known to the persisted store:
+    // verify its token and auto-resume without a re-prompt. The socket-layer
+    // gates (per-IP rate limit, pre-hello byte cap) already ran above, so this
+    // adds no ingress that skips them.
+    let (outcome, epoch) = match outcome {
+        HelloOutcome::UnknownSession => session::try_resume_trusted(
+            &session_id,
+            &token,
+            &client.kind,
+            &client.os,
+            name.as_deref(),
+            tx,
+        ),
+        other => (other, epoch),
+    };
 
     let resumed = match outcome {
         HelloOutcome::PendingAccept => false,

@@ -1297,9 +1297,52 @@ fn phone_remove_session(
     state: tauri::State<AppState>,
     session_id: String,
 ) -> Result<(), EngineError> {
+    // Revoke persisted trust FIRST (forget-before-remove): if the live session
+    // were removed before the store entry, a reconnect landing in the gap could
+    // auto-resume from the still-present store entry and defeat the kick.
+    net::paired::forget(&session_id);
     net::session::remove(&session_id);
     // Drop the matching mixer input and rebuild any bus it was routed to so the
     // engine releases the phone feed.
+    let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+    let mut inner = state.inner.lock().unwrap();
+    let affected: Vec<BusId> = BusId::ALL
+        .into_iter()
+        .filter(|bus_id| {
+            inner
+                .graph
+                .get_send(&device_id, *bus_id)
+                .map(|send| send.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+    if inner.graph.remove_input(&device_id) {
+        for bus_id in affected {
+            if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+                return Err(store_last_error(&mut inner, err));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The persisted trusted devices for the "Paired devices" management list.
+/// Never includes the token/digest.
+#[tauri::command]
+fn phone_list_paired() -> Vec<net::paired::PairedDeviceStatus> {
+    net::paired::list()
+}
+
+/// Revoke a device from the "Paired devices" list: delete persisted trust so it
+/// cannot auto-reconnect, end any live session (pushes `bye`), and drop its
+/// mixer input. forget-before-remove, same as phone_remove_session.
+#[tauri::command]
+fn phone_forget(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
+    net::paired::forget(&session_id);
+    net::session::remove(&session_id);
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     let mut inner = state.inner.lock().unwrap();
     let affected: Vec<BusId> = BusId::ALL
@@ -1365,6 +1408,25 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .setup(|app| {
+            // pairing-v2 #1 (Phase 2): when a trusted phone auto-resumes, re-add
+            // its mixer-graph input (the graph was reset on restart). The net
+            // layer fires this hook; only the app side can reach AppState's graph.
+            // Mirrors phone_accept_client — a silent passive feed until routed.
+            let resume_handle = app.handle().clone();
+            net::set_resume_hook(Box::new(move |session_id: &str| {
+                let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+                let state = resume_handle.state::<AppState>();
+                let mut inner = state.inner.lock().unwrap();
+                if !inner
+                    .graph
+                    .list_inputs()
+                    .iter()
+                    .any(|c| c.device_id == device_id)
+                {
+                    inner.graph.add_input(&device_id);
+                }
+            }));
+
             // pairing-v2 #1: load the persisted trusted-device store so a
             // returning phone can auto-reconnect (Phase 2 consumes it).
             // Panic-free by contract — any failure leaves an empty store and the
@@ -1434,6 +1496,8 @@ pub fn run() {
             phone_reject_client,
             phone_remove_session,
             phone_set_latency_mode,
+            phone_list_paired,
+            phone_forget,
             phone_get_autostart,
             phone_set_autostart,
         ])

@@ -244,3 +244,18 @@ export interface PhoneSessionCreated {
   port: number;
   urls: string[];
 }
+
+/**
+ * Mirror of `net::paired::PairedDeviceStatus` — a persisted trusted device in
+ * the "Paired devices" list. Never contains the token/digest.
+ */
+export interface PhonePairedDevice {
+  id: string;
+  label: string;
+  clientKind: string | null;
+  clientOs: string | null;
+  /** Unix seconds when first accepted. */
+  createdUtc: number;
+  /** Unix seconds of the most recent successful connect. */
+  lastSeenUtc: number;
+}

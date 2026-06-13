@@ -41,6 +41,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -103,15 +104,18 @@ struct StoreState {
     loaded_ok: bool,
     /// Set when an in-memory `last_seen` was bumped but not yet flushed.
     dirty: bool,
-    /// Bumped on every successful `forget`; Phase 2 uses it to detect a
-    /// revocation that races a resume (TOCTOU).
-    revoke_epoch: u64,
 }
 
 fn state() -> &'static Mutex<StoreState> {
     static S: OnceLock<Mutex<StoreState>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(StoreState::default()))
 }
+
+/// Lock-free revocation counter, bumped on every successful `forget`. Phase 2
+/// captures it before a resume's `verify` and re-checks it under the registry
+/// lock — reading an atomic, NOT the store mutex, so the registry and store
+/// locks are never held simultaneously.
+static REVOKE_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 // ── Hashing ─────────────────────────────────────────────────────────────────
 
@@ -322,7 +326,9 @@ pub fn forget(id: &str) -> bool {
         let mut state = state().lock().unwrap();
         let removed = state.devices.remove(id).is_some();
         if removed {
-            state.revoke_epoch = state.revoke_epoch.wrapping_add(1);
+            // Bump AFTER the in-memory removal so a resume whose `verify` saw the
+            // device observes the higher epoch and aborts.
+            REVOKE_EPOCH.fetch_add(1, Ordering::Relaxed);
         }
         (removed, snapshot_file(&state.devices), state.path.clone())
     };
@@ -349,6 +355,12 @@ pub fn verify(id: &str, token: &str) -> bool {
     }
 }
 
+/// The persisted friendly label for `id`, if trusted. Fallback for a resuming
+/// hello that omits `name`. In-memory; no disk IO.
+pub fn label_of(id: &str) -> Option<String> {
+    state().lock().unwrap().devices.get(id).map(|d| d.label.clone())
+}
+
 /// Snapshot for the UI. No token/digest leaves this module.
 pub fn list() -> Vec<PairedDeviceStatus> {
     let state = state().lock().unwrap();
@@ -370,7 +382,7 @@ pub fn has_trusted_devices() -> bool {
 /// Monotonic revocation counter. Phase 2 captures this before `verify` and
 /// rechecks it under the registry lock to reject a resume that raced a `forget`.
 pub fn revoke_epoch() -> u64 {
-    state().lock().unwrap().revoke_epoch
+    REVOKE_EPOCH.load(Ordering::Relaxed)
 }
 
 /// Record a live resume's recency in memory only (no disk IO on the async path);
@@ -402,18 +414,38 @@ pub fn flush_if_dirty() {
     }
 }
 
+/// Process-wide test lock shared with `session.rs` tests. `accept` now writes
+/// into this store, so any test touching the registry AND this store must
+/// serialize on a single lock to avoid cross-test interference. Both modules
+/// acquire it in the same order (session lock first, then this), so there is no
+/// deadlock.
+#[cfg(test)]
+pub(crate) fn global_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Reset the in-memory store to empty with no backing path (so `upsert`/`forget`
+/// skip disk IO). Caller must already hold `global_test_lock`.
+#[cfg(test)]
+pub(crate) fn reset_for_test() {
+    let mut s = state().lock().unwrap();
+    s.devices.clear();
+    s.path = None;
+    s.loaded_ok = false;
+    s.dirty = false;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// The store is process-global; cargo runs tests in parallel. Each global
-    /// test holds this lock and resets the shared state first.
+    /// test holds the shared lock and resets the shared state first.
     fn setup() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mut s = state().lock().unwrap();
-        *s = StoreState::default();
+        let guard = global_test_lock();
+        reset_for_test();
         guard
     }
 
