@@ -256,15 +256,32 @@ impl LimiterConfig {
     }
 }
 
-/// Neural denoiser backend. Only `Rnnoise` is wired in #37; `DeepFilterNet`
-/// is reserved for the phase-2 upgrade and currently behaves like `Rnnoise`
-/// until its engine lands, so saved configs that name it stay forward-valid.
+/// Neural denoiser backend. `Rnnoise` is the only one actually compiled in.
+/// `DeepFilterNet`'s engine is NOT buildable yet (upstream tract/model blocker —
+/// see denoise.rs and Cargo.toml), so selecting it would silently run as RNNoise.
+/// `DenoiseConfig::clamp()` normalizes an unavailable backend to `Rnnoise` so the
+/// stored/displayed backend never misrepresents what actually runs (#37). Flip
+/// `DEEP_FILTER_NET_AVAILABLE` (and wire the dep) once DFN compiles in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DenoiseBackend {
     #[default]
     Rnnoise,
     DeepFilterNet,
+}
+
+impl DenoiseBackend {
+    /// Whether the DeepFilterNet engine is compiled in. `false` until the
+    /// upstream tract/model blocker is resolved and the `deep_filter` dep wired.
+    pub const DEEP_FILTER_NET_AVAILABLE: bool = false;
+
+    /// Whether this backend's engine is actually available to run on this build.
+    pub fn is_available(self) -> bool {
+        match self {
+            DenoiseBackend::Rnnoise => true,
+            DenoiseBackend::DeepFilterNet => Self::DEEP_FILTER_NET_AVAILABLE,
+        }
+    }
 }
 
 /// Neural noise suppression placed first in the chain (pre-HPF). RNNoise runs
@@ -288,7 +305,13 @@ impl Default for DenoiseConfig {
 
 impl DenoiseConfig {
     pub fn clamp(&mut self) {
-        // No numeric params yet; backend is an enum so it cannot be invalid.
+        // An unavailable backend (DeepFilterNet — not built yet) would silently
+        // run as RNNoise. Normalize it so the stored/displayed backend always
+        // matches what the engine actually runs (#37). Remove once DFN compiles
+        // in. Runs on every IPC/preset path via DspConfig::clamp -> denoise.clamp.
+        if !self.backend.is_available() {
+            self.backend = DenoiseBackend::Rnnoise;
+        }
     }
 }
 
@@ -416,6 +439,24 @@ impl BusDspConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denoise_clamp_normalizes_unavailable_backend() {
+        // DeepFilterNet isn't compiled in (#37), so clamp must rewrite it to
+        // RNNoise rather than persist/display a backend that silently runs as
+        // RNNoise — no silent capability mismatch.
+        assert!(!DenoiseBackend::DeepFilterNet.is_available());
+        assert!(DenoiseBackend::Rnnoise.is_available());
+
+        let mut d = DenoiseConfig { enabled: true, backend: DenoiseBackend::DeepFilterNet };
+        d.clamp();
+        assert_eq!(d.backend, DenoiseBackend::Rnnoise);
+
+        // And it flows through the parent chain clamp.
+        let mut cfg = DspConfig { denoise: DenoiseConfig { enabled: true, backend: DenoiseBackend::DeepFilterNet }, ..DspConfig::default() };
+        cfg.clamp();
+        assert_eq!(cfg.denoise.backend, DenoiseBackend::Rnnoise);
+    }
 
     #[test]
     fn default_chain_is_fully_bypassed() {
