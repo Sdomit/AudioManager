@@ -228,8 +228,33 @@ const LATENCY_LABELS: Record<ipc.PhoneLatencyMode, string> = {
   stable: "Stable",
 };
 
-/** Latency mode selector + a packet-loss readout for a live phone. */
+/** One Opus frame is ~20 ms; the jitter window is the dominant added delay. */
+const FRAME_MS = 20;
+
+type Health = "ok" | "warn" | "bad";
+
+/**
+ * Latency mode selector plus a live health readout: the buffered depth (the
+ * delay we add, from the actual jitter-buffer depth) and a dot driven by the
+ * recent concealment rate (rising drops = a struggling link).
+ */
 function LatencyControl({ session }: { session: PhoneSessionStatus }) {
+  // Sample the cumulative PLC count across polls to derive drops/second.
+  const sample = useRef({ plc: session.plc, at: 0, rate: 0 });
+  const now =
+    typeof performance !== "undefined" ? performance.now() : 0;
+  const s = sample.current;
+  if (s.at === 0) {
+    s.at = now;
+    s.plc = session.plc;
+  } else if (now - s.at > 800) {
+    s.rate = Math.max(0, (session.plc - s.plc) / ((now - s.at) / 1000));
+    s.plc = session.plc;
+    s.at = now;
+  }
+  const health: Health = s.rate >= 5 ? "bad" : s.rate >= 1 ? "warn" : "ok";
+  const bufferedMs = Math.round(session.jitterDepth * FRAME_MS);
+
   return (
     <div className={styles.latencyRow}>
       <div className={styles.latencyModes} role="group" aria-label="Latency mode">
@@ -246,6 +271,13 @@ function LatencyControl({ session }: { session: PhoneSessionStatus }) {
           </button>
         ))}
       </div>
+      <span
+        className={styles.latencyEstimate}
+        title="Buffered audio (added delay) and link health from the recent dropout rate"
+      >
+        <span className={`${styles.healthDot} ${styles[`health_${health}`]}`} aria-hidden />
+        ~{bufferedMs} ms
+      </span>
       {session.plc > 0 && (
         <span className={styles.latencyStat} title="Concealed (lost) audio frames">
           {session.plc} drops
