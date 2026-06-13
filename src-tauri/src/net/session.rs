@@ -529,13 +529,17 @@ pub fn reject(session_id: &str, reason: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove a session entirely (user deleted the input / closed pairing).
-pub fn remove(session_id: &str) {
+/// Remove a session entirely. `reason` is the `bye` pushed to a still-live
+/// phone, and it carries intent: use "session-removed" for a real revoke/kick
+/// (the phone clears its saved creds and drops to the QR screen) and a transient
+/// reason like "disconnected" for a plain disconnect (the phone keeps its trust
+/// and can auto-reconnect later).
+pub fn remove(session_id: &str, reason: &str) {
     let mut reg = registry().lock().unwrap();
     if let Some(s) = reg.remove(session_id) {
         if let Some(tx) = &s.tx {
             let _ = tx.send(ServerMessage::Bye {
-                reason: "session-removed".to_string(),
+                reason: reason.to_string(),
             });
         }
     }

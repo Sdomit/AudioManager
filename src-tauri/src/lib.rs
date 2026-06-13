@@ -653,8 +653,9 @@ fn remove_input(
 
     // Removing a phone input also ends its pairing session so the phone
     // disconnects rather than lingering as an orphaned, routable-again source.
+    // Keep its persisted trust — this is a disconnect, not a revoke.
     if let InputSourceSpec::RemotePhone { session_id } = InputSourceSpec::parse(&device_id) {
-        net::session::remove(&session_id);
+        net::session::remove(&session_id, "disconnected");
     }
 
     inner.last_error = None;
@@ -1315,8 +1316,9 @@ fn phone_reject_client(session_id: String) -> Result<(), EngineError> {
 fn disconnect_phone(
     state: &tauri::State<AppState>,
     session_id: &str,
+    bye_reason: &str,
 ) -> Result<(), EngineError> {
-    net::session::remove(session_id);
+    net::session::remove(session_id, bye_reason);
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     let mut inner = state.inner.lock().unwrap();
     let affected: Vec<BusId> = BusId::ALL
@@ -1350,9 +1352,14 @@ fn revoke_phone(
     session_id: &str,
 ) -> Result<(), EngineError> {
     let durable = net::paired::forget(session_id);
-    disconnect_phone(state, session_id)?;
+    // Kick: "session-removed" tells the phone to clear its saved creds (a plain
+    // disconnect uses "disconnected" and keeps trust).
+    let disconnected = disconnect_phone(state, session_id, "session-removed");
+    // Surface a non-durable revoke FIRST — it is the security-relevant signal
+    // (the device could resurrect from a stale store file) and must not be
+    // swallowed if the disconnect's graph rebuild happens to error.
     durable.map_err(|message| EngineError { message })?;
-    Ok(())
+    disconnected
 }
 
 /// Disconnect a phone session (live "Phones" list / QR refresh). Keeps the
@@ -1362,7 +1369,9 @@ fn phone_remove_session(
     state: tauri::State<AppState>,
     session_id: String,
 ) -> Result<(), EngineError> {
-    disconnect_phone(&state, &session_id)
+    // Plain disconnect: keep trust, transient reason so the phone does NOT wipe
+    // its saved creds (it can auto-reconnect later).
+    disconnect_phone(&state, &session_id, "disconnected")
 }
 
 /// The persisted trusted devices for the "Paired devices" management list.

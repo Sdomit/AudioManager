@@ -433,7 +433,9 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
         ? "Stopped"
         : reason === "missing-pairing"
           ? "Scan the QR code in AudioManager to start"
-          : `Session ended: ${reason ?? "unknown"}`,
+          : reason === "disconnected"
+            ? "Disconnected — reopen this page to reconnect"
+            : `Session ended: ${reason ?? "unknown"}`,
   };
 
   const tone =

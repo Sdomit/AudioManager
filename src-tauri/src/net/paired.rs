@@ -152,9 +152,16 @@ fn persist() -> Result<bool, String> {
         return Ok(false);
     }
     match path {
-        Some(path) => write_store_file(&path, &snapshot)
-            .map(|()| true)
-            .map_err(|e| format!("paired-store write failed: {e}")),
+        Some(path) => match write_store_file(&path, &snapshot) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                // Write failed: re-mark dirty (it was cleared up-front so a
+                // concurrent mutation re-dirties) so a later maintenance/exit
+                // flush retries instead of silently dropping the pending data.
+                state().lock().unwrap().dirty = true;
+                Err(format!("paired-store write failed: {e}"))
+            }
+        },
         None => Ok(false),
     }
 }
