@@ -364,14 +364,18 @@ pub fn handle_hello(
     };
     let epoch = s.conn_epoch;
     let resumed = matches!(outcome, HelloOutcome::ResumeAccepted);
+    // Capture the (possibly renamed) label set above from hello.name so the
+    // store stays in sync, not just the live session row.
+    let label = s.label.clone();
     drop(reg);
-    // Refresh persisted recency on an in-process reconnect too — not only the
-    // store-recovery path (try_resume_trusted). Otherwise an actively-used phone
-    // whose registry entry survived is never re-touched and `maintain()` prunes
-    // it at 30 days, and the UI shows a stale "last seen". Done AFTER releasing
-    // the registry lock: registry and store mutexes are never held together.
+    // Refresh persisted recency + label on an in-process reconnect too — not only
+    // the store-recovery path (try_resume_trusted). Otherwise an actively-used
+    // phone whose registry entry survived is never re-touched and `maintain()`
+    // prunes it at 30 days, the UI shows a stale "last seen", and a rename never
+    // reaches the paired list. Done AFTER releasing the registry lock: registry
+    // and store mutexes are never held together.
     if resumed {
-        super::paired::touch_last_seen(session_id);
+        super::paired::record_resume(session_id, &label);
     }
     (outcome, epoch)
 }
@@ -483,7 +487,7 @@ pub fn try_resume_trusted(
     let session = PhoneSession {
         id: session_id.to_string(),
         token: token.to_string(),
-        label,
+        label: label.clone(),
         state: SessionState::Accepted,
         client_kind: Some(client_kind.to_string()),
         client_os: Some(client_os.to_string()),
@@ -499,8 +503,8 @@ pub fn try_resume_trusted(
     reg.insert(session_id.to_string(), session);
     drop(reg);
 
-    // In-memory recency bump (no disk IO on this async path).
-    super::paired::touch_last_seen(session_id);
+    // In-memory recency + label sync (no disk IO on this async path).
+    super::paired::record_resume(session_id, &label);
     // Re-add the phone's mixer input — the desktop's graph was also reset on
     // restart. The net layer has no graph access, so lib.rs supplies this hook.
     super::fire_resume_hook(session_id);

@@ -399,13 +399,25 @@ pub fn revoke_epoch() -> u64 {
     REVOKE_EPOCH.load(Ordering::Relaxed)
 }
 
-/// Record a live resume's recency in memory only (no disk IO on the async path);
-/// marks the store dirty for a later throttled `flush`. No-op for unknown ids.
-pub fn touch_last_seen(id: &str) {
+/// Record a live resume's recency AND its (possibly renamed) friendly label, in
+/// memory only — no disk IO on the async path; marks the store dirty for a later
+/// flush (maintenance loop or exit). No-op for unknown ids. A non-empty `label`
+/// that differs is written, so a rename after pairing reaches the paired-devices
+/// list and offline resumes — not just the live session row. Pass "" to bump
+/// recency without touching the label.
+pub fn record_resume(id: &str, label: &str) {
     let now = now_utc();
+    let label = label.trim();
     let mut state = state().lock().unwrap();
+    let mut changed = false;
     if let Some(d) = state.devices.get_mut(id) {
         d.last_seen_utc = now;
+        if !label.is_empty() && label != d.label {
+            d.label = label.chars().take(64).collect();
+        }
+        changed = true;
+    }
+    if changed {
         state.dirty = true;
     }
 }
@@ -681,7 +693,7 @@ mod tests {
             created_utc: 0,
             last_seen_utc: 0,
         });
-        touch_last_seen("t"); // bumps to now_utc(), marks dirty (no disk IO)
+        record_resume("t", ""); // bumps to now_utc(), marks dirty (no disk IO)
         flush_if_dirty(); // persists the bump
 
         // Reload from disk: the bumped last_seen survived (and isn't pruned).

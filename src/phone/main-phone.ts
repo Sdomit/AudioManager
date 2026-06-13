@@ -88,9 +88,12 @@ function saveName(name: string) {
 
 const app = document.getElementById("app")!;
 const fromHash = pairingFromHash(location.hash);
-// A fresh QR scan overwrites stale saved creds; otherwise reuse the saved pair.
-if (fromHash) savePairing(fromHash);
 const pairing = fromHash ?? loadSavedPairing();
+// True only when we're relying on PERSISTED creds (no fresh QR this load). A
+// fresh-QR attempt must NOT clear creds saved for another desktop, and is
+// persisted only once that desktop accepts (see the "accepted" case) — so
+// scanning desktop B's QR can't wipe desktop A's saved trust if B rejects.
+const usingSavedCreds = !fromHash && pairing !== null;
 // In-memory device name used for the next hello; edited via the name input.
 let deviceName = loadName() ?? defaultDeviceName();
 
@@ -148,7 +151,9 @@ if (!pairing) {
           machine.dispatch({ kind: "accepted" });
           break;
         case "rejected":
-          clearSavedPairing(); // revoked at the desktop — fall back to QR next load
+          // Only drop creds we were actually relying on; a fresh-QR rejection
+          // must not wipe creds saved for a different desktop.
+          if (usingSavedCreds) clearSavedPairing();
           fail(`rejected: ${msg.reason}`);
           break;
         case "answer":
@@ -162,16 +167,22 @@ if (!pairing) {
           });
           break;
         case "error":
-          // Session is genuinely gone — drop saved creds so the next load shows
-          // the QR prompt instead of retrying dead creds. Other fatal codes
-          // (e.g. busy/version) keep creds: the session may still be valid.
-          if (msg.code === "unknown-session" || msg.code === "bad-token") clearSavedPairing();
+          // Saved creds are genuinely dead — drop them so the next load shows
+          // the QR prompt instead of retrying. Only when we relied on saved
+          // creds (a fresh-QR failure must not wipe another desktop's trust);
+          // other fatal codes (busy/version) keep creds: may still be valid.
+          if (
+            usingSavedCreds &&
+            (msg.code === "unknown-session" || msg.code === "bad-token")
+          ) {
+            clearSavedPairing();
+          }
           if (isFatalErrorCode(msg.code)) fail(`${msg.code}: ${msg.message}`);
           break;
         case "bye":
-          // Only a real removal invalidates creds; transient reasons recover via
-          // the machine's reconnect, so leave creds in place for those.
-          if (msg.reason === "session-removed") clearSavedPairing();
+          // Only a real removal of the creds we relied on invalidates them;
+          // transient reasons recover via the machine's reconnect.
+          if (usingSavedCreds && msg.reason === "session-removed") clearSavedPairing();
           fail(msg.reason);
           break;
         case "latency":

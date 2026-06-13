@@ -1292,19 +1292,16 @@ fn phone_reject_client(session_id: String) -> Result<(), EngineError> {
     net::session::reject(&session_id, "user-declined").map_err(|message| EngineError { message })
 }
 
-/// Shared revoke path for phone_remove_session and phone_forget. Revokes
-/// persisted trust FIRST (forget-before-remove): if the live session were
-/// dropped before the store entry, a reconnect landing in the gap could
-/// auto-resume from the still-present store entry and defeat the kick. Then ends
-/// any live session and drops its mixer input. A non-durable revoke (the disk
-/// write failed) is surfaced AFTER the live kick — the device is gone for this
-/// session, but could resurrect from the stale store file on the next launch,
-/// so the caller must see the error.
-fn revoke_phone(
+/// Disconnect a phone WITHOUT revoking persisted trust: end the live session
+/// (pushes `bye`) and drop its mixer input. The device stays paired and can
+/// auto-reconnect — this is "close this connection", used by the live "Phones"
+/// list and by the pairing sheet when it discards an old QR session. Deliberately
+/// does NOT call paired::forget (see phone_remove_session: that command is reused
+/// for QR refresh, so forgetting here would silently distrust an accepted phone).
+fn disconnect_phone(
     state: &tauri::State<AppState>,
     session_id: &str,
 ) -> Result<(), EngineError> {
-    let durable = net::paired::forget(session_id);
     net::session::remove(session_id);
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     let mut inner = state.inner.lock().unwrap();
@@ -1325,17 +1322,33 @@ fn revoke_phone(
             }
         }
     }
-    drop(inner);
+    Ok(())
+}
+
+/// Revoke a device's persisted trust AND disconnect it (the "Paired devices →
+/// Remove" / kick action). forget-before-remove: revoke the store entry BEFORE
+/// dropping the live session, else a reconnect in the gap could auto-resume from
+/// the still-present entry and defeat the kick. A non-durable revoke (disk write
+/// failed) is surfaced AFTER the live kick — the device is gone this session but
+/// could resurrect from the stale file on next launch, so the caller must see it.
+fn revoke_phone(
+    state: &tauri::State<AppState>,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    let durable = net::paired::forget(session_id);
+    disconnect_phone(state, session_id)?;
     durable.map_err(|message| EngineError { message })?;
     Ok(())
 }
 
+/// Disconnect a phone session (live "Phones" list / QR refresh). Keeps the
+/// device paired — to revoke trust, use phone_forget.
 #[tauri::command]
 fn phone_remove_session(
     state: tauri::State<AppState>,
     session_id: String,
 ) -> Result<(), EngineError> {
-    revoke_phone(&state, &session_id)
+    disconnect_phone(&state, &session_id)
 }
 
 /// The persisted trusted devices for the "Paired devices" management list.
