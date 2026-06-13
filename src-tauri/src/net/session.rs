@@ -53,14 +53,17 @@ impl PhoneStats {
         }
     }
 
-    /// Keep the loudest decoded peak seen until the next snapshot consumes it.
-    pub fn record_peak(&self, peak: f32) {
-        let bits = peak.to_bits();
+    /// Peak meter with instant attack and exponential release per decoded frame
+    /// (~20 ms). Not reset on read, so the UI sees a smooth decaying peak. The
+    /// release is tuned to match the phone's 0.82-per-100 ms meter
+    /// (0.96^5 ≈ 0.82) so the two bars move together.
+    pub fn record_peak(&self, frame_peak: f32) {
         let mut cur = self.peak_bits.load(Ordering::Relaxed);
-        while f32::from_bits(cur) < peak {
+        loop {
+            let next = frame_peak.max(f32::from_bits(cur) * 0.96);
             match self.peak_bits.compare_exchange_weak(
                 cur,
-                bits,
+                next.to_bits(),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -81,12 +84,13 @@ impl PhoneStats {
         self.muted.store(muted, Ordering::Relaxed);
     }
 
-    /// (packets, lost, peak, jitter_depth, plc, muted). Reading the peak resets it.
+    /// (packets, lost, peak, jitter_depth, plc, muted). Peak is the live decaying
+    /// meter value (record_peak owns the release), read without reset.
     fn read(&self) -> (u64, u64, f32, u32, u64, bool) {
         (
             self.packets.load(Ordering::Relaxed),
             self.lost.load(Ordering::Relaxed),
-            f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed)),
+            f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
             self.depth.load(Ordering::Relaxed),
             self.plc.load(Ordering::Relaxed),
             self.muted.load(Ordering::Relaxed),

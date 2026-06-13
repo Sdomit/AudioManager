@@ -81,19 +81,24 @@ export async function startMic(opts: CaptureOptions = DEFAULT_CAPTURE): Promise<
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 512;
   source.connect(analyser);
-  const buf = new Uint8Array(analyser.fftSize);
+  const buf = new Float32Array(analyser.fftSize);
+  // Peak meter: instant attack, exponential release per ~100ms read. Matches the
+  // desktop meter's ballistics (net::session PEAK_RELEASE) so the two bars move
+  // alike. Returns a linear 0..1 amplitude peak; display mapping is the caller's.
+  let held = 0;
 
   return {
     track,
     deviceId: track.getSettings().deviceId ?? "",
     level() {
-      analyser.getByteTimeDomainData(buf);
+      analyser.getFloatTimeDomainData(buf);
       let peak = 0;
       for (let i = 0; i < buf.length; i++) {
-        const a = Math.abs(buf[i] - 128) / 128;
+        const a = Math.abs(buf[i]);
         if (a > peak) peak = a;
       }
-      return peak;
+      held = Math.max(peak, held * 0.82);
+      return Math.min(1, held);
     },
     stop() {
       for (const t of stream.getTracks()) t.stop();

@@ -222,7 +222,7 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
             <div className={styles.levelMeter} aria-hidden>
               <div
                 className={styles.levelFill}
-                style={{ width: `${Math.round(Math.min(1, session.level) * 100)}%` }}
+                style={{ width: `${Math.round((session.muted ? 0 : meterScale(session.level)) * 100)}%` }}
               />
             </div>
             <LatencyControl session={session} />
@@ -269,6 +269,16 @@ const LATENCY_LABELS: Record<ipc.PhoneLatencyMode, string> = {
 
 /** One Opus frame is ~20 ms; the jitter window is the dominant added delay. */
 const FRAME_MS = 20;
+
+/**
+ * Map a linear 0..1 amplitude peak to bar width on a dB scale (-60..0 dB).
+ * Identical to the phone client's meterScale so the two level bars match.
+ */
+function meterScale(peak: number): number {
+  if (peak <= 0.0001) return 0;
+  const db = 20 * Math.log10(Math.min(1, peak));
+  return Math.max(0, Math.min(1, (db + 60) / 60));
+}
 
 type Health = "ok" | "warn" | "bad";
 

@@ -187,7 +187,7 @@ if (!pairing) {
 
   function paintMeter() {
     const fill = app.querySelector<HTMLElement>(".meterFill");
-    if (fill) fill.style.width = `${Math.round(level * 100)}%`;
+    if (fill) fill.style.width = `${Math.round(meterScale(level) * 100)}%`;
   }
 
   function startMeter() {
@@ -298,7 +298,7 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
       <p class="state">${starting ? "Requesting microphone…" : muted && showMeter ? "Muted" : stateLabel[state]}</p>
       ${micError ? `<p class="detail err">${micError}</p>` : ""}
       ${showStart ? `<button id="startBtn" class="btn">Start microphone</button>` : ""}
-      ${showMeter ? `<div class="meter ${muted ? "muted" : ""}"><div class="meterFill" style="width:${Math.round(level * 100)}%"></div></div>` : ""}
+      ${showMeter ? `<div class="meter ${muted ? "muted" : ""}"><div class="meterFill" style="width:${Math.round(meterScale(level) * 100)}%"></div></div>` : ""}
       ${
         showMeter
           ? `<button id="muteBtn" class="btn ${muted ? "danger" : "ghost"}">${muted ? "Unmute" : "Mute"}</button>`
@@ -347,6 +347,18 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
     const micSel = document.getElementById("micSel") as HTMLSelectElement | null;
     if (micSel) micSel.onchange = () => handlers.onPickMic(micSel.value);
   }
+}
+
+/**
+ * Map a linear 0..1 amplitude peak to a 0..1 bar width on a dB scale
+ * (-60 dB..0 dB), so quiet speech reads visibly and the bar tracks perceived
+ * loudness. The desktop meter uses the identical mapping (PhonePairingSheet),
+ * so both bars match.
+ */
+function meterScale(peak: number): number {
+  if (peak <= 0.0001) return 0;
+  const db = 20 * Math.log10(Math.min(1, peak));
+  return Math.max(0, Math.min(1, (db + 60) / 60));
 }
 
 function escapeHtml(s: string): string {
