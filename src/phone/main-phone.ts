@@ -338,8 +338,12 @@ if (!pairing) {
 
   function paintMeter() {
     const arc = app.querySelector<SVGCircleElement>("#meterArc");
+    // Set the inline STYLE property, not the attribute: the arc's initial
+    // stroke-dashoffset lives in its inline style, which always overrides a
+    // presentation attribute — so setAttribute here would be ignored and the
+    // ring would never move. style also lets the CSS transition animate it.
     if (arc) {
-      arc.setAttribute("stroke-dashoffset", String(Math.round(RING_C * (1 - meterScale(level)))));
+      arc.style.strokeDashoffset = String(Math.round(RING_C * (1 - meterScale(level))));
     }
   }
 
