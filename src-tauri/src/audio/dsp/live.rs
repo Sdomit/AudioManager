@@ -826,15 +826,20 @@ mod tests {
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn ftz_flushes_subnormal_results_to_zero() {
+    fn ftz_daz_flush_subnormals_to_zero() {
         use std::hint::black_box;
         enable_flush_denormals();
-        // MIN_POSITIVE is the smallest *normal* f32; *0.25 lands in the subnormal
-        // range, which FTZ flushes to exactly 0. `black_box` blocks const-folding
-        // so the multiply runs on the FPU with the flag live.
-        let tiny = black_box(f32::MIN_POSITIVE);
-        let sub = black_box(tiny * black_box(0.25_f32));
-        assert_eq!(sub, 0.0, "FTZ should flush a subnormal product to zero");
+        // FTZ (subnormal *result* → 0): MIN_POSITIVE is the smallest normal f32;
+        // *0.25 underflows into the subnormal range. `black_box` blocks
+        // const-folding so the multiply runs on the FPU with the flag live.
+        let ftz = black_box(black_box(f32::MIN_POSITIVE) * black_box(0.25_f32));
+        assert_eq!(ftz, 0.0, "FTZ should flush a subnormal product to zero");
+        // DAZ (subnormal *input* → 0): build the denormal via `from_bits` (no
+        // arithmetic, so FTZ can't pre-flush it), then multiply by 1e30. With DAZ
+        // the input is read as 0 → result 0; without DAZ it would be a normal
+        // ~1.4e-15, so a zero result isolates DAZ.
+        let daz = black_box(black_box(f32::from_bits(1)) * black_box(1.0e30_f32));
+        assert_eq!(daz, 0.0, "DAZ should treat a subnormal input as zero");
     }
 
     #[test]
@@ -844,6 +849,8 @@ mod tests {
             [f32::NAN, 1.0, 2.0, 3.0, 4.0],
             [0.5, f32::INFINITY, 0.0, 0.0, 0.0],
             [0.5, 0.0, f32::NEG_INFINITY, 0.0, 0.0],
+            [0.5, 0.0, 0.0, f32::NAN, 0.0],
+            [0.5, 0.0, 0.0, 0.0, f32::INFINITY],
         ] {
             let ab = AtomicBiquad::new();
             ab.store(true, bad);
