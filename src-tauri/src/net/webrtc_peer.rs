@@ -212,6 +212,7 @@ async fn read_track(
             }
         }
         stats.set_jitter(jb.depth() as u32, jb.plc);
+        stats.set_adaptive(jb.adaptive_target() as u32, jb.fec_recovered, jb.reorder);
     }
 }
 

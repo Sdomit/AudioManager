@@ -305,6 +305,17 @@
   color: var(--am-warning);
 }
 
+.adaptiveStat {
+  font-size: var(--am-text-12);
+  color: var(--am-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.weakLink {
+  color: var(--am-danger);
+  font-weight: 600;
+}
+
 .firewallWarn {
   display: flex;
   flex-direction: column;

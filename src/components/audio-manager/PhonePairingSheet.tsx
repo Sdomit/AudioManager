@@ -333,6 +333,16 @@ function LatencyControl({ session }: { session: PhoneSessionStatus }) {
           {session.plc} drops
         </span>
       )}
+      {session.latencyMode === "adaptive" && (
+        <span className={styles.adaptiveStat} title="Podcast mode: FEC recoveries, clock-drift trim">
+          {session.fecRecovered > 0 ? `FEC ${session.fecRecovered} · ` : ""}
+          drift {session.driftPpm > 0 ? "+" : ""}
+          {session.driftPpm} ppm
+          {(session.ringGlitches > 0 || Math.abs(session.driftPpm) >= 300) && (
+            <span className={styles.weakLink}> · weak link</span>
+          )}
+        </span>
+      )}
     </div>
   );
 }

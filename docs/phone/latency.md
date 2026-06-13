@@ -31,6 +31,29 @@ releasing audio at the arrival rate. Larger window = more delay, fewer dropouts.
 | **Fastest** | 1 frame | ~20–40 ms | clean 5/6 GHz WiFi, want minimum delay |
 | **Balanced** (default) | 2 frames | ~40–60 ms | normal voice streaming |
 | **Stable** | 5 frames | ~100–120 ms | weak/busy WiFi, prioritise no dropouts |
+| **Podcast (Adaptive)** | 2–12 frames (auto) | floats with the link | long recordings / lossy WiFi |
+
+### Podcast (Adaptive) mode
+
+An opt-in robust mode that adds three receiver-side features the fixed modes don't
+have. It is the right choice for long podcast recordings and weak WiFi; the fixed
+modes are otherwise unchanged.
+
+- **Adaptive jitter depth** — the window floats in [2, 12] frames: it grows fast on
+  loss and shrinks slowly on a sustained-clean link, so latency stays low when the
+  network is good and only rises while it's troubled.
+- **Opus in-band FEC recovery** — when a packet is lost but its successor has
+  arrived, the lost frame is *reconstructed* from the successor's FEC data instead
+  of being concealed. Recovers real audio on lossy WiFi (the `FEC n` readout counts
+  recoveries).
+- **Clock-drift compensation** — over a long session the phone's and PC's 48 kHz
+  clocks drift apart; the mode trims the playout rate by a few ppm to hold the
+  buffer steady, instead of the periodic glitch the fixed modes get. The `drift
+  ±N ppm` readout shows the live trim; a **weak link** flag appears if the trim
+  saturates (±300 ppm) or the feed is overflowing.
+
+These run only in Adaptive; selecting Fastest/Balanced/Stable is byte-for-byte the
+prior behaviour.
 
 The mixer ring is capped at ~80 ms (`REMOTE_RING_SIZE`) so clock drift or
 arrival bursts cannot silently accumulate latency the way a large ring would.

@@ -148,8 +148,7 @@ impl JitterBuffer {
         self.frames.len()
     }
 
-    /// Current Adaptive-mode window depth (frames). Observability / Phase 3.
-    #[allow(dead_code)] // surfaced in Phase 3
+    /// Current Adaptive-mode window depth (frames). Observability.
     pub fn adaptive_target(&self) -> usize {
         self.adaptive_target
     }

@@ -182,9 +182,7 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adap
             // Resample per interleaved frame so L/R stay paired.
             for frame in samples.chunks_exact(ch) {
                 resampler.process_frame(frame, |out| {
-                    for c in 0..ch {
-                        scratch.push(out[c]);
-                    }
+                    scratch.extend_from_slice(&out[..ch]);
                 });
             }
         }
@@ -228,8 +226,7 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adap
 }
 
 /// Snapshot a session's drift health: (ring_glitches, current trim ppm) of the
-/// first matching feed. None when the session has no feed. Observability (Phase 3).
-#[allow(dead_code)] // surfaced in Phase 3
+/// first matching feed. None when the session has no feed. Observability.
 pub fn drift_stats(session_id: &str) -> Option<(u64, i32)> {
     let prefix = format!("phone:{session_id}@");
     let map = manager().lock().unwrap();

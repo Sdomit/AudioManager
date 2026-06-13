@@ -209,7 +209,7 @@ export interface PhoneSessionStatus {
   /** Decoded peak level 0..1 since the last poll — the "we hear you" meter. */
   level: number;
   /** Active latency mode (Phase 4). */
-  latencyMode: "fastest" | "balanced" | "stable";
+  latencyMode: "fastest" | "balanced" | "stable" | "adaptive";
   /** Current jitter-buffer depth in frames. */
   jitterDepth: number;
   /** Cumulative concealed (PLC) frames — rises on packet loss. */
@@ -222,6 +222,16 @@ export interface PhoneSessionStatus {
   muted: boolean;
   /** Phone is in OS data-saver mode (self-reported). */
   batterySaver: boolean;
+  /** Frames reconstructed via Opus FEC (Adaptive mode). */
+  fecRecovered: number;
+  /** Reordered (out-of-order, in-window) arrivals. */
+  reorder: number;
+  /** Live adaptive jitter window depth in frames. */
+  adaptiveTarget: number;
+  /** Ring-overflow drops on the mixer feed (weak-link indicator). */
+  ringGlitches: number;
+  /** Clock-drift trim currently applied, ppm (signed). */
+  driftPpm: number;
 }
 
 /**

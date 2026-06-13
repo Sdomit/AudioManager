@@ -42,8 +42,29 @@ pub struct PhoneStats {
     plc: AtomicU64,
     /// Phone-reported mute state (from its 1 Hz stats), for a desktop badge.
     muted: AtomicBool,
-    /// Phone-reported OS data-saver state (#44 Phase 2); surfaced in Phase 3.
+    /// Phone-reported OS data-saver state.
     battery_saver: AtomicBool,
+    // ── Adaptive-mode telemetry (Podcast) ──
+    /// Frames reconstructed via Opus in-band FEC.
+    fec_recovered: AtomicU64,
+    /// Reordered arrivals (out-of-order but in-window).
+    reorder: AtomicU64,
+    /// Current adaptive jitter window depth in frames.
+    adaptive_target: AtomicU32,
+}
+
+/// One read of a session's live counters for the pairing sheet.
+struct StatsRead {
+    packets: u64,
+    lost: u64,
+    level: f32,
+    depth: u32,
+    plc: u64,
+    muted: bool,
+    battery_saver: bool,
+    fec_recovered: u64,
+    reorder: u64,
+    adaptive_target: u32,
 }
 
 impl PhoneStats {
@@ -91,18 +112,28 @@ impl PhoneStats {
         self.battery_saver.store(on, Ordering::Relaxed);
     }
 
-    /// (packets, lost, peak, jitter_depth, plc, muted, battery_saver). Peak is the
-    /// live decaying meter value (record_peak owns the release), read without reset.
-    fn read(&self) -> (u64, u64, f32, u32, u64, bool, bool) {
-        (
-            self.packets.load(Ordering::Relaxed),
-            self.lost.load(Ordering::Relaxed),
-            f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
-            self.depth.load(Ordering::Relaxed),
-            self.plc.load(Ordering::Relaxed),
-            self.muted.load(Ordering::Relaxed),
-            self.battery_saver.load(Ordering::Relaxed),
-        )
+    /// Publish the adaptive controller's telemetry (Podcast mode).
+    pub fn set_adaptive(&self, target: u32, fec_recovered: u64, reorder: u64) {
+        self.adaptive_target.store(target, Ordering::Relaxed);
+        self.fec_recovered.store(fec_recovered, Ordering::Relaxed);
+        self.reorder.store(reorder, Ordering::Relaxed);
+    }
+
+    /// Snapshot all counters. Peak is the live decaying meter value
+    /// (record_peak owns the release), read without reset.
+    fn read(&self) -> StatsRead {
+        StatsRead {
+            packets: self.packets.load(Ordering::Relaxed),
+            lost: self.lost.load(Ordering::Relaxed),
+            level: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
+            depth: self.depth.load(Ordering::Relaxed),
+            plc: self.plc.load(Ordering::Relaxed),
+            muted: self.muted.load(Ordering::Relaxed),
+            battery_saver: self.battery_saver.load(Ordering::Relaxed),
+            fec_recovered: self.fec_recovered.load(Ordering::Relaxed),
+            reorder: self.reorder.load(Ordering::Relaxed),
+            adaptive_target: self.adaptive_target.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -181,6 +212,17 @@ pub struct PhoneSessionStatus {
     pub muted: bool,
     /// Phone is in OS data-saver mode (self-reported).
     pub battery_saver: bool,
+    // ── Adaptive-mode telemetry; meaningful when latency_mode == "adaptive" ──
+    /// Frames reconstructed via Opus in-band FEC.
+    pub fec_recovered: u64,
+    /// Reordered (out-of-order, in-window) arrivals.
+    pub reorder: u64,
+    /// Live adaptive jitter window depth in frames.
+    pub adaptive_target: u32,
+    /// Ring-overflow drops on the mixer feed (a "weak link" indicator).
+    pub ring_glitches: u64,
+    /// Clock-drift trim currently applied, in ppm (signed).
+    pub drift_ppm: i32,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
@@ -409,7 +451,9 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
             .map(|d| RECONNECT_GRACE.saturating_sub(d.elapsed()).as_secs()),
         _ => None,
     };
-    let (packets, lost, level, jitter_depth, plc, muted, battery_saver) = s.stats.read();
+    let r = s.stats.read();
+    // Drift health lives on the mixer feed (audio::remote), pulled read-only.
+    let (ring_glitches, drift_ppm) = crate::audio::remote::drift_stats(&s.id).unwrap_or((0, 0));
     PhoneSessionStatus {
         id: s.id.clone(),
         label: s.label.clone(),
@@ -417,19 +461,24 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
         client_kind: s.client_kind.clone(),
         client_os: s.client_os.clone(),
         expires_in_secs,
-        packets,
-        lost,
-        level,
+        packets: r.packets,
+        lost: r.lost,
+        level: r.level,
         latency_mode: LatencyMode::from_u8(s.latency.load(Ordering::Relaxed))
             .as_str()
             .to_string(),
-        jitter_depth,
-        plc,
+        jitter_depth: r.depth,
+        plc: r.plc,
         reconnect_count: s.reconnect_count,
         // We only ever negotiate Opus; report it once media is actually flowing.
-        codec: (packets > 0).then(|| "opus".to_string()),
-        muted,
-        battery_saver,
+        codec: (r.packets > 0).then(|| "opus".to_string()),
+        muted: r.muted,
+        battery_saver: r.battery_saver,
+        fec_recovered: r.fec_recovered,
+        reorder: r.reorder,
+        adaptive_target: r.adaptive_target,
+        ring_glitches,
+        drift_ppm,
     }
 }
 
