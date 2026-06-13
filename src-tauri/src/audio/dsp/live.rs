@@ -755,12 +755,17 @@ impl InputDspSlots {
         }
     }
 
-    /// Block form of [`Self::process`]: same chain order (HPF → Gate → EQ →
-    /// Comp → Limiter) and identical output, but each enabled effect's
-    /// `is_enabled` check is hoisted out of the per-sample loop and its
-    /// `process` is monomorphized (no dispatch per sample). `channels` is
-    /// 1 (mono) or 2 (`[L, R, …]`). `interleaved.len()` must be a multiple of
-    /// `channels`.
+    /// Realtime path. Same chain stages as [`Self::process`] (HPF → Gate → EQ →
+    /// Comp → Limiter) with each enabled effect's `is_enabled` check hoisted out
+    /// of the per-sample loop and its `process` monomorphized (no per-sample
+    /// dispatch). `channels` is 1 (mono) or 2 (`[L, R, …]`); `interleaved.len()`
+    /// must be a multiple of `channels`.
+    ///
+    /// NOT bit-identical to the per-frame [`Self::process`]: this path walks the
+    /// wired `order` and runs the denoiser (the per-frame reference keeps the
+    /// canonical order and omits it), and on x86_64 it enables FTZ/DAZ (see
+    /// [`enable_flush_denormals`]) so a near-silent tail decaying into the
+    /// subnormal range snaps to zero here but lingers in the per-frame path.
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
         enable_flush_denormals();
@@ -871,7 +876,10 @@ impl BusDspSlots {
         }
     }
 
-    /// Block form of [`Self::process`]: same chain order (EQ → Limiter).
+    /// Realtime path: same chain order as [`Self::process`] (EQ → Limiter). Not
+    /// bit-identical to the per-frame reference: on x86_64 this path enables
+    /// FTZ/DAZ (see [`enable_flush_denormals`]), so a near-silent subnormal tail
+    /// snaps to zero here but lingers in [`Self::process`].
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
         enable_flush_denormals();
