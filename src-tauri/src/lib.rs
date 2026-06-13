@@ -201,6 +201,10 @@ fn ensure_input_source(device_id: &str) -> Result<(), EngineError> {
         InputSourceSpec::SystemLoopback
         | InputSourceSpec::Process { .. }
         | InputSourceSpec::ProcessByName { .. } => ensure_loopback_supported(),
+        // Phone sources are platform-agnostic and always valid to register: the
+        // feed is passive (silent until the phone connects), so a stale or
+        // not-yet-connected session is accepted rather than rejected.
+        InputSourceSpec::RemotePhone { .. } => Ok(()),
     }
 }
 
@@ -645,6 +649,12 @@ fn remove_input(
         if let Err(err) = rebuild_bus(&mut inner, bus_id) {
             return Err(store_last_error(&mut inner, err));
         }
+    }
+
+    // Removing a phone input also ends its pairing session so the phone
+    // disconnects rather than lingering as an orphaned, routable-again source.
+    if let InputSourceSpec::RemotePhone { session_id } = InputSourceSpec::parse(&device_id) {
+        net::session::remove(&session_id);
     }
 
     inner.last_error = None;
@@ -1261,8 +1271,20 @@ fn phone_list_sessions() -> Vec<net::session::PhoneSessionStatus> {
 }
 
 #[tauri::command]
-fn phone_accept_client(session_id: String) -> Result<(), EngineError> {
-    net::session::accept(&session_id).map_err(|message| EngineError { message })
+fn phone_accept_client(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
+    net::session::accept(&session_id).map_err(|message| EngineError { message })?;
+    // Surface the phone as a normal mixer input. Adding it to the graph does not
+    // route it anywhere (no sends yet), so no bus rebuild is needed — the user
+    // wires it to buses like any other input.
+    let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
+        inner.graph.add_input(&device_id);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1271,8 +1293,32 @@ fn phone_reject_client(session_id: String) -> Result<(), EngineError> {
 }
 
 #[tauri::command]
-fn phone_remove_session(session_id: String) -> Result<(), EngineError> {
+fn phone_remove_session(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
     net::session::remove(&session_id);
+    // Drop the matching mixer input and rebuild any bus it was routed to so the
+    // engine releases the phone feed.
+    let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+    let mut inner = state.inner.lock().unwrap();
+    let affected: Vec<BusId> = BusId::ALL
+        .into_iter()
+        .filter(|bus_id| {
+            inner
+                .graph
+                .get_send(&device_id, *bus_id)
+                .map(|send| send.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+    if inner.graph.remove_input(&device_id) {
+        for bus_id in affected {
+            if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+                return Err(store_last_error(&mut inner, err));
+            }
+        }
+    }
     Ok(())
 }
 

@@ -207,7 +207,13 @@ async fn handle_socket(socket: WebSocket) {
                                 // and answer. Stats flow into the session so the
                                 // pairing sheet can show a live level meter.
                                 match session::stats_handle(&session_id) {
-                                    Some(stats) => match webrtc_peer::answer_offer(sdp, stats).await {
+                                    Some(stats) => match webrtc_peer::answer_offer(
+                                        session_id.clone(),
+                                        sdp,
+                                        stats,
+                                    )
+                                    .await
+                                    {
                                         Ok((pc, answer_sdp)) => {
                                             peer = Some(pc);
                                             if send(&mut sink, &ServerMessage::Answer { sdp: answer_sdp })

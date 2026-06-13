@@ -28,6 +28,7 @@ use webrtc::rtp_transceiver::rtp_codec::{
 use webrtc::track::track_remote::TrackRemote;
 
 use super::session::PhoneStats;
+use crate::audio::remote;
 
 /// Shared handle to a live peer connection, owned by the ws task.
 pub type Peer = Arc<RTCPeerConnection>;
@@ -38,6 +39,7 @@ const DECODE_BUF_SAMPLES: usize = 48_000 / 1000 * 120;
 /// Build a peer, answer the phone's offer, and start decoding its track.
 /// Returns the peer (keep it alive for the call's duration) and the answer SDP.
 pub async fn answer_offer(
+    session_id: String,
     offer_sdp: String,
     stats: Arc<PhoneStats>,
 ) -> Result<(Peer, String), String> {
@@ -78,8 +80,9 @@ pub async fn answer_offer(
     let stats_for_track = Arc::clone(&stats);
     pc.on_track(Box::new(move |track, _receiver, _transceiver| {
         let stats = Arc::clone(&stats_for_track);
+        let sid = session_id.clone();
         Box::pin(async move {
-            tokio::spawn(read_track(track, stats));
+            tokio::spawn(read_track(sid, track, stats));
         })
     }));
 
@@ -124,8 +127,9 @@ pub async fn add_remote_candidate(
     .map_err(|e| format!("add candidate: {e}"))
 }
 
-/// Read RTP, decode Opus, and update receive counters until the track ends.
-async fn read_track(track: Arc<TrackRemote>, stats: Arc<PhoneStats>) {
+/// Read RTP, decode Opus, push the PCM into the mixer feed, and update receive
+/// counters until the track ends.
+async fn read_track(session_id: String, track: Arc<TrackRemote>, stats: Arc<PhoneStats>) {
     let mut decoder = match Decoder::new(SampleRate::Hz48000, Channels::Mono) {
         Ok(d) => d,
         Err(e) => {
@@ -179,6 +183,9 @@ async fn read_track(track: Arc<TrackRemote>, stats: Arc<PhoneStats>) {
                 }
             }
             stats.record_peak(peak);
+            // Feed the mixer (Phase 3). No-op until the phone input is routed to
+            // a running bus and has subscribed.
+            remote::push_decoded_48k(&session_id, &pcm[..samples], peak);
         }
     }
 }
