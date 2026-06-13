@@ -442,6 +442,7 @@ export function AudioManager() {
               am.setBusMuted(id, !bus.muted);
             }}
             onBusBufferSizeChange={am.setBusBufferSize}
+            onBusLatencyModeChange={am.setBusLatencyMode}
             onBusLimiterChange={am.setBusLimiter}
             onBusEqChange={am.setBusEq}
             onPickDevice={(id) => setBusPickerFor(id)}

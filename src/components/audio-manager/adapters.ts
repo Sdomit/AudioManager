@@ -78,6 +78,7 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
     clipUntil: b.clipped_recently ? Date.now() + 2400 : null,
     error: b.last_error,
     bufferSizeFrames: b.buffer_size_frames ?? null,
+    latencyMode: b.latency_mode ?? null,
     underruns: b.underruns ?? 0,
     overruns: b.overruns ?? 0,
     eq: b.dsp?.eq ?? defaultEq(),
