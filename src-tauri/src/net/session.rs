@@ -15,13 +15,64 @@
 //! Tauri state. Tokens are uuid-v4 (122 bits); they are never logged.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::signaling::ServerMessage;
+
+/// Live receive counters for one phone session, written by the WebRTC reader
+/// task (net::webrtc_peer) and read by the pairing sheet via IPC. Atomics keep
+/// the realtime decode path lock-free; the audio thread never touches this.
+#[derive(Default)]
+pub struct PhoneStats {
+    pub packets: AtomicU64,
+    pub bytes: AtomicU64,
+    pub lost: AtomicU64,
+    /// Most recent decoded block peak as f32 bits; reset to 0 on snapshot read
+    /// so the sheet shows a "since last poll" meter rather than an all-time max.
+    peak_bits: AtomicU32,
+}
+
+impl PhoneStats {
+    pub fn record_packet(&self, bytes: usize, lost: u64) {
+        self.packets.fetch_add(1, Ordering::Relaxed);
+        self.bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+        if lost > 0 {
+            self.lost.fetch_add(lost, Ordering::Relaxed);
+        }
+    }
+
+    /// Keep the loudest decoded peak seen until the next snapshot consumes it.
+    pub fn record_peak(&self, peak: f32) {
+        let bits = peak.to_bits();
+        let mut cur = self.peak_bits.load(Ordering::Relaxed);
+        while f32::from_bits(cur) < peak {
+            match self.peak_bits.compare_exchange_weak(
+                cur,
+                bits,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(c) => cur = c,
+            }
+        }
+    }
+
+    /// (packets, bytes, lost, peak). Reading the peak resets it to 0.
+    fn read(&self) -> (u64, u64, u64, f32) {
+        (
+            self.packets.load(Ordering::Relaxed),
+            self.bytes.load(Ordering::Relaxed),
+            self.lost.load(Ordering::Relaxed),
+            f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed)),
+        )
+    }
+}
 
 /// Pairing window for a session nobody has connected to yet.
 pub const UNPAIRED_TTL: Duration = Duration::from_secs(10 * 60);
@@ -58,6 +109,9 @@ pub struct PhoneSession {
     /// Monotonic id of the attached connection; a stale ws task must not
     /// clear state written by its replacement.
     pub conn_epoch: u64,
+    /// Receive counters, shared with the WebRTC reader task (Phase 2). Survives
+    /// reconnects so the meter is continuous across a dropped socket.
+    pub stats: Arc<PhoneStats>,
 }
 
 /// Snapshot for IPC / the pairing sheet. Token intentionally absent.
@@ -70,6 +124,12 @@ pub struct PhoneSessionStatus {
     pub client_kind: Option<String>,
     pub client_os: Option<String>,
     pub expires_in_secs: Option<u64>,
+    /// RTP packets received since the session connected (Phase 2). 0 until media flows.
+    pub packets: u64,
+    /// Estimated lost packets from RTP sequence gaps.
+    pub lost: u64,
+    /// Decoded peak level (0..1) since the last poll — drives the "we hear you" meter.
+    pub level: f32,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
@@ -99,6 +159,7 @@ pub fn create_session(label: Option<String>) -> (String, String) {
         token_failures: 0,
         tx: None,
         conn_epoch: 0,
+        stats: Arc::new(PhoneStats::default()),
     };
     registry().lock().unwrap().insert(id.clone(), session);
     (id, token)
@@ -279,6 +340,7 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
             .map(|d| RECONNECT_GRACE.saturating_sub(d.elapsed()).as_secs()),
         _ => None,
     };
+    let (packets, _bytes, lost, level) = s.stats.read();
     PhoneSessionStatus {
         id: s.id.clone(),
         label: s.label.clone(),
@@ -286,7 +348,20 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
         client_kind: s.client_kind.clone(),
         client_os: s.client_os.clone(),
         expires_in_secs,
+        packets,
+        lost,
+        level,
     }
+}
+
+/// Clone the stats handle for a session so the WebRTC reader task can update
+/// counters without holding the registry lock. None if the session is gone.
+pub fn stats_handle(session_id: &str) -> Option<Arc<PhoneStats>> {
+    registry()
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .map(|s| Arc::clone(&s.stats))
 }
 
 /// Advance time-driven transitions. Called opportunistically from every

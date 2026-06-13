@@ -178,6 +178,14 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
       <div className={styles.sessionText}>
         <div className={styles.sessionLabel}>{session.label}</div>
         <div className={styles.sessionMeta}>{describe(session)}</div>
+        {session.state === "accepted" && (
+          <div className={styles.levelMeter} aria-hidden>
+            <div
+              className={styles.levelFill}
+              style={{ width: `${Math.round(Math.min(1, session.level) * 100)}%` }}
+            />
+          </div>
+        )}
       </div>
       <div className={styles.sessionActions}>
         {session.state === "pending-accept" && (
@@ -234,7 +242,7 @@ function describe(s: PhoneSessionStatus): string {
     case "pending-accept":
       return `Wants to join${device}`;
     case "accepted":
-      return `Paired${device}`;
+      return s.packets > 0 ? `Paired${device} · hearing audio` : `Paired${device} · waiting for audio`;
     case "reconnecting":
       return s.expiresInSecs != null
         ? `Reconnecting · ${formatSecs(s.expiresInSecs)} grace left`

@@ -56,3 +56,10 @@ wasapi = "0.23"
 # Resolve session PIDs to process image names for the app picker (#16).
 sysinfo = "0.39"
 
+# audiopus_sys builds libopus via cmake; at opt-level 0 cmake-rs picks the DEBUG
+# MSVC runtime (MSVCRTD), which Rust does not link, giving `_CrtDbgReportW`
+# unresolved-symbol link errors. Forcing opt-level >= 1 makes cmake build with
+# the release runtime (RelWithDebInfo) so the CRT matches — and decodes faster.
+[profile.dev.package.audiopus_sys]
+opt-level = 2
+

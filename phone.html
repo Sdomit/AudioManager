@@ -33,6 +33,24 @@
       .card h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
       .state { font-size: 15px; color: #b6bcc4; }
       .detail { font-size: 13px; color: #7c828b; line-height: 1.5; }
+      .detail.err { color: #f87171; }
+      .btn {
+        appearance: none; border: 0; border-radius: 10px;
+        padding: 14px 22px; font-size: 16px; font-weight: 600;
+        background: #2563eb; color: #fff; cursor: pointer;
+        touch-action: manipulation; min-width: 200px;
+      }
+      .btn:active { opacity: 0.85; }
+      .btn.ghost { background: #1b1e24; color: #b6bcc4; font-weight: 500; }
+      .meter {
+        width: 220px; height: 12px; border-radius: 6px;
+        background: #1b1e24; overflow: hidden;
+      }
+      .meterFill {
+        height: 100%; width: 0%;
+        background: linear-gradient(90deg, #22c55e, #84cc16 70%, #f59e0b);
+        transition: width 80ms linear;
+      }
       .dot { width: 14px; height: 14px; border-radius: 50%; }
       .dot.idle { background: #7c828b; animation: pulse 1.4s ease-in-out infinite; }
       .dot.warn { background: #f59e0b; animation: pulse 1.4s ease-in-out infinite; }

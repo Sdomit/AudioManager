@@ -8,6 +8,7 @@ pub mod server;
 pub mod session;
 pub mod signaling;
 pub mod tls;
+pub mod webrtc_peer;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;

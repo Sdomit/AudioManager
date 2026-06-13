@@ -200,6 +200,12 @@ export interface PhoneSessionStatus {
   clientKind: string | null;
   clientOs: string | null;
   expiresInSecs: number | null;
+  /** RTP packets received since connect (Phase 2); 0 until audio flows. */
+  packets: number;
+  /** Estimated lost packets from RTP sequence gaps. */
+  lost: number;
+  /** Decoded peak level 0..1 since the last poll — the "we hear you" meter. */
+  level: number;
 }
 
 /**

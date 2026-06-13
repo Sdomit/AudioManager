@@ -248,3 +248,19 @@
   border: 1px solid var(--am-border-default);
 }
 .secondaryBtn:hover { color: var(--am-text-primary); }
+
+/* ── Live receive meter (Phase 2) ───────────────────────────────── */
+.levelMeter {
+  margin-top: var(--am-space-2);
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--am-surface-3);
+  overflow: hidden;
+}
+.levelFill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--am-success), #84cc16 70%, var(--am-warning));
+  transition: width 120ms linear;
+}

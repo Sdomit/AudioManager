@@ -18,6 +18,7 @@ use super::signaling::{
     encode_server_message, parse_client_message, ClientMessage, ProtocolError, ServerMessage,
     ServerInfo,
 };
+use super::webrtc_peer;
 
 #[derive(RustEmbed)]
 #[folder = "../dist-phone/"]
@@ -179,6 +180,8 @@ async fn handle_socket(socket: WebSocket) {
     }
 
     // Steady state: relay queued outbound messages and dispatch inbound ones.
+    // `peer` is the WebRTC receiver, created when the phone sends its offer.
+    let mut peer: Option<webrtc_peer::Peer> = None;
     loop {
         tokio::select! {
             outbound = out_rx.recv() => {
@@ -199,13 +202,52 @@ async fn handle_socket(socket: WebSocket) {
                             Ok(ClientMessage::Hello { .. }) => {
                                 // Duplicate hello on a live socket: ignore.
                             }
-                            Ok(ClientMessage::Offer { .. })
-                            | Ok(ClientMessage::Candidate { .. }) => {
-                                // Phase 1 has no media stack; Phase 2 routes
-                                // these to net::webrtc_peer.
+                            Ok(ClientMessage::Offer { sdp }) => {
+                                // Build (or rebuild, on renegotiation) the receiver
+                                // and answer. Stats flow into the session so the
+                                // pairing sheet can show a live level meter.
+                                match session::stats_handle(&session_id) {
+                                    Some(stats) => match webrtc_peer::answer_offer(sdp, stats).await {
+                                        Ok((pc, answer_sdp)) => {
+                                            peer = Some(pc);
+                                            if send(&mut sink, &ServerMessage::Answer { sdp: answer_sdp })
+                                                .await
+                                                .is_err()
+                                            {
+                                                break;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[phone] webrtc answer failed: {e}");
+                                            let _ = send(
+                                                &mut sink,
+                                                &ServerMessage::error("webrtc", "could not start audio"),
+                                            )
+                                            .await;
+                                        }
+                                    },
+                                    None => break, // session vanished mid-handshake
+                                }
+                            }
+                            Ok(ClientMessage::Candidate {
+                                candidate,
+                                sdp_mid,
+                                sdp_m_line_index,
+                            }) => {
+                                if let Some(pc) = &peer {
+                                    let _ = webrtc_peer::add_remote_candidate(
+                                        pc,
+                                        candidate,
+                                        sdp_mid,
+                                        sdp_m_line_index.map(|i| i as u16),
+                                    )
+                                    .await;
+                                }
                             }
                             Ok(ClientMessage::Stats { .. }) => {
-                                // Phase 2 surfaces these in the pairing sheet.
+                                // Phone-reported mic level / visibility — desktop
+                                // derives its own meter from decoded audio, so
+                                // these are advisory only for now.
                             }
                             Ok(ClientMessage::Bye { .. }) => break,
                             Err(ProtocolError::Version { got }) => {
@@ -233,6 +275,9 @@ async fn handle_socket(socket: WebSocket) {
         }
     }
 
+    if let Some(pc) = peer {
+        let _ = pc.close().await;
+    }
     session::handle_disconnect(&session_id, epoch);
 }
 

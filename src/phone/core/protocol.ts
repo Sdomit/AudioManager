@@ -92,6 +92,24 @@ export function helloMessage(
   };
 }
 
+export function offerMessage(sdp: string): ClientOffer {
+  return { v: PROTOCOL_VERSION, type: "offer", sdp };
+}
+
+export function candidateMessage(c: RTCIceCandidateInit): ClientCandidate {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "candidate",
+    candidate: c.candidate ?? "",
+    sdpMid: c.sdpMid ?? null,
+    sdpMLineIndex: c.sdpMLineIndex ?? null,
+  };
+}
+
+export function statsMessage(micLevel: number, visible: boolean): ClientStats {
+  return { v: PROTOCOL_VERSION, type: "stats", micLevel, visible };
+}
+
 export function byeMessage(reason: string): ClientBye {
   return { v: PROTOCOL_VERSION, type: "bye", reason };
 }
