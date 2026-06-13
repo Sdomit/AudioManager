@@ -140,8 +140,13 @@ async fn handle_socket(socket: WebSocket) {
             .await;
             return;
         }
-        HelloOutcome::BadToken { .. } => {
-            let _ = send(&mut sink, &ServerMessage::error("bad-token", "token mismatch")).await;
+        HelloOutcome::BadToken { session_invalidated } => {
+            let detail = if session_invalidated {
+                "too many bad tokens — session invalidated, pair again"
+            } else {
+                "token mismatch"
+            };
+            let _ = send(&mut sink, &ServerMessage::error("bad-token", detail)).await;
             return;
         }
         HelloOutcome::Busy => {

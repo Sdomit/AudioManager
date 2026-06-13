@@ -120,13 +120,22 @@ any state ──rejected / bad-token / unknown-session / bye──▶ ended (ter
 
 ## Security requirements (normative)
 
+Implemented in Phase 1:
+
 - Pairing URL format: `https://<lan-ip>:<port>/#s=<session>&t=<token>` — credentials live
   in the **fragment**, which browsers never send in HTTP request lines, so they cannot
   appear in server/access logs.
-- Token: uuid v4 (122 bits). Compared via constant-time hash equality. 5 failures
-  invalidate the session. Never logged; SDP bodies and candidates log at debug only.
+- Token: uuid v4 (122 bits). 5 consecutive failures invalidate the session; a correct
+  token clears the strike count so a second LAN device cannot grief a session by burning
+  attempts across reconnects. Never logged; SDP bodies and candidates log at debug only.
 - Unused sessions expire 10 minutes after creation. Accepted sessions live until removed
   by the user or app exit.
 - One live peer per session. Multi-phone = multiple sessions, each its own QR + accept.
-- WS handshake rate limit per source IP; pre-hello byte cap (1 KB); idle WS timeout.
+- Pre-hello byte cap (2 KB) on the first frame; first frame must be a valid `hello`.
 - The desktop user must explicitly accept each new device before any media is negotiated.
+
+Deferred to Phase 5 (#44) — see `decisions.md`:
+
+- Constant-time token comparison (Phase 1 uses ordinary equality on the 122-bit token).
+- WS handshake rate limit per source IP.
+- Idle WS timeout on authenticated-but-silent sockets.

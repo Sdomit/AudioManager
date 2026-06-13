@@ -139,6 +139,10 @@ pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
                 return Ok(port);
             }
             Ok(None) => {
+                // The serve task already returned (that is why listening()
+                // resolved None); shutdown() is belt-and-suspenders so no bound
+                // task can survive to the next iteration.
+                handle.shutdown();
                 last_err = format!("port {port} unavailable");
                 continue;
             }

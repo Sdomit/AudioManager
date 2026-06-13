@@ -146,6 +146,11 @@ pub fn handle_hello(
             0,
         );
     }
+    // Correct token from the QR holder clears the strike count: failures are
+    // meant to count consecutive bad guesses against a still-unpaired session,
+    // not to let a second device on the LAN grief a session by burning attempts
+    // across reconnects.
+    s.token_failures = 0;
     // Single-peer rule: a healthy attached connection blocks a second hello.
     if s.tx.as_ref().is_some_and(|t| !t.is_closed())
         && matches!(
@@ -196,6 +201,7 @@ pub fn handle_disconnect(session_id: &str, epoch: u64) {
         }
         SessionState::PendingAccept => {
             s.state = SessionState::Created;
+            s.token_failures = 0;
         }
         _ => {}
     }
@@ -367,6 +373,35 @@ mod tests {
         // Unrelated session unaffected.
         let (outcome, _, _rx) = hello(&sid2, &token2);
         assert!(matches!(outcome, HelloOutcome::PendingAccept));
+    }
+
+    #[test]
+    fn correct_token_clears_strikes_so_session_survives() {
+        let _g = setup();
+        let (sid, token) = create_session(None);
+        // Four bad guesses (one short of invalidation), as a griefing peer might.
+        for _ in 1..MAX_TOKEN_ATTEMPTS {
+            let (outcome, _, _rx) = hello(&sid, "wrong");
+            assert!(matches!(outcome, HelloOutcome::BadToken { .. }));
+        }
+        // The real QR holder connects with the correct token: strikes reset.
+        let (outcome, epoch, _rx) = hello(&sid, &token);
+        assert!(matches!(outcome, HelloOutcome::PendingAccept));
+        // Pre-accept drop returns to Created and must NOT carry stale strikes.
+        handle_disconnect(&sid, epoch);
+        assert_eq!(status(&sid).unwrap().state, SessionState::Created);
+        // A fresh round of four bad guesses again does not invalidate, proving
+        // the counter was cleared rather than merely paused.
+        for _ in 1..MAX_TOKEN_ATTEMPTS {
+            let (outcome, _, _rx) = hello(&sid, "wrong");
+            match outcome {
+                HelloOutcome::BadToken { session_invalidated } => {
+                    assert!(!session_invalidated)
+                }
+                _ => panic!("expected BadToken"),
+            }
+        }
+        assert!(status(&sid).is_some());
     }
 
     #[test]
