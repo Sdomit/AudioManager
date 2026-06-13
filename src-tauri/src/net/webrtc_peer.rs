@@ -1,22 +1,21 @@
 //! WebRTC receiver for the phone's microphone track.
 //!
-//! The inbound Opus RTP is split into two tasks (#43):
-//!   * a **reader** that drains `read_rtp` into a [`JitterBuffer`] (reordering,
-//!     duplicate/late dropping), and
-//!   * a **feeder** that ticks once per frame-time, asks the buffer to play /
-//!     conceal / idle, decodes (Opus PLC on conceal), and pushes PCM into the
-//!     mixer feed (`audio::remote`) plus the meter/stat counters.
+//! The inbound Opus RTP track is read in one task (#43): each packet goes into a
+//! [`JitterBuffer`] for reordering / loss detection, then we drain the surplus
+//! beyond the mode's hold window — decoding (Opus PLC on a gap) and pushing PCM
+//! into the mixer feed (`audio::remote`) plus the meter/stat counters.
 //!
-//! Decoupling arrival from playout is what absorbs WiFi jitter; the buffered
-//! depth is set by the session's [`LatencyMode`] and can change live.
+//! Output is paced by arrivals, not a separate clock: the mixer's ring (drained
+//! at 48 kHz) is the playout buffer, so there is no wall-clock feeder to drift
+//! against the audio clock. The held window is set by the session's
+//! [`LatencyMode`] and can change live.
 //!
 //! ICE is non-trickle on our side: we gather fully, then return an answer with
 //! candidates embedded (simplest correct flow on a LAN). The phone may still
 //! trickle its candidates to us; `add_remote_candidate` feeds those in.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 
 use audiopus::coder::Decoder;
 use audiopus::packet::Packet;
@@ -43,9 +42,6 @@ pub type Peer = Arc<RTCPeerConnection>;
 
 /// Opus runs at 48 kHz; 120 ms is the largest frame we will be asked to decode.
 const DECODE_BUF_SAMPLES: usize = 48_000 / 1000 * 120;
-
-/// Feeder cadence — one Opus frame-time. Browsers default to 20 ms frames.
-const FRAME_MS: u64 = 20;
 
 /// Build a peer, answer the phone's offer, and start decoding its track.
 /// Returns the peer (keep it alive for the call's duration) and the answer SDP.
@@ -140,73 +136,25 @@ pub async fn add_remote_candidate(
     .map_err(|e| format!("add candidate: {e}"))
 }
 
-/// Read RTP into the jitter buffer (reader) while a feeder task plays it out at
-/// frame-rate. Returns when the track ends; the feeder is stopped and joined.
+/// Read RTP, reorder/conceal via the jitter buffer, decode, and push PCM into the
+/// mixer feed. One task; output is paced by arrivals. Returns when the track ends.
 async fn read_track(
     session_id: String,
     track: Arc<TrackRemote>,
     stats: Arc<PhoneStats>,
     latency: Arc<AtomicU8>,
 ) {
-    let jb = Arc::new(Mutex::new(JitterBuffer::new()));
-    let stop = Arc::new(AtomicBool::new(false));
-
-    let feeder = {
-        let jb = Arc::clone(&jb);
-        let stats = Arc::clone(&stats);
-        let latency = Arc::clone(&latency);
-        let stop = Arc::clone(&stop);
-        let sid = session_id.clone();
-        tokio::spawn(async move {
-            let mut decoder = match Decoder::new(SampleRate::Hz48000, Channels::Mono) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("[phone] opus decoder init failed: {e}");
-                    return;
-                }
-            };
-            let mut pcm = vec![0.0f32; DECODE_BUF_SAMPLES];
-            let mut interval = tokio::time::interval(Duration::from_millis(FRAME_MS));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-            loop {
-                interval.tick().await;
-                if stop.load(Ordering::Acquire) {
-                    break;
-                }
-                let target = LatencyMode::from_u8(latency.load(Ordering::Relaxed)).target_frames();
-                let (action, depth, plc) = {
-                    let mut g = jb.lock().unwrap();
-                    let a = g.tick(target);
-                    (a, g.depth() as u32, g.plc)
-                };
-                stats.set_jitter(depth, plc);
-
-                let decoded = match action {
-                    Tick::Decode(payload) => match Packet::try_from(&payload[..]) {
-                        Ok(pkt) => decode_into(&mut decoder, Some(pkt), &mut pcm),
-                        Err(_) => None,
-                    },
-                    Tick::Conceal => decode_into(&mut decoder, None, &mut pcm),
-                    Tick::Idle => None,
-                };
-
-                if let Some(n) = decoded {
-                    let mut peak = 0.0f32;
-                    for &s in &pcm[..n] {
-                        let a = s.abs();
-                        if a > peak {
-                            peak = a;
-                        }
-                    }
-                    stats.record_peak(peak);
-                    remote::push_decoded_48k(&sid, &pcm[..n], peak);
-                }
-            }
-        })
+    let mut decoder = match Decoder::new(SampleRate::Hz48000, Channels::Mono) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[phone] opus decoder init failed: {e}");
+            return;
+        }
     };
-
+    let mut pcm = vec![0.0f32; DECODE_BUF_SAMPLES];
+    let mut jb = JitterBuffer::new();
     let mut last_seq: Option<u16> = None;
+
     loop {
         let (packet, _attrs) = match track.read_rtp().await {
             Ok(v) => v,
@@ -230,11 +178,31 @@ async fn read_track(
         };
         last_seq = Some(seq);
         stats.record_packet(payload.len(), lost);
-        jb.lock().unwrap().insert(seq, payload.to_vec());
-    }
 
-    stop.store(true, Ordering::Release);
-    let _ = feeder.await;
+        jb.insert(seq, payload.to_vec());
+        let target = LatencyMode::from_u8(latency.load(Ordering::Relaxed)).target_frames();
+        while let Some(action) = jb.drain_one(target) {
+            let decoded = match action {
+                Tick::Decode(p) => match Packet::try_from(&p[..]) {
+                    Ok(pkt) => decode_into(&mut decoder, Some(pkt), &mut pcm),
+                    Err(_) => None,
+                },
+                Tick::Conceal => decode_into(&mut decoder, None, &mut pcm),
+            };
+            if let Some(n) = decoded {
+                let mut peak = 0.0f32;
+                for &s in &pcm[..n] {
+                    let a = s.abs();
+                    if a > peak {
+                        peak = a;
+                    }
+                }
+                stats.record_peak(peak);
+                remote::push_decoded_48k(&session_id, &pcm[..n], peak);
+            }
+        }
+        stats.set_jitter(jb.depth() as u32, jb.plc);
+    }
 }
 
 /// Decode one frame (or conceal when `input` is None) into `pcm`; returns the

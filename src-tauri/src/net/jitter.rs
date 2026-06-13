@@ -1,15 +1,17 @@
 //! Reorder + jitter buffer for the phone's Opus RTP stream (#43).
 //!
 //! The WebRTC reader drops each arriving RTP payload in via [`JitterBuffer::insert`]
-//! (out of order is fine). A separate feeder task calls [`JitterBuffer::tick`] once
-//! per frame-time (~20 ms) and gets back exactly one action: play a frame, conceal
-//! a gap with Opus PLC, or idle while priming/underrunning. Decoupling arrival from
-//! playout this way absorbs network jitter; the depth we prime/maintain trades
-//! latency against dropout resilience and is set by [`LatencyMode`].
+//! (out of order is fine), then drains with [`JitterBuffer::drain_one`] until it
+//! returns `None`. Draining releases at most one frame per call and holds a
+//! `target`-frame reorder window, so it emits at the *arrival* rate — the mixer's
+//! ring (drained at 48 kHz) is the actual playout clock. There is deliberately no
+//! separate wall-clock feeder: a second clock drifting against the audio clock is
+//! exactly what produces runaway concealment.
 //!
-//! Sequence numbers are 16-bit and wrap; we extend them to a monotonic 64-bit key
-//! so the `BTreeMap` orders correctly across the wrap and late/duplicate frames are
-//! dropped cleanly.
+//! The held window trades latency against reorder/loss tolerance and is set by
+//! [`LatencyMode`]. Sequence numbers are 16-bit and wrap; we extend them to a
+//! monotonic 64-bit key so the `BTreeMap` orders correctly across the wrap and
+//! late/duplicate frames are dropped cleanly.
 
 use std::collections::BTreeMap;
 
@@ -56,30 +58,26 @@ impl LatencyMode {
         }
     }
 
-    /// Frames (~20 ms each) to buffer before and during playout.
+    /// Reorder/jitter window held before release, in ~20 ms frames. The mixer
+    /// ring adds only a few ms on top, so these set the dominant added latency:
+    /// Fastest ~20 ms, Balanced ~40 ms, Stable ~100 ms.
     pub fn target_frames(self) -> usize {
         match self {
             LatencyMode::Fastest => 1,
-            LatencyMode::Balanced => 3,
-            LatencyMode::Stable => 6,
+            LatencyMode::Balanced => 2,
+            LatencyMode::Stable => 5,
         }
     }
 }
 
-/// What the feeder should do for one frame-time.
+/// One released playout step.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Tick {
     /// Decode and play this Opus payload.
     Decode(Vec<u8>),
-    /// Expected frame is missing but later audio is queued: run Opus PLC.
+    /// A frame was lost (gap); run Opus PLC for one frame to bridge it.
     Conceal,
-    /// Priming or underrunning: emit nothing this tick (ring plays silence).
-    Idle,
 }
-
-/// Frames kept beyond the target before we start dropping the oldest, so normal
-/// jitter doesn't trigger drops but sustained over-fill (clock drift) is bounded.
-const HYSTERESIS: usize = 2;
 
 /// Start extended sequences well above 0 so the first wrap-backwards can't underflow.
 const INITIAL_EXT: u64 = 1 << 32;
@@ -88,7 +86,7 @@ pub struct JitterBuffer {
     frames: BTreeMap<u64, Vec<u8>>,
     /// Highest extended sequence seen, for extending the next 16-bit seq.
     highest: Option<u64>,
-    /// Next extended sequence to play; set once primed.
+    /// Next extended sequence to play; set once the window first fills.
     next: Option<u64>,
     started: bool,
     pub plc: u64,
@@ -135,49 +133,33 @@ impl JitterBuffer {
         self.frames.insert(ext, payload);
     }
 
-    /// Advance one frame-time. `target` is the mode's buffered-frame goal.
-    pub fn tick(&mut self, target: usize) -> Tick {
-        let target = target.max(1);
-
-        // Bound playout latency: sustained over-fill (a burst, or feeder/clock
-        // drift) drops the oldest queued frames back toward the target.
-        while self.frames.len() > target + HYSTERESIS {
-            if let Some((&k, _)) = self.frames.iter().next() {
-                self.frames.remove(&k);
-                self.late_drops += 1;
-                if self.next == Some(k) {
-                    self.next = Some(k + 1);
-                }
-            } else {
-                break;
-            }
+    /// Release at most one frame for playout, holding a `target`-frame reorder
+    /// window. Call in a loop after each `insert` until it returns `None`:
+    /// in steady state one frame in releases one frame out, so output is paced
+    /// by arrivals (the ring/mixer is the real playout clock). Returns `None`
+    /// while the window is still filling or has drained back to the hold depth.
+    pub fn drain_one(&mut self, target: usize) -> Option<Tick> {
+        // Hold `target` frames as reorder/jitter slack; only release the surplus.
+        if self.frames.len() <= target {
+            return None;
         }
-
         if !self.started {
-            if self.frames.len() < target {
-                return Tick::Idle; // still priming
-            }
             self.started = true;
             self.next = self.frames.keys().next().copied();
         }
-
-        let Some(n) = self.next else {
-            return Tick::Idle;
-        };
-
+        let n = self.next?;
         if let Some(payload) = self.frames.remove(&n) {
             self.next = Some(n + 1);
-            Tick::Decode(payload)
-        } else if self.frames.is_empty() {
-            // Underrun: nothing buffered. Re-prime so a brief stall doesn't turn
-            // into perpetual concealment once packets resume.
-            self.started = false;
-            Tick::Idle
+            Some(Tick::Decode(payload))
         } else {
-            // Gap with later frames queued: conceal this one and move on.
-            self.next = Some(n + 1);
+            // The expected frame never arrived though newer ones are buffered
+            // beyond the window: it is lost. Skip to the oldest buffered frame
+            // and count a single concealment for the whole gap.
+            if let Some(&oldest) = self.frames.keys().next() {
+                self.next = Some(oldest);
+            }
             self.plc += 1;
-            Tick::Conceal
+            Some(Tick::Conceal)
         }
     }
 }
@@ -213,17 +195,26 @@ mod tests {
         assert_eq!(LatencyMode::from_str("zoom"), None);
     }
 
+    /// Drain everything currently releasable at `target`.
+    fn drain(jb: &mut JitterBuffer, target: usize) -> Vec<Tick> {
+        let mut out = Vec::new();
+        while let Some(t) = jb.drain_one(target) {
+            out.push(t);
+        }
+        out
+    }
+
     #[test]
-    fn primes_to_target_then_plays_in_order() {
+    fn holds_target_window_then_releases_surplus_in_order() {
         let mut jb = JitterBuffer::new();
-        // target 2: idle until two frames buffered.
+        // target 2: holds 2, releases only the surplus.
         jb.insert(10, frame(1));
-        assert_eq!(jb.tick(2), Tick::Idle);
         jb.insert(11, frame(2));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(1)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(2)));
-        // Drained: idle.
-        assert_eq!(jb.tick(2), Tick::Idle);
+        assert_eq!(drain(&mut jb, 2), vec![]); // window not exceeded yet
+        jb.insert(12, frame(3));
+        assert_eq!(drain(&mut jb, 2), vec![Tick::Decode(frame(1))]); // 1 surplus
+        jb.insert(13, frame(4));
+        assert_eq!(drain(&mut jb, 2), vec![Tick::Decode(frame(2))]);
     }
 
     #[test]
@@ -231,22 +222,36 @@ mod tests {
         let mut jb = JitterBuffer::new();
         jb.insert(20, frame(1));
         jb.insert(22, frame(3));
-        jb.insert(21, frame(2)); // arrives late but before playout
-        assert_eq!(jb.tick(2), Tick::Decode(frame(1)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(2)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(3)));
+        jb.insert(21, frame(2)); // arrives late but still within the window
+        jb.insert(23, frame(4));
+        // target 0: release everything, in sequence order despite arrival order.
+        assert_eq!(
+            drain(&mut jb, 0),
+            vec![
+                Tick::Decode(frame(1)),
+                Tick::Decode(frame(2)),
+                Tick::Decode(frame(3)),
+                Tick::Decode(frame(4)),
+            ]
+        );
     }
 
     #[test]
-    fn gap_with_later_frames_conceals() {
+    fn gap_conceals_once_then_resumes() {
         let mut jb = JitterBuffer::new();
         jb.insert(30, frame(1));
         jb.insert(31, frame(2));
-        jb.insert(33, frame(4)); // 32 missing
-        assert_eq!(jb.tick(2), Tick::Decode(frame(1)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(2)));
-        assert_eq!(jb.tick(2), Tick::Conceal); // 32 lost -> PLC
-        assert_eq!(jb.tick(2), Tick::Decode(frame(4)));
+        jb.insert(33, frame(4)); // 32 lost
+        let out = drain(&mut jb, 0);
+        assert_eq!(
+            out,
+            vec![
+                Tick::Decode(frame(1)),
+                Tick::Decode(frame(2)),
+                Tick::Conceal, // 32 missing -> one PLC
+                Tick::Decode(frame(4)),
+            ]
+        );
         assert_eq!(jb.plc, 1);
     }
 
@@ -257,22 +262,34 @@ mod tests {
         jb.insert(65535, frame(2));
         jb.insert(0, frame(3));
         jb.insert(1, frame(4));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(1)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(2)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(3)));
-        assert_eq!(jb.tick(2), Tick::Decode(frame(4)));
+        assert_eq!(
+            drain(&mut jb, 0),
+            vec![
+                Tick::Decode(frame(1)),
+                Tick::Decode(frame(2)),
+                Tick::Decode(frame(3)),
+                Tick::Decode(frame(4)),
+            ]
+        );
     }
 
     #[test]
-    fn overfill_drops_oldest_to_bound_latency() {
+    fn steady_state_is_one_in_one_out() {
         let mut jb = JitterBuffer::new();
-        // target 1 + HYSTERESIS 2 = keep 3; insert 6 -> 3 dropped.
-        for i in 0..6u16 {
+        // Prime the window (target 3).
+        for i in 0..4u16 {
             jb.insert(100 + i, frame(i as u8));
         }
-        let _ = jb.tick(1);
-        assert!(jb.depth() <= 1 + HYSTERESIS);
-        assert!(jb.late_drops >= 3);
+        let primed = drain(&mut jb, 3);
+        assert_eq!(primed.len(), 1); // only the surplus over the window
+        assert_eq!(jb.depth(), 3);
+        // Each further arrival releases exactly one frame; depth stays at target.
+        for i in 4..20u16 {
+            jb.insert(100 + i, frame(i as u8));
+            assert_eq!(drain(&mut jb, 3).len(), 1);
+            assert_eq!(jb.depth(), 3);
+        }
+        assert_eq!(jb.plc, 0); // no loss -> no concealment
     }
 
     #[test]
@@ -280,10 +297,10 @@ mod tests {
         let mut jb = JitterBuffer::new();
         jb.insert(200, frame(1));
         jb.insert(201, frame(2));
-        assert_eq!(jb.tick(1), Tick::Decode(frame(1)));
+        assert_eq!(drain(&mut jb, 0), vec![Tick::Decode(frame(1)), Tick::Decode(frame(2))]);
         // 200 arrives again, already played -> dropped, not replayed.
         jb.insert(200, frame(9));
         assert_eq!(jb.late_drops, 1);
-        assert_eq!(jb.tick(1), Tick::Decode(frame(2)));
+        assert_eq!(drain(&mut jb, 0), vec![]);
     }
 }

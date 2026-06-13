@@ -27,8 +27,13 @@ use crate::audio::resampler::LinearResampler;
 /// buses, so we declare a single channel and never fake-stereo.
 pub const PHONE_CHANNELS: u16 = 1;
 
-/// ~85 ms at 48 kHz, matching the other input rings.
-const REMOTE_RING_SIZE: usize = 16384;
+/// ~80 ms at 48 kHz mono (4 Opus frames). The jitter buffer (net::jitter) holds
+/// the mode's reorder window and releases one frame per arrival, so this ring
+/// only bridges task/callback scheduling — keeping it small bounds the latency
+/// that clock drift or arrival bursts can otherwise accumulate (a 341 ms ring
+/// would hide a third of a second of delay). On overflow `push` drops the newest
+/// sample, which caps delay at the cost of a rare glitch under sustained drift.
+const REMOTE_RING_SIZE: usize = 3840;
 
 /// WebRTC Opus is always decoded at 48 kHz; feeds resample from this to the bus rate.
 const DECODE_RATE: u32 = 48_000;
