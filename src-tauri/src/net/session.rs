@@ -362,7 +362,18 @@ pub fn handle_hello(
             HelloOutcome::PendingAccept
         }
     };
-    (outcome, s.conn_epoch)
+    let epoch = s.conn_epoch;
+    let resumed = matches!(outcome, HelloOutcome::ResumeAccepted);
+    drop(reg);
+    // Refresh persisted recency on an in-process reconnect too — not only the
+    // store-recovery path (try_resume_trusted). Otherwise an actively-used phone
+    // whose registry entry survived is never re-touched and `maintain()` prunes
+    // it at 30 days, and the UI shows a stale "last seen". Done AFTER releasing
+    // the registry lock: registry and store mutexes are never held together.
+    if resumed {
+        super::paired::touch_last_seen(session_id);
+    }
+    (outcome, epoch)
 }
 
 /// Detach a connection (socket closed). Only the epoch owner may transition.
@@ -884,7 +895,7 @@ mod tests {
             "sid-k", "tok-k", "P", None, None,
         ));
         // Revoke (kick) before the device tries to come back.
-        assert!(crate::net::paired::forget("sid-k"));
+        assert!(crate::net::paired::forget("sid-k").unwrap());
         let (tx, _rx) = unbounded_channel();
         let (o, _) = try_resume_trusted("sid-k", "tok-k", "browser", "iOS", None, tx);
         assert!(matches!(o, HelloOutcome::UnknownSession));

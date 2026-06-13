@@ -1292,18 +1292,20 @@ fn phone_reject_client(session_id: String) -> Result<(), EngineError> {
     net::session::reject(&session_id, "user-declined").map_err(|message| EngineError { message })
 }
 
-#[tauri::command]
-fn phone_remove_session(
-    state: tauri::State<AppState>,
-    session_id: String,
+/// Shared revoke path for phone_remove_session and phone_forget. Revokes
+/// persisted trust FIRST (forget-before-remove): if the live session were
+/// dropped before the store entry, a reconnect landing in the gap could
+/// auto-resume from the still-present store entry and defeat the kick. Then ends
+/// any live session and drops its mixer input. A non-durable revoke (the disk
+/// write failed) is surfaced AFTER the live kick — the device is gone for this
+/// session, but could resurrect from the stale store file on the next launch,
+/// so the caller must see the error.
+fn revoke_phone(
+    state: &tauri::State<AppState>,
+    session_id: &str,
 ) -> Result<(), EngineError> {
-    // Revoke persisted trust FIRST (forget-before-remove): if the live session
-    // were removed before the store entry, a reconnect landing in the gap could
-    // auto-resume from the still-present store entry and defeat the kick.
-    net::paired::forget(&session_id);
-    net::session::remove(&session_id);
-    // Drop the matching mixer input and rebuild any bus it was routed to so the
-    // engine releases the phone feed.
+    let durable = net::paired::forget(session_id);
+    net::session::remove(session_id);
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     let mut inner = state.inner.lock().unwrap();
     let affected: Vec<BusId> = BusId::ALL
@@ -1323,7 +1325,17 @@ fn phone_remove_session(
             }
         }
     }
+    drop(inner);
+    durable.map_err(|message| EngineError { message })?;
     Ok(())
+}
+
+#[tauri::command]
+fn phone_remove_session(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
+    revoke_phone(&state, &session_id)
 }
 
 /// The persisted trusted devices for the "Paired devices" management list.
@@ -1341,28 +1353,7 @@ fn phone_forget(
     state: tauri::State<AppState>,
     session_id: String,
 ) -> Result<(), EngineError> {
-    net::paired::forget(&session_id);
-    net::session::remove(&session_id);
-    let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
-    let mut inner = state.inner.lock().unwrap();
-    let affected: Vec<BusId> = BusId::ALL
-        .into_iter()
-        .filter(|bus_id| {
-            inner
-                .graph
-                .get_send(&device_id, *bus_id)
-                .map(|send| send.enabled)
-                .unwrap_or(false)
-        })
-        .collect();
-    if inner.graph.remove_input(&device_id) {
-        for bus_id in affected {
-            if let Err(err) = rebuild_bus(&mut inner, bus_id) {
-                return Err(store_last_error(&mut inner, err));
-            }
-        }
-    }
-    Ok(())
+    revoke_phone(&state, &session_id)
 }
 
 /// Whether boot-time autostart of the phone server is enabled (opt-in, default
@@ -1506,6 +1497,13 @@ pub fn run() {
             phone_get_autostart,
             phone_set_autostart,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Persist any last_seen bumps still only in RAM — a short run
+                // that reconnected but quit before the 5-min maintenance flush.
+                net::paired::flush_if_dirty();
+            }
+        });
 }

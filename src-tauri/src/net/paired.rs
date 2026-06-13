@@ -311,11 +311,19 @@ pub fn init(path: PathBuf) {
 /// Insert or replace a trusted device, then persist. Call from a command thread
 /// (e.g. `phone_accept_client`), never the async WS task.
 pub fn upsert(device: PairedDevice) {
-    let (snapshot, path) = {
+    let (snapshot, path, loaded_ok) = {
         let mut state = state().lock().unwrap();
         state.devices.insert(device.id.clone(), device);
-        (snapshot_file(&state.devices), state.path.clone())
+        (snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
     };
+    // Never overwrite a store we could not authoritatively load (corrupt on
+    // boot): the in-memory map is empty + this one device, so writing it would
+    // erase the original trusted devices. Keep the device in RAM for this
+    // session and leave the file intact for recovery.
+    if !loaded_ok {
+        eprintln!("[phone] paired-store not authoritative; not persisting upsert (file left intact)");
+        return;
+    }
     if let Some(path) = path {
         if let Err(e) = write_store_file(&path, &snapshot) {
             eprintln!("[phone] paired-store upsert write failed: {e}");
@@ -323,11 +331,14 @@ pub fn upsert(device: PairedDevice) {
     }
 }
 
-/// Revoke a device's persisted trust. Returns whether it was present. Persists
-/// durably (fsync) — revocation that is not durable would let a kicked device
-/// resurrect after a crash.
-pub fn forget(id: &str) -> bool {
-    let (removed, snapshot, path) = {
+/// Revoke a device's persisted trust. The in-memory removal + epoch bump take
+/// effect immediately (so it cannot resume this session); the result reports
+/// durability. `Ok(true)` = removed and persisted, `Ok(false)` = was not
+/// present, `Err` = removed in RAM but the durable write FAILED — the caller
+/// must surface this, since the device could resurrect from the stale file on
+/// the next launch. Persists durably (fsync) — revocation must outlive a crash.
+pub fn forget(id: &str) -> Result<bool, String> {
+    let (removed, snapshot, path, loaded_ok) = {
         let mut state = state().lock().unwrap();
         let removed = state.devices.remove(id).is_some();
         if removed {
@@ -335,18 +346,16 @@ pub fn forget(id: &str) -> bool {
             // device observes the higher epoch and aborts.
             REVOKE_EPOCH.fetch_add(1, Ordering::Relaxed);
         }
-        (removed, snapshot_file(&state.devices), state.path.clone())
+        (removed, snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
     };
-    if removed {
+    if removed && loaded_ok {
         if let Some(path) = path {
-            if let Err(e) = write_store_file(&path, &snapshot) {
-                eprintln!(
-                    "[phone] paired-store forget write FAILED — revocation is not durable: {e}"
-                );
-            }
+            write_store_file(&path, &snapshot).map_err(|e| {
+                format!("paired-store write failed — revocation is not durable: {e}")
+            })?;
         }
     }
-    removed
+    Ok(removed)
 }
 
 /// Constant-time check that `token` matches the stored digest for `id`. Pure
@@ -404,14 +413,18 @@ pub fn touch_last_seen(id: &str) {
 /// Persist any in-memory `last_seen` bumps. Call from a command thread /
 /// `spawn_blocking`, never the async WS task. Best-effort.
 pub fn flush_if_dirty() {
-    let (snapshot, path) = {
+    let (snapshot, path, loaded_ok) = {
         let mut state = state().lock().unwrap();
         if !state.dirty {
             return;
         }
         state.dirty = false;
-        (snapshot_file(&state.devices), state.path.clone())
+        (snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
     };
+    // Don't overwrite a store we couldn't authoritatively load (see upsert).
+    if !loaded_ok {
+        return;
+    }
     if let Some(path) = path {
         if let Err(e) = write_store_file(&path, &snapshot) {
             eprintln!("[phone] paired-store flush write failed: {e}");
@@ -559,6 +572,25 @@ mod tests {
     }
 
     #[test]
+    fn upsert_does_not_overwrite_unloaded_store() {
+        let _g = setup();
+        let path = unique_path();
+        write_raw(&path, b"{ corrupt"); // present but unreadable
+        init(path.clone());
+        assert!(!has_trusted_devices(), "corrupt store is non-authoritative");
+        // Accepting a phone this session must NOT rewrite the file from the empty
+        // in-memory map — that would erase the original trusted devices.
+        upsert(device_from_pairing("new", "tok", "New", None, None));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"{ corrupt",
+            "must not overwrite an unloaded (corrupt) store"
+        );
+        // The new device still works in RAM for this session.
+        assert!(verify("new", "tok"));
+    }
+
+    #[test]
     fn absent_file_is_authoritative_empty() {
         let _g = setup();
         init(unique_path()); // file does not exist yet
@@ -622,10 +654,10 @@ mod tests {
         upsert(device_from_pairing("sid", "tok", "P", None, None));
         let epoch0 = revoke_epoch();
 
-        assert!(forget("sid"));
+        assert!(forget("sid").unwrap());
         assert!(!verify("sid", "tok"));
         assert_eq!(revoke_epoch(), epoch0 + 1);
-        assert!(!forget("sid")); // already gone
+        assert!(!forget("sid").unwrap()); // already gone
         assert_eq!(revoke_epoch(), epoch0 + 1); // no bump when nothing removed
 
         // Revocation is durable on disk.
