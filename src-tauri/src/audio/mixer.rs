@@ -601,6 +601,7 @@ pub fn start(
             Ok((
                 input_streams,
                 subscriptions,
+                remote_subscriptions,
                 output_stream,
                 StartInfo {
                     out_channels: out_channels as u16,
@@ -611,17 +612,19 @@ pub fn start(
         })();
 
         match outcome {
-            Ok((input_streams, subscriptions, output_stream, info)) => {
+            Ok((input_streams, subscriptions, remote_subscriptions, output_stream, info)) => {
                 let _ = result_tx.send(Ok(info));
                 drop(result_tx);
                 let _ = stop_rx.recv();
                 // Stop the realtime callback first, then drop the producers:
                 // cpal streams release their WASAPI handles here; dropping each
                 // loopback Subscription detaches it and stops the shared capture
-                // when it was the last subscriber.
+                // when it was the last subscriber; dropping each phone
+                // RemoteSubscription frees its mixer feed.
                 drop(output_stream);
                 drop(input_streams);
                 drop(subscriptions);
+                drop(remote_subscriptions);
             }
             Err(e) => {
                 let _ = result_tx.send(Err(e));
