@@ -40,8 +40,12 @@ use crate::audio::remote;
 /// Shared handle to a live peer connection, owned by the ws task.
 pub type Peer = Arc<RTCPeerConnection>;
 
-/// Opus runs at 48 kHz; 120 ms is the largest frame we will be asked to decode.
-const DECODE_BUF_SAMPLES: usize = 48_000 / 1000 * 120;
+/// We always decode to stereo (mono Opus up-mixes to L=R), so the phone input
+/// carries two channels — real L/R from a stereo mic, duplicated for a mono one.
+const DECODE_CHANNELS: usize = 2;
+
+/// Largest decode: 120 ms at 48 kHz, interleaved stereo.
+const DECODE_BUF_SAMPLES: usize = 48_000 / 1000 * 120 * DECODE_CHANNELS;
 
 /// Build a peer, answer the phone's offer, and start decoding its track.
 /// Returns the peer (keep it alive for the call's duration) and the answer SDP.
@@ -59,7 +63,7 @@ pub async fn answer_offer(
                     mime_type: MIME_TYPE_OPUS.to_owned(),
                     clock_rate: 48_000,
                     channels: 2,
-                    sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                    sdp_fmtp_line: "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1".to_owned(),
                     rtcp_feedback: vec![],
                 },
                 payload_type: 111,
@@ -144,7 +148,7 @@ async fn read_track(
     stats: Arc<PhoneStats>,
     latency: Arc<AtomicU8>,
 ) {
-    let mut decoder = match Decoder::new(SampleRate::Hz48000, Channels::Mono) {
+    let mut decoder = match Decoder::new(SampleRate::Hz48000, Channels::Stereo) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("[phone] opus decoder init failed: {e}");
@@ -190,15 +194,18 @@ async fn read_track(
                 Tick::Conceal => decode_into(&mut decoder, None, &mut pcm),
             };
             if let Some(n) = decoded {
+                // decode_float returns samples per channel; the buffer holds
+                // `n * DECODE_CHANNELS` interleaved samples.
+                let filled = n * DECODE_CHANNELS;
                 let mut peak = 0.0f32;
-                for &s in &pcm[..n] {
+                for &s in &pcm[..filled] {
                     let a = s.abs();
                     if a > peak {
                         peak = a;
                     }
                 }
                 stats.record_peak(peak);
-                remote::push_decoded_48k(&session_id, &pcm[..n], peak);
+                remote::push_decoded_48k(&session_id, &pcm[..filled], peak);
             }
         }
         stats.set_jitter(jb.depth() as u32, jb.plc);

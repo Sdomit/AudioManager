@@ -23,17 +23,19 @@ use ringbuf::{Consumer, Producer, RingBuffer};
 use crate::audio::mixer::{store_max, EngineError, InputSlotShared};
 use crate::audio::resampler::LinearResampler;
 
-/// The phone mic is mono; the mixer's `(1 -> 2)` arm duplicates it to stereo
-/// buses, so we declare a single channel and never fake-stereo.
-pub const PHONE_CHANNELS: u16 = 1;
+/// The phone is decoded to interleaved stereo (net::webrtc_peer): a stereo mic
+/// gives real L/R, a mono mic up-mixes to L=R. The mixer's stereo arms handle
+/// both and downmix to mono buses when needed.
+pub const PHONE_CHANNELS: u16 = 2;
 
-/// ~80 ms at 48 kHz mono (4 Opus frames). The jitter buffer (net::jitter) holds
-/// the mode's reorder window and releases one frame per arrival, so this ring
-/// only bridges task/callback scheduling — keeping it small bounds the latency
-/// that clock drift or arrival bursts can otherwise accumulate (a 341 ms ring
-/// would hide a third of a second of delay). On overflow `push` drops the newest
-/// sample, which caps delay at the cost of a rare glitch under sustained drift.
-const REMOTE_RING_SIZE: usize = 3840;
+/// ~80 ms at 48 kHz stereo (4 Opus frames, interleaved). The jitter buffer
+/// (net::jitter) holds the mode's reorder window and releases one frame per
+/// arrival, so this ring only bridges task/callback scheduling — keeping it
+/// small bounds the latency that clock drift or arrival bursts can otherwise
+/// accumulate (a 341 ms ring would hide a third of a second of delay). On
+/// overflow `push` drops the newest sample, capping delay at the cost of a rare
+/// glitch under sustained drift.
+const REMOTE_RING_SIZE: usize = 3840 * PHONE_CHANNELS as usize;
 
 /// WebRTC Opus is always decoded at 48 kHz; feeds resample from this to the bus rate.
 const DECODE_RATE: u32 = 48_000;
@@ -107,7 +109,7 @@ pub fn subscribe_phone(
     let mut map = manager().lock().unwrap();
     let feed = map.entry(key.clone()).or_insert_with(|| Feed {
         rate: expected_rate,
-        resampler: LinearResampler::new(DECODE_RATE, expected_rate, 1),
+        resampler: LinearResampler::new(DECODE_RATE, expected_rate, PHONE_CHANNELS as usize),
         subs: Vec::new(),
         scratch: Vec::new(),
     });
@@ -121,12 +123,13 @@ pub fn subscribe_phone(
     Ok((consumer, PHONE_CHANNELS, RemoteSubscription { key, id }))
 }
 
-/// Push one block of decoded 48 kHz mono audio for `session_id`. Called from the
-/// WebRTC reader task. Fans out to every bus feed for the session, resampling to
-/// each bus rate. A no-op when nothing is subscribed (e.g. the phone input has
-/// not been routed to any running bus yet).
+/// Push one block of decoded 48 kHz interleaved-stereo audio for `session_id`.
+/// Called from the WebRTC reader task. Fans out to every bus feed for the
+/// session, resampling to each bus rate. A no-op when nothing is subscribed
+/// (e.g. the phone input has not been routed to any running bus yet).
 pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32) {
     let prefix = format!("phone:{session_id}@");
+    let ch = PHONE_CHANNELS as usize;
     let mut map = manager().lock().unwrap();
     for (key, feed) in map.iter_mut() {
         if !key.starts_with(&prefix) {
@@ -137,8 +140,13 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32) {
         if *rate == DECODE_RATE {
             scratch.extend_from_slice(samples);
         } else {
-            for &s in samples {
-                resampler.process_frame(&[s], |out| scratch.push(out[0]));
+            // Resample per interleaved frame so L/R stay paired.
+            for frame in samples.chunks_exact(ch) {
+                resampler.process_frame(frame, |out| {
+                    for c in 0..ch {
+                        scratch.push(out[c]);
+                    }
+                });
             }
         }
         for sub in subs.iter_mut() {

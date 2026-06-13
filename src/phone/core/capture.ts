@@ -35,7 +35,9 @@ export async function startMic(opts: CaptureOptions = DEFAULT_CAPTURE): Promise<
       echoCancellation: opts.echoCancellation,
       noiseSuppression: opts.noiseSuppression,
       autoGainControl: opts.autoGainControl,
-      channelCount: 1,
+      // Prefer stereo where the device offers it (two-channel capture); mono
+      // phones simply return one channel. `ideal` so the request never fails.
+      channelCount: { ideal: 2 },
     },
     video: false,
   });

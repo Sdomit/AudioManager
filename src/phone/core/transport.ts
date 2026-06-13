@@ -31,6 +31,7 @@ export class PhoneTransport {
 
   async createOffer(): Promise<string> {
     const offer = await this.pc.createOffer();
+    offer.sdp = enableOpusStereo(offer.sdp ?? "");
     await this.pc.setLocalDescription(offer);
     return this.pc.localDescription?.sdp ?? offer.sdp ?? "";
   }
@@ -53,4 +54,30 @@ export class PhoneTransport {
     this.pc.oniceconnectionstatechange = null;
     this.pc.close();
   }
+}
+
+/**
+ * Add Opus `stereo=1;sprop-stereo=1` to the offer so a two-channel mic is
+ * encoded as stereo (Chrome/Firefox default Opus to mono otherwise). Harmless
+ * for a mono mic — the encoder still sends one channel. Leaves the SDP untouched
+ * if no Opus codec is present.
+ */
+export function enableOpusStereo(sdp: string): string {
+  const rtpmap = sdp.match(/a=rtpmap:(\d+)\s+opus\/48000/i);
+  if (!rtpmap) return sdp;
+  const pt = rtpmap[1];
+  const fmtp = new RegExp(`a=fmtp:${pt} (.*)`, "i");
+  if (fmtp.test(sdp)) {
+    return sdp.replace(fmtp, (_m, params: string) => {
+      let p = params;
+      if (!/(^|;)\s*stereo=/.test(p)) p += ";stereo=1";
+      if (!/(^|;)\s*sprop-stereo=/.test(p)) p += ";sprop-stereo=1";
+      if (!/(^|;)\s*useinbandfec=/.test(p)) p += ";useinbandfec=1";
+      return `a=fmtp:${pt} ${p}`;
+    });
+  }
+  return sdp.replace(
+    new RegExp(`(a=rtpmap:${pt} opus/48000[^\\r\\n]*\\r?\\n)`, "i"),
+    `$1a=fmtp:${pt} stereo=1;sprop-stereo=1;useinbandfec=1\r\n`,
+  );
 }
