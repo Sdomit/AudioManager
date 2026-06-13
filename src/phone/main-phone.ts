@@ -185,16 +185,23 @@ if (!pairing) {
     }
   }
 
+  function paintMeter() {
+    const fill = app.querySelector<HTMLElement>(".meterFill");
+    if (fill) fill.style.width = `${Math.round(level * 100)}%`;
+  }
+
   function startMeter() {
     if (meterTimer !== null) return;
     let tick = 0;
     meterTimer = setInterval(() => {
       level = muted ? 0 : (mic?.level() ?? 0);
+      // Only repaint the meter bar — a full re-render here (10x/s) would rebuild
+      // the DOM and slam shut any open <select> / blur the controls.
+      paintMeter();
       tick += 1;
       if (tick % 10 === 0) {
         signaling.send(statsMessage(level, document.visibilityState === "visible", muted));
       }
-      rerender();
     }, 100);
   }
 

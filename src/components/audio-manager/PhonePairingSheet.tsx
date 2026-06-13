@@ -15,7 +15,8 @@ interface PhonePairingSheetProps {
   onClose: () => void;
 }
 
-const POLL_MS = 1000;
+// Fast enough that the "we hear you" level meter looks live, not stepped.
+const POLL_MS = 250;
 
 /**
  * Slide-in sheet for pairing a phone as a wireless input (#40).

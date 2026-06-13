@@ -262,7 +262,7 @@
   height: 100%;
   width: 0%;
   background: linear-gradient(90deg, var(--am-success), #84cc16 70%, var(--am-warning));
-  transition: width 120ms linear;
+  transition: width 240ms linear;
 }
 
 /* ── Latency mode control (Phase 4) ─────────────────────────────── */
