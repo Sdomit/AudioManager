@@ -34,8 +34,11 @@ struct PhoneAssets;
 const PRE_HELLO_MAX_BYTES: usize = 2048;
 /// How long a fresh socket may sit silent before we drop it.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// Keepalive ping cadence; two missed pongs (no inbound for ~2x this) drops the
-/// socket, so a dead or idle-forever peer cannot pin server resources.
+/// Keepalive ping cadence. If no inbound frame (a pong, or any message) arrived
+/// since the previous ping, the socket is dead/idle and is dropped — so a dead
+/// or idle-forever peer cannot pin server resources. Detection latency is one to
+/// two intervals depending on phase. A live stream stays up: browsers auto-pong
+/// the ping and the phone also sends a stats frame ~1 Hz, both of which reset it.
 const KEEPALIVE: Duration = Duration::from_secs(20);
 /// Sliding window for the per-IP handshake rate limit.
 const RATE_WINDOW: Duration = Duration::from_secs(10);

@@ -68,14 +68,42 @@ pub fn server_status() -> PhoneServerStatus {
     }
 }
 
+/// Per-IP connect timeout for the reachability probe.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
+
 /// Probe whether the server actually accepts a connection on a LAN IP — a
 /// direct firewall check, since connecting to our own non-loopback address
-/// traverses the inbound firewall just like a phone would. Short timeout so a
-/// blocked port fails fast.
+/// traverses the inbound firewall just like a phone would.
+///
+/// The blocking connects run concurrently on the net runtime and the whole
+/// thing is wall-clock-capped, so a host with several adapters (Hyper-V / WSL /
+/// VPN virtual IPs, each of which a DROP firewall rule makes hang for the full
+/// timeout) costs ~one timeout total, not N of them — the caller is a sync IPC
+/// command and must not stall for seconds.
 fn self_reachable(port: u16) -> bool {
-    lan_ips().into_iter().any(|ip| {
-        std::net::TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(400))
-            .is_ok()
+    let ips = lan_ips();
+    if ips.is_empty() {
+        return false;
+    }
+    runtime().block_on(async move {
+        let mut set = tokio::task::JoinSet::new();
+        for ip in ips {
+            set.spawn_blocking(move || {
+                std::net::TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE_TIMEOUT)
+                    .is_ok()
+            });
+        }
+        let any_ok = async {
+            while let Some(res) = set.join_next().await {
+                if matches!(res, Ok(true)) {
+                    return true;
+                }
+            }
+            false
+        };
+        tokio::time::timeout(PROBE_TIMEOUT + Duration::from_millis(150), any_ok)
+            .await
+            .unwrap_or(false)
     })
 }
 
