@@ -255,6 +255,15 @@ pub fn create_session(label: Option<String>) -> (String, String) {
     sweep();
     let id = simple_uuid();
     let token = simple_uuid();
+    // The persisted trust store (net::paired) hashes this token with a single
+    // unsalted SHA-256, which is only safe because the token is a 122-bit uuid
+    // v4 (uniformly random). If token generation ever changes to a lower-entropy
+    // or predictable scheme, paired.rs must reintroduce a salt + slow KDF.
+    debug_assert!(
+        uuid::Uuid::parse_str(&token).map(|u| u.get_version())
+            == Ok(Some(uuid::Version::Random)),
+        "pairing token must be a uuid v4 (122-bit random); paired.rs hashing depends on it"
+    );
     let session = PhoneSession {
         id: id.clone(),
         token: token.clone(),

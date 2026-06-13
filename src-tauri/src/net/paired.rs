@@ -41,9 +41,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,11 @@ const SCHEMA_VERSION: u32 = 1;
 /// A trusted device is forgotten if it has not been seen for this long.
 pub const TRUSTED_TTL_DAYS: u64 = 30;
 const TRUSTED_TTL_SECS: u64 = TRUSTED_TTL_DAYS * 24 * 60 * 60;
+
+/// Cadence of the background maintenance thread: flush pending `last_seen` bumps
+/// and prune expired devices. Disk writes happen here (off the async runtime),
+/// not on the WS path.
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(300);
 
 /// One persisted trusted device. `token_hash` is the lowercase-hex SHA-256 of
 /// the pairing token; the token itself never touches disk.
@@ -414,6 +419,41 @@ pub fn flush_if_dirty() {
     }
 }
 
+/// Start the once-only background maintenance thread. It periodically (a)
+/// persists in-memory `last_seen` bumps the async resume path left unflushed
+/// (so a daily-used phone is not pruned at 30d despite never triggering a
+/// command-thread write), and (b) prunes devices past `TRUSTED_TTL` (so a
+/// desktop that never restarts still bounds the store). Idempotent — a second
+/// call is a no-op. Disk IO runs on this thread, never on the async WS path.
+pub fn spawn_maintenance() {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("paired-maint".into())
+        .spawn(|| loop {
+            std::thread::sleep(MAINTENANCE_INTERVAL);
+            maintain();
+        });
+}
+
+/// Prune expired devices in memory and persist if anything changed (prune or a
+/// pending `last_seen` bump). Pruning is expiry, not a user revoke, so it does
+/// NOT bump the revoke epoch.
+fn maintain() {
+    let now = now_utc();
+    {
+        let mut state = state().lock().unwrap();
+        let before = state.devices.len();
+        state.devices.retain(|_, d| !is_expired(now, d.last_seen_utc));
+        if state.devices.len() != before {
+            state.dirty = true;
+        }
+    }
+    flush_if_dirty();
+}
+
 /// Process-wide test lock shared with `session.rs` tests. `accept` now writes
 /// into this store, so any test touching the registry AND this store must
 /// serialize on a single lock to avoid cross-test interference. Both modules
@@ -592,6 +632,36 @@ mod tests {
         let on_disk: PairedStoreFile =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert!(on_disk.devices.is_empty());
+    }
+
+    #[test]
+    fn touch_then_flush_persists_last_seen() {
+        let _g = setup();
+        let path = unique_path();
+        init(path.clone());
+        // Persisted with a stale last_seen (0).
+        upsert(PairedDevice {
+            id: "t".into(),
+            token_hash: sha256_hex("x"),
+            label: "T".into(),
+            client_kind: None,
+            client_os: None,
+            created_utc: 0,
+            last_seen_utc: 0,
+        });
+        touch_last_seen("t"); // bumps to now_utc(), marks dirty (no disk IO)
+        flush_if_dirty(); // persists the bump
+
+        // Reload from disk: the bumped last_seen survived (and isn't pruned).
+        {
+            let mut s = state().lock().unwrap();
+            s.devices.clear();
+            s.path = None;
+            s.loaded_ok = false;
+        }
+        init(path.clone());
+        let dev = list().into_iter().find(|d| d.id == "t").unwrap();
+        assert!(dev.last_seen_utc > 0, "flushed last_seen should persist");
     }
 
     #[test]

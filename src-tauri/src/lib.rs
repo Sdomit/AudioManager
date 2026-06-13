@@ -1433,6 +1433,11 @@ pub fn run() {
             // app still launches with default QR pairing intact.
             if let Ok(dir) = app.path().app_local_data_dir() {
                 net::paired::init(dir.join(net::paired::STORE_FILE_NAME));
+                // Periodically flush in-memory last_seen bumps and prune expired
+                // devices, off the async runtime. The store file inherits the
+                // per-user %LOCALAPPDATA% ACL (same as the TLS key beside it) — no
+                // world-readable exposure, no custom DACL needed.
+                net::paired::spawn_maintenance();
                 // Opt-in (default false): only when the user has enabled
                 // autostart AND we authoritatively loaded a non-empty trusted
                 // store do we bring the LAN server up at boot. Otherwise this is
