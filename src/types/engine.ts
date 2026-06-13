@@ -190,6 +190,8 @@ export interface PhoneServerStatus {
   running: boolean;
   port: number | null;
   lanIps: string[];
+  /** Server running but a LAN connect fails => a firewall is blocking the port. */
+  reachable: boolean;
 }
 
 /** Mirror of `net::session::PhoneSessionStatus`. Never contains the token. */
@@ -212,6 +214,10 @@ export interface PhoneSessionStatus {
   jitterDepth: number;
   /** Cumulative concealed (PLC) frames — rises on packet loss. */
   plc: number;
+  /** Times this session resumed after a dropped connection (#44). */
+  reconnectCount: number;
+  /** Active audio codec once media flows, else null. */
+  codec: string | null;
 }
 
 /**

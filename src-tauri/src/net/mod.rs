@@ -49,15 +49,34 @@ pub struct PhoneServerStatus {
     pub running: bool,
     pub port: Option<u16>,
     pub lan_ips: Vec<String>,
+    /// True if the server answers a TCP connect on a LAN IP. When the server is
+    /// running but this is false, a firewall is almost certainly blocking the
+    /// port and phones will see "site can't be reached" (#44).
+    pub reachable: bool,
 }
 
 pub fn server_status() -> PhoneServerStatus {
-    let slot = server_slot().lock().unwrap();
+    let (running, port) = {
+        let slot = server_slot().lock().unwrap();
+        (slot.is_some(), slot.as_ref().map(|s| s.port))
+    };
     PhoneServerStatus {
-        running: slot.is_some(),
-        port: slot.as_ref().map(|s| s.port),
+        running,
+        port,
         lan_ips: lan_ips().iter().map(|ip| ip.to_string()).collect(),
+        reachable: port.map(self_reachable).unwrap_or(false),
     }
+}
+
+/// Probe whether the server actually accepts a connection on a LAN IP — a
+/// direct firewall check, since connecting to our own non-loopback address
+/// traverses the inbound firewall just like a phone would. Short timeout so a
+/// blocked port fails fast.
+fn self_reachable(port: u16) -> bool {
+    lan_ips().into_iter().any(|ip| {
+        std::net::TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(400))
+            .is_ok()
+    })
 }
 
 /// LAN IPv4 addresses, primary interface first. Loopback and link-local
@@ -134,7 +153,10 @@ pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
         let handle = axum_server::Handle::new();
         let server_handle = handle.clone();
         let config = rustls_config.clone();
-        let make_service = app.clone().into_make_service();
+        // with_connect_info so the ws handler sees the peer IP (rate limiting).
+        let make_service = app
+            .clone()
+            .into_make_service_with_connect_info::<SocketAddr>();
 
         runtime().spawn(async move {
             if let Err(e) = axum_server::bind_rustls(addr, config)

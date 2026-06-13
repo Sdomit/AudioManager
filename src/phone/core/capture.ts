@@ -30,6 +30,14 @@ export interface MicCapture {
  * (tap) — mobile browsers reject getUserMedia and AudioContext otherwise.
  */
 export async function startMic(opts: CaptureOptions = DEFAULT_CAPTURE): Promise<MicCapture> {
+  // Without a secure context (or on a browser too old for getUserMedia) the
+  // media API is absent — fail with a clear message instead of a raw TypeError.
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new DOMException(
+      "This browser can't capture audio here. Open the HTTPS link in a current Chrome or Safari.",
+      "NotSupportedError",
+    );
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
       echoCancellation: opts.echoCancellation,

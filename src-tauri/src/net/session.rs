@@ -121,6 +121,8 @@ pub struct PhoneSession {
     /// Monotonic id of the attached connection; a stale ws task must not
     /// clear state written by its replacement.
     pub conn_epoch: u64,
+    /// Times this session resumed after a drop (reliability metric, #44).
+    reconnect_count: u32,
     /// Receive counters, shared with the WebRTC reader task (Phase 2). Survives
     /// reconnects so the meter is continuous across a dropped socket.
     pub stats: Arc<PhoneStats>,
@@ -151,6 +153,10 @@ pub struct PhoneSessionStatus {
     pub jitter_depth: u32,
     /// Cumulative concealed (PLC) frames — rises when packets are lost.
     pub plc: u64,
+    /// Times this session resumed after a dropped connection (#44).
+    pub reconnect_count: u32,
+    /// Active audio codec once media is flowing, else null.
+    pub codec: Option<String>,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
@@ -160,6 +166,21 @@ fn registry() -> &'static Mutex<HashMap<String, PhoneSession>> {
 
 fn simple_uuid() -> String {
     uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Compare two byte strings without an early-exit branch on the first differing
+/// byte, so a network attacker cannot time-probe the token a character at a time.
+/// Length is not secret (tokens are fixed 32-char uuids), so a length mismatch
+/// returns early — only the equal-length content comparison is constant-time.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Create a session; returns (session_id, token). The token leaves the
@@ -180,6 +201,7 @@ pub fn create_session(label: Option<String>) -> (String, String) {
         token_failures: 0,
         tx: None,
         conn_epoch: 0,
+        reconnect_count: 0,
         stats: Arc::new(PhoneStats::default()),
         latency: Arc::new(AtomicU8::new(LatencyMode::Balanced.as_u8())),
     };
@@ -216,7 +238,7 @@ pub fn handle_hello(
     if matches!(s.state, SessionState::Expired) {
         return (HelloOutcome::UnknownSession, 0);
     }
-    if s.token != token {
+    if !constant_time_eq(s.token.as_bytes(), token.as_bytes()) {
         s.token_failures += 1;
         let invalidated = s.token_failures >= MAX_TOKEN_ATTEMPTS;
         if invalidated {
@@ -257,6 +279,7 @@ pub fn handle_hello(
         SessionState::Accepted | SessionState::Reconnecting | SessionState::Disconnected => {
             s.state = SessionState::Accepted;
             s.dropped_at = None;
+            s.reconnect_count = s.reconnect_count.saturating_add(1);
             HelloOutcome::ResumeAccepted
         }
         _ => {
@@ -378,6 +401,9 @@ fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
             .to_string(),
         jitter_depth,
         plc,
+        reconnect_count: s.reconnect_count,
+        // We only ever negotiate Opus; report it once media is actually flowing.
+        codec: (packets > 0).then(|| "opus".to_string()),
     }
 }
 
@@ -525,6 +551,28 @@ mod tests {
             }
         }
         assert!(status(&sid).is_some());
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_equal_bytes() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab")); // length mismatch
+    }
+
+    #[test]
+    fn resume_increments_reconnect_count() {
+        let _g = setup();
+        let (sid, token) = create_session(None);
+        let (_o, epoch, _rx) = hello(&sid, &token);
+        accept(&sid).unwrap();
+        assert_eq!(status(&sid).unwrap().reconnect_count, 0);
+
+        handle_disconnect(&sid, epoch);
+        let (o2, _e2, _rx2) = hello(&sid, &token); // resume after drop
+        assert!(matches!(o2, HelloOutcome::ResumeAccepted));
+        assert_eq!(status(&sid).unwrap().reconnect_count, 1);
     }
 
     #[test]

@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import * as ipc from "../../ipc/commands";
-import type { PhoneSessionCreated, PhoneSessionStatus } from "../../types/engine";
+import type {
+  PhoneServerStatus,
+  PhoneSessionCreated,
+  PhoneSessionStatus,
+} from "../../types/engine";
 import { XIcon } from "./Icon";
 import styles from "./PhonePairingSheet.module.css";
 
@@ -24,6 +28,7 @@ const POLL_MS = 1000;
 export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
   const [created, setCreated] = useState<PhoneSessionCreated | null>(null);
   const [sessions, setSessions] = useState<PhoneSessionStatus[]>([]);
+  const [server, setServer] = useState<PhoneServerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const createdRef = useRef<PhoneSessionCreated | null>(null);
@@ -82,6 +87,26 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
     };
   }, [open]);
 
+  // Probe server reachability once per session (the check does a short blocking
+  // LAN connect, so it must NOT run on the 1 Hz poll). `created` changes when a
+  // new session/server starts, re-running the firewall check.
+  useEffect(() => {
+    if (!open) {
+      setServer(null);
+      return;
+    }
+    let cancelled = false;
+    void ipc
+      .phoneServerStatus()
+      .then((s) => {
+        if (!cancelled) setServer(s);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, created]);
+
   // Render the QR whenever the pairing URL changes.
   useEffect(() => {
     const url = created?.urls[0];
@@ -124,6 +149,19 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
         </header>
 
         <div className={styles.body}>
+          {server && server.running && !server.reachable && (
+            <div className={styles.firewallWarn} role="alert">
+              <div className={styles.firewallTitle}>Phones may not reach this PC</div>
+              <div className={styles.firewallDetail}>
+                The server is running but a firewall is likely blocking port{" "}
+                {server.port ?? "47800"}. In an <strong>elevated</strong> PowerShell, run:
+              </div>
+              <code className={styles.firewallCmd}>
+                New-NetFirewallRule -DisplayName &quot;AudioManager Phone Pairing&quot; -Direction
+                Inbound -Action Allow -Protocol TCP -LocalPort 47800-47809 -Profile Private
+              </code>
+            </div>
+          )}
           {error ? (
             <div className={styles.errorBox}>
               <div className={styles.errorTitle}>Could not start pairing</div>
@@ -310,8 +348,15 @@ function describe(s: PhoneSessionStatus): string {
         : "Waiting for scan";
     case "pending-accept":
       return `Wants to join${device}`;
-    case "accepted":
-      return s.packets > 0 ? `Paired${device} · hearing audio` : `Paired${device} · waiting for audio`;
+    case "accepted": {
+      const base =
+        s.packets > 0 ? `Paired${device} · hearing audio` : `Paired${device} · waiting for audio`;
+      const tags: string[] = [];
+      if (s.codec) tags.push(s.codec);
+      if (s.reconnectCount > 0)
+        tags.push(`${s.reconnectCount} reconnect${s.reconnectCount === 1 ? "" : "s"}`);
+      return tags.length > 0 ? `${base} · ${tags.join(" · ")}` : base;
+    }
     case "reconnecting":
       return s.expiresInSecs != null
         ? `Reconnecting · ${formatSecs(s.expiresInSecs)} grace left`

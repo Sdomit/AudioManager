@@ -4,7 +4,13 @@
 //! bundle is embedded from `../dist-phone` (rust-embed reads the folder live
 //! from disk in debug builds, which is the phone-client dev loop).
 
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ConnectInfo;
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -27,7 +33,39 @@ struct PhoneAssets;
 /// Largest frame we accept before (and including) `hello`.
 const PRE_HELLO_MAX_BYTES: usize = 2048;
 /// How long a fresh socket may sit silent before we drop it.
-const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Keepalive ping cadence; two missed pongs (no inbound for ~2x this) drops the
+/// socket, so a dead or idle-forever peer cannot pin server resources.
+const KEEPALIVE: Duration = Duration::from_secs(20);
+/// Sliding window for the per-IP handshake rate limit.
+const RATE_WINDOW: Duration = Duration::from_secs(10);
+/// Max `/ws` handshakes per source IP per window — well above any honest
+/// reconnect cadence, low enough to blunt a connection flood.
+const RATE_MAX: usize = 12;
+
+/// Per-IP handshake timestamps for the sliding-window rate limit.
+fn rate_table() -> &'static Mutex<HashMap<IpAddr, Vec<Instant>>> {
+    static T: OnceLock<Mutex<HashMap<IpAddr, Vec<Instant>>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record a handshake from `ip`; false when it has exceeded `RATE_MAX` in the
+/// last `RATE_WINDOW`.
+fn allow_handshake(ip: IpAddr) -> bool {
+    let now = Instant::now();
+    let mut table = rate_table().lock().unwrap();
+    // Opportunistic GC so the table can't grow without bound.
+    table.retain(|_, hits| {
+        hits.retain(|t| now.duration_since(*t) < RATE_WINDOW);
+        !hits.is_empty()
+    });
+    let hits = table.entry(ip).or_default();
+    if hits.len() >= RATE_MAX {
+        return false;
+    }
+    hits.push(now);
+    true
+}
 
 pub fn router() -> Router {
     Router::new()
@@ -78,7 +116,13 @@ fn mime_for(path: &str) -> &'static str {
 
 // ── Signaling socket ──────────────────────────────────────────────────────────
 
-async fn ws_upgrade(ws: WebSocketUpgrade) -> Response {
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> Response {
+    if !allow_handshake(peer.ip()) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     ws.on_upgrade(handle_socket)
 }
 
@@ -182,8 +226,21 @@ async fn handle_socket(socket: WebSocket) {
     // Steady state: relay queued outbound messages and dispatch inbound ones.
     // `peer` is the WebRTC receiver, created when the phone sends its offer.
     let mut peer: Option<webrtc_peer::Peer> = None;
+    // Liveness: ping every KEEPALIVE; if the previous ping drew no inbound frame
+    // (pong or anything else) by the next tick, the socket is dead/idle — drop it.
+    let mut keepalive = tokio::time::interval(KEEPALIVE);
+    let mut awaiting_pong = false;
     loop {
         tokio::select! {
+            _ = keepalive.tick() => {
+                if awaiting_pong {
+                    break; // no reply since the last ping
+                }
+                if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+                awaiting_pong = true;
+            }
             outbound = out_rx.recv() => {
                 match outbound {
                     Some(msg) => {
@@ -196,6 +253,8 @@ async fn handle_socket(socket: WebSocket) {
                 }
             }
             inbound = stream.next() => {
+                // Any inbound frame proves the peer is alive.
+                awaiting_pong = false;
                 match inbound {
                     Some(Ok(Message::Text(text))) => {
                         match parse_client_message(&text) {
