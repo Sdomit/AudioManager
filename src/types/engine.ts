@@ -180,6 +180,9 @@ export interface BusStatus {
   overruns?: number;
   /** Output callback buffer size in frames. null = driver default (#35). */
   buffer_size_frames?: number | null;
+  /** Named latency mode buffer_size_frames maps to, or null for a custom
+   *  frame count that matches no preset (#35). "stable" | "low" | "ultra-low". */
+  latency_mode?: string | null;
 }
 
 export interface SystemStatus {

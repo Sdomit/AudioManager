@@ -32,6 +32,7 @@ interface DetailPanelProps {
   onBusEnabledChange: (id: BusId) => void;
   onBusMutedChange: (id: BusId) => void;
   onBusBufferSizeChange: (id: BusId, frames: number | null) => void;
+  onBusLatencyModeChange: (id: BusId, mode: string) => void;
   onBusLimiterChange: (id: BusId, limiter: LimiterConfig) => void;
   onBusEqChange: (id: BusId, eq: EqConfig) => void;
   onPickDevice: (id: BusId) => void;
@@ -106,6 +107,7 @@ export function DetailPanel(props: DetailPanelProps) {
         onPickDevice={() => props.onPickDevice(bus.id)}
         onSelectInput={props.onSelectInputContext}
         onBufferSizeChange={(frames) => props.onBusBufferSizeChange(bus.id, frames)}
+        onLatencyModeChange={(mode) => props.onBusLatencyModeChange(bus.id, mode)}
         onEqChange={(eq) => props.onBusEqChange(bus.id, eq)}
         onLimiterChange={(limiter) => props.onBusLimiterChange(bus.id, limiter)}
         onStartRecording={props.onStartRecording}

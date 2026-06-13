@@ -44,6 +44,61 @@ impl BusId {
     }
 }
 
+/// Named output-latency presets (#35). A user-facing abstraction over the raw
+/// `buffer_size_frames` the engine consumes: `Stable` lets the driver choose
+/// (safest, fewest dropouts), `Low` and `UltraLow` request progressively smaller
+/// fixed callback buffers. The engine still reads `buffer_size_frames`; this maps
+/// to/from it so the UI can offer modes instead of raw frame counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LatencyMode {
+    Stable,
+    Low,
+    UltraLow,
+}
+
+impl LatencyMode {
+    pub const ALL: [LatencyMode; 3] =
+        [LatencyMode::Stable, LatencyMode::Low, LatencyMode::UltraLow];
+
+    /// The buffer size this mode requests. `None` = driver default (Stable).
+    pub fn frames(self) -> Option<u32> {
+        match self {
+            LatencyMode::Stable => None,
+            LatencyMode::Low => Some(256),
+            LatencyMode::UltraLow => Some(128),
+        }
+    }
+
+    /// Which named mode a raw buffer size corresponds to, or `None` for a custom
+    /// frame count that doesn't match a preset.
+    pub fn from_frames(frames: Option<u32>) -> Option<LatencyMode> {
+        match frames {
+            None => Some(LatencyMode::Stable),
+            Some(256) => Some(LatencyMode::Low),
+            Some(128) => Some(LatencyMode::UltraLow),
+            Some(_) => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LatencyMode::Stable => "stable",
+            LatencyMode::Low => "low",
+            LatencyMode::UltraLow => "ultra-low",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<LatencyMode> {
+        match s {
+            "stable" => Some(LatencyMode::Stable),
+            "low" => Some(LatencyMode::Low),
+            "ultra-low" => Some(LatencyMode::UltraLow),
+            _ => None,
+        }
+    }
+}
+
 /// User-editable configuration for a single bus.
 ///
 /// Held inside `BusRuntime`. Mutating this struct does NOT automatically
@@ -123,6 +178,9 @@ pub struct BusStatus {
     /// Current output buffer size setting, mirrored from `BusConfig`. `None`
     /// means the driver default is in use.
     pub buffer_size_frames: Option<u32>,
+    /// The named latency mode `buffer_size_frames` maps to (#35), or `None` for
+    /// a custom frame count that matches no preset. Derived, not stored.
+    pub latency_mode: Option<LatencyMode>,
 }
 
 /// Per-bus runtime state owned by `AppInner`.
@@ -189,6 +247,7 @@ impl BusRuntime {
             underruns: 0,
             overruns: 0,
             buffer_size_frames: self.config.buffer_size_frames,
+            latency_mode: LatencyMode::from_frames(self.config.buffer_size_frames),
         }
     }
 }
@@ -196,6 +255,19 @@ impl BusRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latency_mode_maps_to_frames_round_trip() {
+        assert_eq!(LatencyMode::Stable.frames(), None);
+        assert_eq!(LatencyMode::Low.frames(), Some(256));
+        assert_eq!(LatencyMode::UltraLow.frames(), Some(128));
+        for m in LatencyMode::ALL {
+            assert_eq!(LatencyMode::from_frames(m.frames()), Some(m));
+        }
+        assert_eq!(LatencyMode::from_frames(Some(512)), None); // custom frame count
+        assert_eq!(LatencyMode::parse("ultra-low"), Some(LatencyMode::UltraLow));
+        assert_eq!(LatencyMode::parse("nope"), None);
+    }
 
     #[test]
     fn default_set_has_four_buses() {

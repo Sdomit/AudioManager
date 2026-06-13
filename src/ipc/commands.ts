@@ -224,6 +224,14 @@ export const setBusBufferSize = (
 ): Promise<BusStatus> =>
   invoke<BusStatus>("set_bus_buffer_size", { busId, frames });
 
+/** Set a bus's latency mode (#35) — a named preset over the raw buffer size.
+ *  "stable" = driver default, "low" = 256, "ultra-low" = 128 frames. Rebuilds. */
+export const setBusLatencyMode = (
+  busId: BusId,
+  mode: string,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_latency_mode", { busId, mode });
+
 /** Update a running input's DSP chain live. Stores to graph (survives rebuild)
  *  and publishes to the engine seqlock — audio callback picks up next block. */
 export const updateInputDsp = (
