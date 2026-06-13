@@ -246,7 +246,7 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
               </div>
             )}
             {visibleSessions.map((s) => (
-              <SessionRow key={s.id} session={s} />
+              <SessionRow key={s.id} session={s} onError={setError} />
             ))}
           </section>
 
@@ -305,7 +305,13 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
   );
 }
 
-function SessionRow({ session }: { session: PhoneSessionStatus }) {
+function SessionRow({
+  session,
+  onError,
+}: {
+  session: PhoneSessionStatus;
+  onError: (msg: string) => void;
+}) {
   const tone = toneFor(session);
   return (
     <div className={`${styles.session} ${styles[`tone_${tone}`]}`}>
@@ -330,7 +336,11 @@ function SessionRow({ session }: { session: PhoneSessionStatus }) {
           <>
             <button
               className={styles.acceptBtn}
-              onClick={() => void ipc.phoneAcceptClient(session.id)}
+              onClick={() => {
+                // Accept succeeds for the live session even if trust couldn't be
+                // persisted; surface that storage warning to the user.
+                ipc.phoneAcceptClient(session.id).catch((e) => onError(extractMessage(e)));
+              }}
             >
               Accept
             </button>

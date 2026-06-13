@@ -405,8 +405,11 @@ pub fn handle_disconnect(session_id: &str, epoch: u64) {
 
 /// User clicked Accept in the pairing sheet. Pushes `accepted` to the phone and
 /// records the device in the persisted trust store so it auto-reconnects across
-/// restarts.
-pub fn accept(session_id: &str) -> Result<(), String> {
+/// restarts. Returns whether trust was DURABLY persisted (`false` if the store
+/// was non-authoritative or the write failed — the phone still works this
+/// session, but the caller should surface that auto-reconnect won't survive a
+/// restart). `Err` only for a bad session/state.
+pub fn accept(session_id: &str) -> Result<bool, String> {
     // Build the persisted record while we hold the registry lock (the token
     // lives in the session), then upsert AFTER releasing it. Lock discipline:
     // the registry and paired-store mutexes are never held simultaneously.
@@ -437,8 +440,7 @@ pub fn accept(session_id: &str) -> Result<(), String> {
     };
     // Persist trust. Runs on the Tauri command thread (phone_accept_client), so
     // the synchronous disk write is fine here (never on the async WS task).
-    super::paired::upsert(device);
-    Ok(())
+    Ok(super::paired::upsert(device))
 }
 
 /// A returning trusted device whose in-memory session was lost (e.g. the app

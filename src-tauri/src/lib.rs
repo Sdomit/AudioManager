@@ -1275,14 +1275,28 @@ fn phone_accept_client(
     state: tauri::State<AppState>,
     session_id: String,
 ) -> Result<(), EngineError> {
-    net::session::accept(&session_id).map_err(|message| EngineError { message })?;
+    let persisted =
+        net::session::accept(&session_id).map_err(|message| EngineError { message })?;
     // Surface the phone as a normal mixer input. Adding it to the graph does not
     // route it anywhere (no sends yet), so no bus rebuild is needed — the user
-    // wires it to buses like any other input.
+    // wires it to buses like any other input. Done even when persistence failed,
+    // so the phone is usable this session.
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
-    let mut inner = state.inner.lock().unwrap();
-    if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
-        inner.graph.add_input(&device_id);
+    {
+        let mut inner = state.inner.lock().unwrap();
+        if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
+            inner.graph.add_input(&device_id);
+        }
+    }
+    // Trust could not be saved (corrupt store / disk error): the phone works now
+    // but won't auto-reconnect after a restart — surface it rather than implying
+    // a durable pairing.
+    if !persisted {
+        return Err(EngineError {
+            message: "Phone connected, but it could not be saved as a trusted device \
+                      (storage error); it will not auto-reconnect after a restart."
+                .to_string(),
+        });
     }
     Ok(())
 }

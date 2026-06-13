@@ -122,6 +122,43 @@ fn state() -> &'static Mutex<StoreState> {
 /// locks are never held simultaneously.
 static REVOKE_EPOCH: AtomicU64 = AtomicU64::new(0);
 
+fn write_lock() -> &'static Mutex<()> {
+    static L: OnceLock<Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(()))
+}
+
+/// Serialize every store write (accept / forget / maintenance flush) through one
+/// lock held across BOTH the snapshot and the file write. Without this, each
+/// writer snapshotted under the map mutex then wrote after releasing it, so two
+/// concurrent writers could race and the last to finish would clobber the disk
+/// with a stale snapshot — dropping a freshly paired device or resurrecting a
+/// removed one. Holding the write lock across snapshot+write makes the last
+/// writer always serialize a map state that includes every prior committed
+/// mutation. The map mutex is only taken briefly to snapshot, so verify() /
+/// record_resume() on the async path never block on disk.
+///
+/// Returns `Ok(true)` = written, `Ok(false)` = intentionally skipped (store not
+/// authoritative, or no backing path), `Err` = the write actually failed.
+fn persist() -> Result<bool, String> {
+    let _w = write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let (snapshot, path, loaded_ok) = {
+        let mut state = state().lock().unwrap();
+        state.dirty = false;
+        (snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
+    };
+    // Never overwrite a store we could not authoritatively load (corrupt at
+    // boot): the file is left intact for recovery.
+    if !loaded_ok {
+        return Ok(false);
+    }
+    match path {
+        Some(path) => write_store_file(&path, &snapshot)
+            .map(|()| true)
+            .map_err(|e| format!("paired-store write failed: {e}")),
+        None => Ok(false),
+    }
+}
+
 // ── Hashing ─────────────────────────────────────────────────────────────────
 
 /// Lowercase-hex SHA-256 of the pairing token. The `02x`-equivalent table emit
@@ -310,23 +347,21 @@ pub fn init(path: PathBuf) {
 
 /// Insert or replace a trusted device, then persist. Call from a command thread
 /// (e.g. `phone_accept_client`), never the async WS task.
-pub fn upsert(device: PairedDevice) {
-    let (snapshot, path, loaded_ok) = {
+/// Insert or replace a trusted device and persist. Returns whether trust was
+/// DURABLY written: `false` when the store was non-authoritative (corrupt at
+/// boot) or the write failed — the device still works this session (it is in the
+/// in-memory map) but won't survive a restart, which the caller should surface.
+pub fn upsert(device: PairedDevice) -> bool {
+    {
         let mut state = state().lock().unwrap();
         state.devices.insert(device.id.clone(), device);
-        (snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
-    };
-    // Never overwrite a store we could not authoritatively load (corrupt on
-    // boot): the in-memory map is empty + this one device, so writing it would
-    // erase the original trusted devices. Keep the device in RAM for this
-    // session and leave the file intact for recovery.
-    if !loaded_ok {
-        eprintln!("[phone] paired-store not authoritative; not persisting upsert (file left intact)");
-        return;
+        state.dirty = true;
     }
-    if let Some(path) = path {
-        if let Err(e) = write_store_file(&path, &snapshot) {
-            eprintln!("[phone] paired-store upsert write failed: {e}");
+    match persist() {
+        Ok(written) => written,
+        Err(e) => {
+            eprintln!("[phone] paired-store upsert: {e}");
+            false
         }
     }
 }
@@ -338,24 +373,25 @@ pub fn upsert(device: PairedDevice) {
 /// must surface this, since the device could resurrect from the stale file on
 /// the next launch. Persists durably (fsync) — revocation must outlive a crash.
 pub fn forget(id: &str) -> Result<bool, String> {
-    let (removed, snapshot, path, loaded_ok) = {
+    let removed = {
         let mut state = state().lock().unwrap();
         let removed = state.devices.remove(id).is_some();
         if removed {
             // Bump AFTER the in-memory removal so a resume whose `verify` saw the
             // device observes the higher epoch and aborts.
             REVOKE_EPOCH.fetch_add(1, Ordering::Relaxed);
+            state.dirty = true;
         }
-        (removed, snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
+        removed
     };
-    if removed && loaded_ok {
-        if let Some(path) = path {
-            write_store_file(&path, &snapshot).map_err(|e| {
-                format!("paired-store write failed — revocation is not durable: {e}")
-            })?;
-        }
+    if !removed {
+        return Ok(false);
     }
-    Ok(removed)
+    // Surface a non-durable revoke: removed from RAM (cannot resume this session)
+    // but if the write failed the device could resurrect from the stale file.
+    persist()
+        .map(|_| true)
+        .map_err(|e| format!("revocation is not durable: {e}"))
 }
 
 /// Constant-time check that `token` matches the stored digest for `id`. Pure
@@ -425,22 +461,11 @@ pub fn record_resume(id: &str, label: &str) {
 /// Persist any in-memory `last_seen` bumps. Call from a command thread /
 /// `spawn_blocking`, never the async WS task. Best-effort.
 pub fn flush_if_dirty() {
-    let (snapshot, path, loaded_ok) = {
-        let mut state = state().lock().unwrap();
-        if !state.dirty {
-            return;
-        }
-        state.dirty = false;
-        (snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
-    };
-    // Don't overwrite a store we couldn't authoritatively load (see upsert).
-    if !loaded_ok {
+    if !state().lock().unwrap().dirty {
         return;
     }
-    if let Some(path) = path {
-        if let Err(e) = write_store_file(&path, &snapshot) {
-            eprintln!("[phone] paired-store flush write failed: {e}");
-        }
+    if let Err(e) = persist() {
+        eprintln!("[phone] paired-store flush: {e}");
     }
 }
 

@@ -151,10 +151,15 @@ if (!pairing) {
           machine.dispatch({ kind: "accepted" });
           break;
         case "rejected":
-          // Only drop creds we were actually relying on; a fresh-QR rejection
-          // must not wipe creds saved for a different desktop.
-          if (usingSavedCreds) clearSavedPairing();
-          fail(`rejected: ${msg.reason}`);
+          if (usingSavedCreds) {
+            // Saved creds are dead — clear them and show the scan-QR screen
+            // rather than a terminal "session ended" needing a manual reload.
+            clearSavedPairing();
+            fail("missing-pairing");
+          } else {
+            // Fresh-QR rejection: don't wipe creds saved for another desktop.
+            fail(`rejected: ${msg.reason}`);
+          }
           break;
         case "answer":
           void transport?.setAnswer(msg.sdp);
@@ -167,23 +172,28 @@ if (!pairing) {
           });
           break;
         case "error":
-          // Saved creds are genuinely dead — drop them so the next load shows
-          // the QR prompt instead of retrying. Only when we relied on saved
-          // creds (a fresh-QR failure must not wipe another desktop's trust);
-          // other fatal codes (busy/version) keep creds: may still be valid.
           if (
             usingSavedCreds &&
             (msg.code === "unknown-session" || msg.code === "bad-token")
           ) {
+            // Saved session gone/invalid — clear creds and fall back to the
+            // scan-QR screen (no manual reload). A fresh-QR failure must not wipe
+            // another desktop's trust; busy/version keep creds (may still work).
             clearSavedPairing();
+            fail("missing-pairing");
+            break;
           }
           if (isFatalErrorCode(msg.code)) fail(`${msg.code}: ${msg.message}`);
           break;
         case "bye":
-          // Only a real removal of the creds we relied on invalidates them;
-          // transient reasons recover via the machine's reconnect.
-          if (usingSavedCreds && msg.reason === "session-removed") clearSavedPairing();
-          fail(msg.reason);
+          if (usingSavedCreds && msg.reason === "session-removed") {
+            // The desktop kicked this trusted device — clear creds, show scan-QR.
+            clearSavedPairing();
+            fail("missing-pairing");
+          } else {
+            // Transient reasons recover via the machine's reconnect.
+            fail(msg.reason);
+          }
           break;
         case "latency":
           break;
