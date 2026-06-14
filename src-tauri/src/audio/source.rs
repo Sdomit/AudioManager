@@ -31,6 +31,9 @@ pub const APP_PREFIX: &str = "app:";
 /// Reserved id namespace for system-loopback sources.
 pub const SYS_PREFIX: &str = "sys:";
 
+/// Reserved id prefix for remote phone (WebRTC) sources: `phone:<session-id>`.
+pub const PHONE_PREFIX: &str = "phone:";
+
 /// The one system-loopback id: the default render endpoint.
 pub const SYS_LOOPBACK_ID: &str = "sys:default";
 
@@ -48,6 +51,8 @@ pub enum InputSourceSpec {
     },
     /// WASAPI loopback of the whole default render endpoint.
     SystemLoopback,
+    /// A phone streaming its microphone over WebRTC, keyed by pairing session id.
+    RemotePhone { session_id: String },
 }
 
 impl InputSourceSpec {
@@ -76,6 +81,13 @@ impl InputSourceSpec {
                 };
             }
         }
+        if let Some(rest) = id.strip_prefix(PHONE_PREFIX) {
+            if !rest.is_empty() {
+                return InputSourceSpec::RemotePhone {
+                    session_id: rest.to_string(),
+                };
+            }
+        }
         InputSourceSpec::Device {
             name: id.to_string(),
         }
@@ -90,6 +102,7 @@ impl InputSourceSpec {
                 format!("{APP_PREFIX}{image_name}")
             }
             InputSourceSpec::SystemLoopback => SYS_LOOPBACK_ID.to_string(),
+            InputSourceSpec::RemotePhone { session_id } => format!("{PHONE_PREFIX}{session_id}"),
         }
     }
 }
@@ -99,7 +112,10 @@ impl InputSourceSpec {
 /// with a reserved prefix is refused at registration — the accepted tradeoff
 /// for a string-keyed source scheme (risk register: "very low").
 pub fn is_reserved_id(id: &str) -> bool {
-    id.starts_with(PROC_PREFIX) || id.starts_with(APP_PREFIX) || id.starts_with(SYS_PREFIX)
+    id.starts_with(PROC_PREFIX)
+        || id.starts_with(APP_PREFIX)
+        || id.starts_with(SYS_PREFIX)
+        || id.starts_with(PHONE_PREFIX)
 }
 
 #[cfg(test)]
@@ -221,7 +237,38 @@ mod tests {
         assert!(is_reserved_id("app:chrome.exe"));
         assert!(is_reserved_id("sys:default"));
         assert!(is_reserved_id("sys:anything"));
+        assert!(is_reserved_id("phone:abc123"));
         assert!(!is_reserved_id("Microphone"));
         assert!(!is_reserved_id("CABLE Output (VB-Audio Virtual Cable)"));
+    }
+
+    #[test]
+    fn parse_classifies_remote_phone() {
+        assert_eq!(
+            InputSourceSpec::parse("phone:deadbeef"),
+            InputSourceSpec::RemotePhone {
+                session_id: "deadbeef".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_empty_phone_id_is_device() {
+        // Bare "phone:" carries no session — stay total and treat it as a device.
+        assert_eq!(
+            InputSourceSpec::parse("phone:"),
+            InputSourceSpec::Device {
+                name: "phone:".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn round_trip_remote_phone() {
+        let spec = InputSourceSpec::RemotePhone {
+            session_id: "ab12cd34".to_string(),
+        };
+        assert_eq!(spec.to_id(), "phone:ab12cd34");
+        assert_eq!(InputSourceSpec::parse(&spec.to_id()), spec);
     }
 }

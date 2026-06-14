@@ -1,6 +1,7 @@
 mod amvc;
 mod amvc_sync;
 mod audio;
+mod net;
 mod presets;
 mod state;
 
@@ -212,6 +213,10 @@ fn ensure_input_source(device_id: &str) -> Result<(), EngineError> {
         InputSourceSpec::SystemLoopback
         | InputSourceSpec::Process { .. }
         | InputSourceSpec::ProcessByName { .. } => ensure_loopback_supported(),
+        // Phone sources are platform-agnostic and always valid to register: the
+        // feed is passive (silent until the phone connects), so a stale or
+        // not-yet-connected session is accepted rather than rejected.
+        InputSourceSpec::RemotePhone { .. } => Ok(()),
     }
 }
 
@@ -668,6 +673,13 @@ fn remove_input(
         if let Err(err) = rebuild_bus(&mut inner, bus_id) {
             return Err(store_last_error(&mut inner, err));
         }
+    }
+
+    // Removing a phone input also ends its pairing session so the phone
+    // disconnects rather than lingering as an orphaned, routable-again source.
+    // Keep its persisted trust — this is a disconnect, not a revoke.
+    if let InputSourceSpec::RemotePhone { session_id } = InputSourceSpec::parse(&device_id) {
+        net::session::remove(&session_id, "disconnected");
     }
 
     inner.last_error = None;
@@ -1373,6 +1385,211 @@ mod tests {
     }
 }
 
+// ── Phone Wireless Audio (#39-#45) ────────────────────────────────────────────
+// Pairing/session commands for the LAN phone client. Media (WebRTC) and the
+// mixer-side remote input land in later phases; see docs/phone/architecture.md.
+
+/// Payload returned by `phone_create_session`. The URL carries the pairing
+/// token in its fragment — render it as a QR code, never log it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhoneSessionCreated {
+    id: String,
+    label: String,
+    port: u16,
+    /// Pairing URL per LAN interface, primary first.
+    urls: Vec<String>,
+}
+
+#[tauri::command]
+fn phone_server_status() -> net::PhoneServerStatus {
+    net::server_status()
+}
+
+#[tauri::command]
+fn phone_create_session(
+    app: tauri::AppHandle,
+    label: Option<String>,
+) -> Result<PhoneSessionCreated, EngineError> {
+    let data_dir = app_local_dir(&app)?;
+    let port = net::ensure_server(&data_dir).map_err(|message| EngineError { message })?;
+    let (id, token) = net::session::create_session(label);
+    let urls: Vec<String> = net::lan_ips()
+        .iter()
+        .map(|ip| net::pairing_url(ip, port, &id, &token))
+        .collect();
+    let status = net::session::status(&id).ok_or_else(|| EngineError {
+        message: "session vanished after creation".to_string(),
+    })?;
+    Ok(PhoneSessionCreated {
+        id,
+        label: status.label,
+        port,
+        urls,
+    })
+}
+
+#[tauri::command]
+fn phone_list_sessions() -> Vec<net::session::PhoneSessionStatus> {
+    net::session::list()
+}
+
+#[tauri::command]
+fn phone_accept_client(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
+    let persisted =
+        net::session::accept(&session_id).map_err(|message| EngineError { message })?;
+    // Surface the phone as a normal mixer input. Adding it to the graph does not
+    // route it anywhere (no sends yet), so no bus rebuild is needed — the user
+    // wires it to buses like any other input. Done even when persistence failed,
+    // so the phone is usable this session.
+    let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+    {
+        let mut inner = state.inner.lock().unwrap();
+        if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
+            inner.graph.add_input(&device_id);
+        }
+    }
+    // Trust could not be saved (corrupt store / disk error): the phone works now
+    // but won't auto-reconnect after a restart — surface it rather than implying
+    // a durable pairing.
+    if !persisted {
+        return Err(EngineError {
+            message: "Phone connected, but it could not be saved as a trusted device \
+                      (storage error); it will not auto-reconnect after a restart."
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn phone_reject_client(session_id: String) -> Result<(), EngineError> {
+    net::session::reject(&session_id, "user-declined").map_err(|message| EngineError { message })
+}
+
+/// Disconnect a phone WITHOUT revoking persisted trust: end the live session
+/// (pushes `bye`) and drop its mixer input. The device stays paired and can
+/// auto-reconnect — this is "close this connection", used by the live "Phones"
+/// list and by the pairing sheet when it discards an old QR session. Deliberately
+/// does NOT call paired::forget (see phone_remove_session: that command is reused
+/// for QR refresh, so forgetting here would silently distrust an accepted phone).
+fn disconnect_phone(
+    state: &tauri::State<AppState>,
+    session_id: &str,
+    bye_reason: &str,
+) -> Result<(), EngineError> {
+    net::session::remove(session_id, bye_reason);
+    let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+    let mut inner = state.inner.lock().unwrap();
+    let affected: Vec<BusId> = BusId::ALL
+        .into_iter()
+        .filter(|bus_id| {
+            inner
+                .graph
+                .get_send(&device_id, *bus_id)
+                .map(|send| send.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+    if inner.graph.remove_input(&device_id) {
+        for bus_id in affected {
+            if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+                return Err(store_last_error(&mut inner, err));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Revoke a device's persisted trust AND disconnect it (the "Paired devices →
+/// Remove" / kick action). forget-before-remove: revoke the store entry BEFORE
+/// dropping the live session, else a reconnect in the gap could auto-resume from
+/// the still-present entry and defeat the kick. A non-durable revoke (disk write
+/// failed) is surfaced AFTER the live kick — the device is gone this session but
+/// could resurrect from the stale file on next launch, so the caller must see it.
+fn revoke_phone(
+    state: &tauri::State<AppState>,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    let durable = net::paired::forget(session_id);
+    // Kick: "session-removed" tells the phone to clear its saved creds (a plain
+    // disconnect uses "disconnected" and keeps trust).
+    let disconnected = disconnect_phone(state, session_id, "session-removed");
+    // Surface a non-durable revoke FIRST — it is the security-relevant signal
+    // (the device could resurrect from a stale store file) and must not be
+    // swallowed if the disconnect's graph rebuild happens to error.
+    durable.map_err(|message| EngineError { message })?;
+    disconnected
+}
+
+/// Disconnect a phone session (live "Phones" list / QR refresh). Keeps the
+/// device paired — to revoke trust, use phone_forget.
+#[tauri::command]
+fn phone_remove_session(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
+    // Plain disconnect: keep trust, transient reason so the phone does NOT wipe
+    // its saved creds (it can auto-reconnect later).
+    disconnect_phone(&state, &session_id, "disconnected")
+}
+
+/// The persisted trusted devices for the "Paired devices" management list.
+/// Never includes the token/digest.
+#[tauri::command]
+fn phone_list_paired() -> Vec<net::paired::PairedDeviceStatus> {
+    net::paired::list()
+}
+
+/// Revoke a device from the "Paired devices" list: delete persisted trust so it
+/// cannot auto-reconnect, end any live session (pushes `bye`), and drop its
+/// mixer input. forget-before-remove, same as phone_remove_session.
+#[tauri::command]
+fn phone_forget(
+    state: tauri::State<AppState>,
+    session_id: String,
+) -> Result<(), EngineError> {
+    revoke_phone(&state, &session_id)
+}
+
+/// Whether boot-time autostart of the phone server is enabled (opt-in, default
+/// false). The UI ("Paired devices") reads this to render the toggle.
+#[tauri::command]
+fn phone_get_autostart(app: tauri::AppHandle) -> Result<bool, EngineError> {
+    let dir = app_local_dir(&app)?;
+    Ok(net::PhoneSettings::load_or_default(&dir).autostart)
+}
+
+/// Enable/disable bringing the phone server up at app launch so trusted phones
+/// can reconnect without opening the pairing sheet. Persisted; takes effect on
+/// next launch. Additive — does not touch the current session's server.
+#[tauri::command]
+fn phone_set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), EngineError> {
+    let dir = app_local_dir(&app)?;
+    let mut settings = net::PhoneSettings::load_or_default(&dir);
+    settings.autostart = enabled;
+    settings.save(&dir).map_err(|message| EngineError { message })
+}
+
+/// Set a phone session's latency mode ("fastest" | "balanced" | "stable"). The
+/// jitter feeder picks the new target depth live — no reconnect needed.
+#[tauri::command]
+fn phone_set_latency_mode(session_id: String, mode: String) -> Result<(), EngineError> {
+    let parsed = net::jitter::LatencyMode::from_str(&mode).ok_or_else(|| EngineError {
+        message: format!("unknown latency mode: {mode}"),
+    })?;
+    if net::session::set_latency(&session_id, parsed) {
+        Ok(())
+    } else {
+        Err(EngineError {
+            message: "unknown session".to_string(),
+        })
+    }
+}
+
 // ── Tauri entry point ─────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1380,6 +1597,53 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
+        .setup(|app| {
+            // pairing-v2 #1 (Phase 2): when a trusted phone auto-resumes, re-add
+            // its mixer-graph input (the graph was reset on restart). The net
+            // layer fires this hook; only the app side can reach AppState's graph.
+            // Mirrors phone_accept_client — a silent passive feed until routed.
+            let resume_handle = app.handle().clone();
+            net::set_resume_hook(Box::new(move |session_id: &str| {
+                let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
+                let state = resume_handle.state::<AppState>();
+                let mut inner = state.inner.lock().unwrap();
+                if !inner
+                    .graph
+                    .list_inputs()
+                    .iter()
+                    .any(|c| c.device_id == device_id)
+                {
+                    inner.graph.add_input(&device_id);
+                }
+            }));
+
+            // pairing-v2 #1: load the persisted trusted-device store so a
+            // returning phone can auto-reconnect (Phase 2 consumes it).
+            // Panic-free by contract — any failure leaves an empty store and the
+            // app still launches with default QR pairing intact.
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                net::paired::init(dir.join(net::paired::STORE_FILE_NAME));
+                // Periodically flush in-memory last_seen bumps and prune expired
+                // devices, off the async runtime. The store file inherits the
+                // per-user %LOCALAPPDATA% ACL (same as the TLS key beside it) — no
+                // world-readable exposure, no custom DACL needed.
+                net::paired::spawn_maintenance();
+                // Opt-in (default false): only when the user has enabled
+                // autostart AND we authoritatively loaded a non-empty trusted
+                // store do we bring the LAN server up at boot. Otherwise this is
+                // a no-op and boot is byte-for-byte the current MVP. The
+                // on-demand ensure_server (pairing sheet) is unchanged and
+                // idempotent, so the two coexist.
+                if net::PhoneSettings::load_or_default(&dir).autostart
+                    && net::paired::has_trusted_devices()
+                {
+                    if let Err(e) = net::ensure_server(&dir) {
+                        eprintln!("[phone] boot autostart failed: {e}");
+                    }
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_input_devices,
             list_output_devices,
@@ -1428,7 +1692,25 @@ pub fn run() {
             amvc_sync::amvc_plan_endpoint_sync,
             amvc_sync::amvc_apply_endpoint_sync,
             amvc_sync::amvc_restore_endpoint_names,
+            phone_server_status,
+            phone_create_session,
+            phone_list_sessions,
+            phone_accept_client,
+            phone_reject_client,
+            phone_remove_session,
+            phone_set_latency_mode,
+            phone_list_paired,
+            phone_forget,
+            phone_get_autostart,
+            phone_set_autostart,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Persist any last_seen bumps still only in RAM — a short run
+                // that reconnected but quit before the 5-min maintenance flush.
+                net::paired::flush_if_dirty();
+            }
+        });
 }

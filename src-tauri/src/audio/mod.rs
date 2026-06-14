@@ -7,6 +7,7 @@ pub mod meters;
 pub mod mixer;
 pub mod passthrough;
 pub mod recorder;
+pub mod remote;
 pub mod resampler;
 pub mod routing;
 pub mod session;

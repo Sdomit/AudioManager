@@ -31,6 +31,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Unit tests
         run: npm test
+      - name: Build phone bundle
+        run: npm run build:phone
 
   rust:
     name: Rust (windows)
@@ -46,6 +48,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      # audiopus (Phase 2 phone-audio receiver) builds libopus from C via CMake,
+      # which needs cl + cmake + ninja on PATH. This sets up the MSVC dev env so
+      # the libopus build script can configure. See scripts/win-dev-shell.ps1 for
+      # the local equivalent.
+      - uses: ilammy/msvc-dev-cmd@v1
       - name: Build
         run: cargo check --all-targets
       - name: Tests

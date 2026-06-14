@@ -338,3 +338,89 @@ export interface AmvcSyncPlan {
   aligned: boolean;
   can_write: boolean;
 }
+
+// ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
+
+/** Mirror of `net::session::SessionState` (serde kebab-case). */
+export type PhoneSessionState =
+  | "created"
+  | "pending-accept"
+  | "accepted"
+  | "reconnecting"
+  | "disconnected"
+  | "expired";
+
+/** Mirror of `net::PhoneServerStatus`. */
+export interface PhoneServerStatus {
+  running: boolean;
+  port: number | null;
+  lanIps: string[];
+  /** Server running but a LAN connect fails => a firewall is blocking the port. */
+  reachable: boolean;
+}
+
+/** Mirror of `net::session::PhoneSessionStatus`. Never contains the token. */
+export interface PhoneSessionStatus {
+  id: string;
+  label: string;
+  state: PhoneSessionState;
+  clientKind: string | null;
+  clientOs: string | null;
+  expiresInSecs: number | null;
+  /** RTP packets received since connect (Phase 2); 0 until audio flows. */
+  packets: number;
+  /** Estimated lost packets from RTP sequence gaps. */
+  lost: number;
+  /** Decoded peak level 0..1 since the last poll — the "we hear you" meter. */
+  level: number;
+  /** Active latency mode (Phase 4). */
+  latencyMode: "fastest" | "balanced" | "stable" | "adaptive";
+  /** Current jitter-buffer depth in frames. */
+  jitterDepth: number;
+  /** Cumulative concealed (PLC) frames — rises on packet loss. */
+  plc: number;
+  /** Times this session resumed after a dropped connection (#44). */
+  reconnectCount: number;
+  /** Active audio codec once media flows, else null. */
+  codec: string | null;
+  /** Phone has muted itself (self-reported). */
+  muted: boolean;
+  /** Phone is in OS data-saver mode (self-reported). */
+  batterySaver: boolean;
+  /** Frames reconstructed via Opus FEC (Adaptive mode). */
+  fecRecovered: number;
+  /** Reordered (out-of-order, in-window) arrivals. */
+  reorder: number;
+  /** Live adaptive jitter window depth in frames. */
+  adaptiveTarget: number;
+  /** Ring-overflow drops on the mixer feed (weak-link indicator). */
+  ringGlitches: number;
+  /** Clock-drift trim currently applied, ppm (signed). */
+  driftPpm: number;
+}
+
+/**
+ * Returned by `phone_create_session`. `urls` carry the pairing token in the
+ * fragment — render as QR, never log.
+ */
+export interface PhoneSessionCreated {
+  id: string;
+  label: string;
+  port: number;
+  urls: string[];
+}
+
+/**
+ * Mirror of `net::paired::PairedDeviceStatus` — a persisted trusted device in
+ * the "Paired devices" list. Never contains the token/digest.
+ */
+export interface PhonePairedDevice {
+  id: string;
+  label: string;
+  clientKind: string | null;
+  clientOs: string | null;
+  /** Unix seconds when first accepted. */
+  createdUtc: number;
+  /** Unix seconds of the most recent successful connect. */
+  lastSeenUtc: number;
+}

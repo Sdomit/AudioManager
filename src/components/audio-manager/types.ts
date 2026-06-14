@@ -70,7 +70,8 @@ export type InputSourceKind =
   | "system"
   | "app"
   | "loopback"
-  | "virtual";
+  | "virtual"
+  | "phone";
 
 export interface AudioInput {
   id: string;
