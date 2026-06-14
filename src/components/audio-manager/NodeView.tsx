@@ -871,8 +871,16 @@ export function NodeView({
     const onUp = () => {
       const d = fxDragRef.current;
       if (d && d.hoverBusId) {
-        // Drop on a bus → route this input there (chain feeds the send tail).
-        onToggleSend(d.inputId, d.hoverBusId);
+        // Drop on a bus → ensure this input routes there (chain feeds the send
+        // tail). onToggleSend TOGGLES, so fire only when no send exists yet —
+        // re-dropping on an already-routed bus must not delete the route (and
+        // its gain/mute). Toggling off is done by clicking the wire, not here.
+        const alreadyRouted = sends.some(
+          (s) => s.inputId === d.inputId && s.busId === d.hoverBusId,
+        );
+        if (!alreadyRouted) {
+          onToggleSend(d.inputId, d.hoverBusId);
+        }
       } else if (d && d.hoverKey) {
         const input = inputs.find((i) => i.id === d.inputId);
         if (input) {
@@ -887,7 +895,7 @@ export function NodeView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [fxDrag, inputFxLayout, inputs, onInputDsp, onToggleSend, busPositions, toCanvas]);
+  }, [fxDrag, inputFxLayout, inputs, onInputDsp, onToggleSend, sends, busPositions, toCanvas]);
 
   // Add-effect menu (anchored at the "+" box). Null when closed.
   const [addFxMenu, setAddFxMenu] = useState<{
