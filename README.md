@@ -41,6 +41,14 @@
 | **Wireless phone input** | Pair a phone over Wi-Fi and use it as a routable mixer input |
 | **B1 stream output** | Built-in guidance for virtual cable routing to OBS, Discord, Zoom |
 
+
+## Coming Soon
+
+| Feature | Description |
+| --- | --- |
+| **Phone remote control** | Mute, adjust gain, and toggle effects on the desktop mixer directly from the paired phone's browser — no app install required |
+| **Live sound gate for streaming** | Per-input noise gate exposed as a one-click control on stream buses, pre-tuned for voice; tighten threshold and release without leaving the routing view |
+| **Live sound gate for phone input** | Same gate UI on the wireless phone input — silence the room between sentences, stream-ready out of the box |
 ## Signal Flow
 
 Inputs pass through the routing matrix into four buses. Each bus runs its own DSP chain and metering, then drives an output device, a virtual cable, or a file.
