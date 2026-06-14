@@ -7,6 +7,7 @@ import {
   ChevronRightIcon,
 } from "./Icon";
 import { BusEqControls, BusLimiterControls } from "./DspControls";
+import { openEqPopout } from "./eqPopoutWindow";
 import { BUFFER_SIZE_OPTIONS } from "./dspDefaults";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
@@ -200,7 +201,11 @@ export function BusDetail({
             {bus.underruns} under · {bus.overruns} over
           </span>
         </div>
-        <BusEqControls eq={bus.eq} onChange={onEqChange} />
+        <BusEqControls
+          eq={bus.eq}
+          onChange={onEqChange}
+          onPopOut={() => void openEqPopout(`bus:${bus.id}`, `EQ — ${bus.label}`)}
+        />
         <BusLimiterControls limiter={bus.limiter} onChange={onLimiterChange} />
       </section>
 

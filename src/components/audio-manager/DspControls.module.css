@@ -113,6 +113,21 @@
   background: color-mix(in srgb, var(--am-accent) 8%, transparent);
   border-radius: var(--am-radius-sm, 4px);
 }
+.popOutBtn {
+  align-self: flex-end;
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm, 4px);
+  padding: 2px 8px;
+  margin-bottom: var(--am-space-1);
+  cursor: pointer;
+}
+.popOutBtn:hover {
+  color: var(--am-text-primary);
+  border-color: var(--am-accent);
+}
 .bandLabel {
   font-size: var(--am-text-11);
   font-weight: 600;

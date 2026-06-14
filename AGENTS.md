@@ -1,5 +1,8 @@
 # AudioManager — Codex guidance
 
+> **New session? Read [docs/HANDOFF.md](docs/HANDOFF.md) first** — one-read orientation:
+> current branch state, code map, build/run/test, workflow rules.
+
 ## Code search & navigation
 
 Prefer the `codebase-memory-mcp` tools over raw Grep/Glob for symbol lookup, call graphs, and architecture queries. They are pre-indexed and 10–100x cheaper in tokens.

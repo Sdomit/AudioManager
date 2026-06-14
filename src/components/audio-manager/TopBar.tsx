@@ -4,7 +4,9 @@ import {
   ChevronDownIcon,
   RecordIcon,
   SettingsIcon,
+  VolumeIcon,
 } from "./Icon";
+import { openQuickPanel } from "./quickPanelWindow";
 import { ElapsedTime } from "./RecordButton";
 import type {
   ActiveRecording,
@@ -167,6 +169,16 @@ export function TopBar({
         </button>
 
         <DensityToggle density={density} onChange={onDensityChange} />
+
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={() => { void openQuickPanel(); }}
+          title="Quick Panel (Ctrl+Shift+M)"
+          aria-label="Open Quick Panel widget"
+        >
+          <VolumeIcon size={16} />
+        </button>
 
         <button className={styles.iconBtn} aria-label="Settings">
           <SettingsIcon size={16} />

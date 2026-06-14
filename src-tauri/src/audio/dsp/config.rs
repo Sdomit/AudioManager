@@ -120,8 +120,8 @@ pub struct EqBand {
 impl EqBand {
     pub fn clamp(&mut self) {
         self.freq_hz = clamp_finite(self.freq_hz, 1_000.0, FREQ_MIN, FREQ_MAX);
-        self.q = clamp_finite(self.q, 1.0, 0.1, 10.0);
-        self.gain_db = clamp_finite(self.gain_db, 0.0, -24.0, 24.0);
+        self.q = clamp_finite(self.q, 1.0, 0.1, 36.0);
+        self.gain_db = clamp_finite(self.gain_db, 0.0, -30.0, 30.0);
     }
 }
 
@@ -493,8 +493,8 @@ mod tests {
             gain_db: 99.0,
         };
         band.clamp();
-        assert_eq!(band.q, 10.0);
-        assert_eq!(band.gain_db, 24.0);
+        assert_eq!(band.q, 36.0);
+        assert_eq!(band.gain_db, 30.0);
     }
 
     #[test]

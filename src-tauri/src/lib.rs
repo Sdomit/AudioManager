@@ -635,6 +635,17 @@ fn add_input(
     ensure_input_source(&device_id)?;
     let mut inner = state.inner.lock().unwrap();
     inner.graph.add_input(&device_id);
+    // Start a peak monitor (device or loopback) so the UI shows live levels
+    // even before any bus engine is built. Non-fatal: a failed monitor just
+    // means no metering until an engine starts.
+    if !inner.monitors.contains_key(&device_id) {
+        match audio::monitor::InputMonitor::start(&device_id) {
+            Ok(monitor) => {
+                inner.monitors.insert(device_id.clone(), monitor);
+            }
+            Err(e) => eprintln!("[add_input] monitor start failed for {device_id}: {e}"),
+        }
+    }
     inner.last_error = None;
     Ok(inner.graph.list_inputs())
 }
@@ -669,6 +680,7 @@ fn remove_input(
         }
     }
 
+    inner.monitors.remove(&device_id);
     inner.last_error = None;
     Ok(inner.graph.list_inputs())
 }
@@ -799,6 +811,14 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
         status.underruns = underruns;
         status.overruns = overruns;
         buses.push(status);
+    }
+
+    // Fill any device not covered by a running engine with its monitor peak.
+    for (device_id, monitor) in &inner.monitors {
+        let peak = monitor.take_peak();
+        if peak > 0.0 {
+            input_peaks_by_device.entry(device_id.clone()).or_insert(peak);
+        }
     }
 
     let input_peaks = input_peaks_by_device
@@ -1341,6 +1361,43 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            use tauri_plugin_global_shortcut::{
+                Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+            };
+            let shortcut =
+                Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM);
+            let handle = app.handle().clone();
+            app.global_shortcut().on_shortcut(
+                shortcut,
+                move |_app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(win) = handle.get_webview_window("widget") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        } else {
+                            use tauri::{WebviewUrl, WebviewWindowBuilder};
+                            if let Ok(win) = WebviewWindowBuilder::new(
+                                &handle,
+                                "widget",
+                                WebviewUrl::App("index.html?widget=1".into()),
+                            )
+                            .title("AudioManager")
+                            .inner_size(280.0, 390.0)
+                            .resizable(false)
+                            .always_on_top(true)
+                            .skip_taskbar(false)
+                            .build()
+                            {
+                                let _ = win.set_focus();
+                            }
+                        }
+                    }
+                },
+            )?;
+            Ok(())
+        })
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             list_input_devices,

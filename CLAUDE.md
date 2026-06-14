@@ -1,5 +1,8 @@
 # AudioManager — Claude guidance
 
+> **New session? Read [docs/HANDOFF.md](docs/HANDOFF.md) first** — one-read orientation:
+> current branch state, code map, build/run/test, workflow rules. Cheapest way to get productive.
+
 ## Response Style (Caveman Mode Active)
 - No preamble, no openers, no summaries
 - Fragments OK — drop articles (a/an/the), filler (just/really/basically), pleasantries

@@ -109,13 +109,16 @@ function EffectSection({
 /* ── EQ editor (graph + per-band rows) ──────────────────────────────────── */
 
 /** Shared parametric-EQ editor used by both input and bus chains. Renders the
- *  interactive response graph plus one row per band (shape, freq, gain, Q). */
-function EqEditor({
+ *  interactive response graph plus one row per band (shape, freq, gain, Q).
+ *  When `onPopOut` is given, shows a button to detach the editor into a window. */
+export function EqEditor({
   eq,
   onChange,
+  onPopOut,
 }: {
   eq: EqConfig;
   onChange: (next: EqConfig) => void;
+  onPopOut?: () => void;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
   const setBands = (bands: EqBand[]) => onChange({ ...eq, bands });
@@ -124,6 +127,16 @@ function EqEditor({
 
   return (
     <>
+      {onPopOut ? (
+        <button
+          type="button"
+          className={styles.popOutBtn}
+          onClick={onPopOut}
+          title="Open EQ in a separate window"
+        >
+          ⤢ Pop out
+        </button>
+      ) : null}
       <EqGraph
         bands={eq.bands}
         selected={selected}
@@ -202,9 +215,11 @@ function EqEditor({
 export function BusEqControls({
   eq,
   onChange,
+  onPopOut,
 }: {
   eq: EqConfig;
   onChange: (next: EqConfig) => void;
+  onPopOut?: () => void;
 }) {
   return (
     <div className={styles.chain}>
@@ -213,7 +228,7 @@ export function BusEqControls({
         enabled={eq.enabled}
         onToggle={(enabled) => onChange({ ...eq, enabled })}
       >
-        <EqEditor eq={eq} onChange={onChange} />
+        <EqEditor eq={eq} onChange={onChange} onPopOut={onPopOut} />
       </EffectSection>
     </div>
   );
@@ -269,9 +284,11 @@ export function BusLimiterControls({
 export function InputDspControls({
   dsp,
   onChange,
+  onPopOutEq,
 }: {
   dsp: DspConfig;
   onChange: (next: DspConfig) => void;
+  onPopOutEq?: () => void;
 }) {
   const setDenoise = (patch: Partial<DenoiseConfig>) =>
     onChange({ ...dsp, denoise: { ...dsp.denoise, ...patch } });
@@ -354,7 +371,11 @@ export function InputDspControls({
         enabled={dsp.eq.enabled}
         onToggle={setEqEnabled}
       >
-        <EqEditor eq={dsp.eq} onChange={(eq) => onChange({ ...dsp, eq })} />
+        <EqEditor
+          eq={dsp.eq}
+          onChange={(eq) => onChange({ ...dsp, eq })}
+          onPopOut={onPopOutEq}
+        />
       </EffectSection>
 
       <EffectSection

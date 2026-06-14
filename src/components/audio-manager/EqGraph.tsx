@@ -20,9 +20,9 @@ const VIEW_W = 600;
 const VIEW_H = 220;
 const F_MIN = 20;
 const F_MAX = 20_000;
-const GAIN_MAX = 24; // matches DSP_RANGE.eqGain
+const GAIN_MAX = 30; // matches DSP_RANGE.eqGain
 const NODE_R = 9;
-const CURVE_POINTS = 200;
+const CURVE_POINTS = 360;
 
 const LOG_MIN = Math.log10(F_MIN);
 const LOG_SPAN = Math.log10(F_MAX) - LOG_MIN;
@@ -33,7 +33,7 @@ const FREQ_LABELS: Record<number, string> = {
   1000: "1k",
   10000: "10k",
 };
-const GAIN_GRID = [-18, -12, -6, 0, 6, 12, 18];
+const GAIN_GRID = [-24, -12, 0, 12, 24];
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(Math.max(v, lo), hi);
@@ -117,7 +117,7 @@ export function EqGraph({
       };
       if (bandUsesGain(band.kind)) {
         const [gMin, gMax] = DSP_RANGE.eqGain;
-        patch.gain_db = clamp(Math.round(yToGain(v.vy) * 2) / 2, gMin, gMax);
+        patch.gain_db = clamp(Math.round(yToGain(v.vy) * 10) / 10, gMin, gMax);
       }
       patchBand(i, patch);
     },
@@ -138,7 +138,7 @@ export function EqGraph({
       e.preventDefault();
       const [qMin, qMax] = DSP_RANGE.eqQ;
       const next = clamp(
-        Math.round(band.q * Math.exp(-e.deltaY * 0.001) * 10) / 10,
+        Math.round(band.q * Math.exp(-e.deltaY * 0.001) * 20) / 20,
         qMin,
         qMax,
       );
@@ -189,11 +189,9 @@ export function EqGraph({
                 y2={y}
                 className={g === 0 ? styles.gridZero : styles.grid}
               />
-              {(g === 0 || g === 12 || g === -12) && (
-                <text x={4} y={y - 3} className={styles.axisLabel}>
-                  {g > 0 ? `+${g}` : g}
-                </text>
-              )}
+              <text x={4} y={y - 3} className={styles.axisLabel}>
+                {g > 0 ? `+${g}` : g}
+              </text>
             </g>
           );
         })}

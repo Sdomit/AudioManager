@@ -4,6 +4,7 @@ pub mod dsp;
 pub mod graph;
 pub mod loopback;
 pub mod mixer;
+pub mod monitor;
 pub mod passthrough;
 pub mod recorder;
 pub mod resampler;
