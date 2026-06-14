@@ -6,6 +6,7 @@
  * replace useAudioManager()'s internal state with calls to tauriCommands.
  */
 
+import { defaultDspConfig, defaultEq, defaultLimiter } from "./dspDefaults";
 import type {
   AudioInput,
   Bus,
@@ -15,7 +16,10 @@ import type {
   StreamSetupStep,
 } from "./types";
 
-export const mockBuses: Bus[] = [
+const rawBuses: Omit<
+  Bus,
+  "bufferSizeFrames" | "underruns" | "overruns" | "limiter" | "eq" | "loudness"
+>[] = [
   {
     id: "A1",
     role: "monitor",
@@ -70,7 +74,17 @@ export const mockBuses: Bus[] = [
   },
 ];
 
-export const mockInputs: AudioInput[] = [
+export const mockBuses: Bus[] = rawBuses.map((b) => ({
+  ...b,
+  bufferSizeFrames: null,
+  underruns: 0,
+  overruns: 0,
+  eq: defaultEq(),
+  limiter: defaultLimiter(),
+  loudness: null,
+}));
+
+const rawInputs: Omit<AudioInput, "dsp">[] = [
   { id: "in_mic",      name: "Microphone",      kind: "microphone", device: "Shure SM7B (Focusrite)", gain: 0.78, muted: false, level: 0.42 },
   { id: "in_sys",      name: "System Audio",    kind: "system",     device: "Stereo Mix (Realtek)",   gain: 0.60, muted: false, level: 0.20 },
   { id: "in_discord",  name: "Discord",         kind: "app",        device: "CABLE Output (VAC 1)",   gain: 0.72, muted: false, level: 0.35 },
@@ -82,6 +96,11 @@ export const mockInputs: AudioInput[] = [
   { id: "in_loop",     name: "Loopback A1",     kind: "loopback",   device: "Headphones (loopback)",  gain: 0.50, muted: false, level: 0.00 },
   { id: "in_aux",      name: "Aux Input",       kind: "microphone", device: "Line In (Focusrite)",    gain: 0.40, muted: true,  level: 0.00 },
 ];
+
+export const mockInputs: AudioInput[] = rawInputs.map((i) => ({
+  ...i,
+  dsp: defaultDspConfig(),
+}));
 
 /**
  * Sends are stored sparsely — only enabled or trimmed sends are listed.

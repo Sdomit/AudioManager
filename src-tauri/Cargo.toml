@@ -27,6 +27,46 @@ ringbuf = "0.2"
 hound = "3.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# RNNoise neural denoiser (pure-Rust port). Library only — `default-features
+# = false` drops the CLI `bin`/`dasp` deps (clap, hound, anyhow). #37
+nnnoiseless = { version = "0.5.2", default-features = false }
+
+# DeepFilterNet (phase 2, #37) is NOT wired as a build dep on purpose. A working
+# prototype used:
+#   deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", branch = "main",
+#                   default-features = false, features = ["tract", "default-model"], optional = true }
+#   ndarray = "=0.15.6"; tract-{core,onnx,pulse,hir} = "=0.21.4"  (pin: main uses
+#   the pre-rename `symbol_table` tract API), behind a `deepfilternet` feature.
+# Blocker: the embedded DeepFilterNet3 model fails tract codegen at load
+# ("duplicate name /convt3/Conv.bias") with 0.21.4, and newer tract drops the
+# API `deep_filter` main needs — so no buildable model/tract combo right now.
+# It was kept out of the tree because an optional git dep is fetched even on
+# default builds, burdening everyone for a feature that can't load its model
+# yet. The backend enum + UI selector + seqlock plumbing below are ready; drop
+# `DfBackend` back into audio/dsp/denoise.rs and re-add the deps once upstream
+# ships a compatible model/tract.
+
+# WASAPI loopback capture (system + per-process). Windows-only; pulls in the
+# `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.23"
+# Resolve session PIDs to process image names for the app picker (#16).
+sysinfo = "0.39"
+# Read AMVC render-endpoint names from HKLM MMDevices (cheap, no elevation) for
+# sync planning. The authoritative *write* goes through MMDevice COM below.
+winreg = "0.52"
+# Rename endpoints via IPropertyStore::SetValue + Commit (writes AND fires the
+# property-change notification, unlike a raw registry write). Matches wasapi's
+# windows version so features unify with no extra crate instance.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Devices_FunctionDiscovery",
+] }
 
 # Phone Wireless Audio (#39-#45): LAN HTTPS server hosting the phone client
 # and the pairing/signaling WebSocket. See docs/phone/architecture.md.
@@ -51,13 +91,6 @@ rustls = { version = "0.23", features = ["ring"] }
 # pairing-v2 #1: hash the 122-bit pairing token (SHA-256, never stored plaintext)
 # for the persisted trusted-device store. Pure Rust, no cmake/build deps.
 sha2 = "0.10"
-
-# WASAPI loopback capture (system + per-process). Windows-only; pulls in the
-# `windows` crate transitively. Process loopback needs Win10 2004 (build 19041).
-[target.'cfg(windows)'.dependencies]
-wasapi = "0.23"
-# Resolve session PIDs to process image names for the app picker (#16).
-sysinfo = "0.39"
 
 # audiopus_sys builds libopus via cmake; at opt-level 0 cmake-rs picks the DEBUG
 # MSVC runtime (MSVCRTD), which Rust does not link, giving `_CrtDbgReportW`

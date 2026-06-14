@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::audio::bus::BusId;
+use crate::audio::dsp::DspConfig;
 use crate::audio::routing::Route;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -14,7 +15,12 @@ pub struct InputSend {
 
 impl InputSend {
     pub fn default_for(bus_id: BusId) -> Self {
-        Self { bus_id, enabled: false, volume: 1.0, muted: false }
+        Self {
+            bus_id,
+            enabled: false,
+            volume: 1.0,
+            muted: false,
+        }
     }
 
     pub fn clamp_volume(v: f32) -> f32 {
@@ -33,6 +39,10 @@ pub struct InputChannel {
     pub gain: f32,
     pub muted: bool,
     pub sends: Vec<InputSend>,
+    /// Per-input DSP chain (HPF/gate/EQ/comp/limiter). `serde(default)` so graph
+    /// and preset data saved before #32 deserialize as a bypassed chain.
+    #[serde(default)]
+    pub dsp: DspConfig,
 }
 
 impl InputChannel {
@@ -42,6 +52,7 @@ impl InputChannel {
             gain: 1.0,
             muted: false,
             sends: BusId::ALL.into_iter().map(InputSend::default_for).collect(),
+            dsp: DspConfig::default(),
         }
     }
 
@@ -91,7 +102,11 @@ impl AudioGraph {
     }
 
     pub fn set_input_gain(&mut self, device_id: &str, gain: f32, muted: bool) -> bool {
-        let Some(input) = self.inputs.iter_mut().find(|input| input.device_id == device_id) else {
+        let Some(input) = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.device_id == device_id)
+        else {
             return false;
         };
         input.gain = InputChannel::clamp_gain(gain);
@@ -99,12 +114,22 @@ impl AudioGraph {
         true
     }
 
-    pub fn set_send(
-        &mut self,
-        device_id: &str,
-        bus_id: BusId,
-        enabled: bool,
-    ) -> bool {
+    /// Store a per-input DSP config, clamped to safe ranges. Returns false if no
+    /// input matches `device_id`.
+    pub fn set_input_dsp(&mut self, device_id: &str, mut dsp: DspConfig) -> bool {
+        let Some(input) = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.device_id == device_id)
+        else {
+            return false;
+        };
+        dsp.clamp();
+        input.dsp = dsp;
+        true
+    }
+
+    pub fn set_send(&mut self, device_id: &str, bus_id: BusId, enabled: bool) -> bool {
         let Some(send) = self.find_send_mut(device_id, bus_id) else {
             return false;
         };
@@ -137,7 +162,9 @@ impl AudioGraph {
     }
 
     pub fn get_input(&self, device_id: &str) -> Option<&InputChannel> {
-        self.inputs.iter().find(|input| input.device_id == device_id)
+        self.inputs
+            .iter()
+            .find(|input| input.device_id == device_id)
     }
 
     pub fn effective_input_for_bus(
@@ -156,7 +183,7 @@ impl AudioGraph {
         Some((gain, input.muted || send.muted, send.enabled))
     }
 
-    pub fn effective_inputs_for_bus(&self, bus_id: BusId) -> Vec<(String, f32, bool)> {
+    pub fn effective_inputs_for_bus(&self, bus_id: BusId) -> Vec<(String, f32, bool, DspConfig)> {
         self.inputs
             .iter()
             .filter_map(|input| {
@@ -171,7 +198,7 @@ impl AudioGraph {
                     1.0
                 };
                 let muted = input.muted || send.muted;
-                Some((input.device_id.clone(), gain, muted))
+                Some((input.device_id.clone(), gain, muted, input.dsp.clone()))
             })
             .collect()
     }
@@ -189,10 +216,7 @@ impl AudioGraph {
             .iter()
             .filter_map(|input| {
                 let send = input.sends.iter().find(|send| send.bus_id == BusId::A1)?;
-                if !send.enabled
-                    && (send.volume - 1.0).abs() < f32::EPSILON
-                    && !send.muted
-                {
+                if !send.enabled && (send.volume - 1.0).abs() < f32::EPSILON && !send.muted {
                     return None;
                 }
                 Some(Route {
@@ -240,6 +264,34 @@ mod tests {
         let send = graph.get_send("mic", BusId::A1).unwrap();
         assert!((send.volume - 2.0).abs() < f32::EPSILON);
         assert!(send.muted);
+    }
+
+    #[test]
+    fn new_input_has_bypassed_dsp() {
+        let input = InputChannel::new("mic");
+        assert_eq!(input.dsp, DspConfig::default());
+    }
+
+    #[test]
+    fn set_input_dsp_clamps_and_stores() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("mic");
+        let mut cfg = DspConfig::default();
+        cfg.compressor.enabled = true;
+        cfg.compressor.ratio = 99.0; // out of range -> clamps to 20
+        assert!(graph.set_input_dsp("mic", cfg));
+        let stored = &graph.get_input("mic").unwrap().dsp;
+        assert!(stored.compressor.enabled);
+        assert_eq!(stored.compressor.ratio, 20.0);
+        assert!(!graph.set_input_dsp("missing", DspConfig::default()));
+    }
+
+    #[test]
+    fn input_channel_deserializes_without_dsp_field() {
+        // Graph data saved before #32 has no `dsp` key.
+        let json = r#"{"device_id":"mic","gain":1.0,"muted":false,"sends":[]}"#;
+        let input: InputChannel = serde_json::from_str(json).unwrap();
+        assert_eq!(input.dsp, DspConfig::default());
     }
 
     #[test]

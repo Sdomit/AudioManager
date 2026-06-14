@@ -45,7 +45,10 @@ pub enum InputSourceSpec {
     /// WASAPI process loopback for one application by PID (and its children).
     Process { pid: u32, include_tree: bool },
     /// WASAPI process loopback resolved from a stable image name at build time.
-    ProcessByName { image_name: String, include_tree: bool },
+    ProcessByName {
+        image_name: String,
+        include_tree: bool,
+    },
     /// WASAPI loopback of the whole default render endpoint.
     SystemLoopback,
     /// A phone streaming its microphone over WebRTC, keyed by pairing session id.
@@ -64,7 +67,10 @@ impl InputSourceSpec {
         }
         if let Some(rest) = id.strip_prefix(PROC_PREFIX) {
             if let Ok(pid) = rest.parse::<u32>() {
-                return InputSourceSpec::Process { pid, include_tree: true };
+                return InputSourceSpec::Process {
+                    pid,
+                    include_tree: true,
+                };
             }
         }
         if let Some(rest) = id.strip_prefix(APP_PREFIX) {
@@ -77,10 +83,14 @@ impl InputSourceSpec {
         }
         if let Some(rest) = id.strip_prefix(PHONE_PREFIX) {
             if !rest.is_empty() {
-                return InputSourceSpec::RemotePhone { session_id: rest.to_string() };
+                return InputSourceSpec::RemotePhone {
+                    session_id: rest.to_string(),
+                };
             }
         }
-        InputSourceSpec::Device { name: id.to_string() }
+        InputSourceSpec::Device {
+            name: id.to_string(),
+        }
     }
 
     /// Render this spec back to its canonical `device_id`.
@@ -114,14 +124,20 @@ mod tests {
 
     #[test]
     fn parse_classifies_system_loopback() {
-        assert_eq!(InputSourceSpec::parse("sys:default"), InputSourceSpec::SystemLoopback);
+        assert_eq!(
+            InputSourceSpec::parse("sys:default"),
+            InputSourceSpec::SystemLoopback
+        );
     }
 
     #[test]
     fn parse_classifies_process() {
         assert_eq!(
             InputSourceSpec::parse("proc:1234"),
-            InputSourceSpec::Process { pid: 1234, include_tree: true }
+            InputSourceSpec::Process {
+                pid: 1234,
+                include_tree: true
+            }
         );
     }
 
@@ -129,7 +145,9 @@ mod tests {
     fn parse_falls_back_to_device() {
         assert_eq!(
             InputSourceSpec::parse("Microphone (Realtek)"),
-            InputSourceSpec::Device { name: "Microphone (Realtek)".to_string() }
+            InputSourceSpec::Device {
+                name: "Microphone (Realtek)".to_string()
+            }
         );
     }
 
@@ -139,7 +157,9 @@ mod tests {
         // is_reserved_id, but parse must stay total: non-numeric → Device.
         assert_eq!(
             InputSourceSpec::parse("proc:foo"),
-            InputSourceSpec::Device { name: "proc:foo".to_string() }
+            InputSourceSpec::Device {
+                name: "proc:foo".to_string()
+            }
         );
     }
 
@@ -149,13 +169,17 @@ mod tests {
         // through to Device (and are refused at registration).
         assert_eq!(
             InputSourceSpec::parse("sys:something"),
-            InputSourceSpec::Device { name: "sys:something".to_string() }
+            InputSourceSpec::Device {
+                name: "sys:something".to_string()
+            }
         );
     }
 
     #[test]
     fn round_trip_device() {
-        let spec = InputSourceSpec::Device { name: "Line In".to_string() };
+        let spec = InputSourceSpec::Device {
+            name: "Line In".to_string(),
+        };
         assert_eq!(InputSourceSpec::parse(&spec.to_id()), spec);
     }
 
@@ -167,7 +191,10 @@ mod tests {
 
     #[test]
     fn round_trip_process_tree() {
-        let spec = InputSourceSpec::Process { pid: 9001, include_tree: true };
+        let spec = InputSourceSpec::Process {
+            pid: 9001,
+            include_tree: true,
+        };
         assert_eq!(spec.to_id(), "proc:9001");
         assert_eq!(InputSourceSpec::parse(&spec.to_id()), spec);
     }
@@ -188,7 +215,9 @@ mod tests {
         // Bare "app:" carries no name — stay total and treat it as a device.
         assert_eq!(
             InputSourceSpec::parse("app:"),
-            InputSourceSpec::Device { name: "app:".to_string() }
+            InputSourceSpec::Device {
+                name: "app:".to_string()
+            }
         );
     }
 
@@ -217,7 +246,9 @@ mod tests {
     fn parse_classifies_remote_phone() {
         assert_eq!(
             InputSourceSpec::parse("phone:deadbeef"),
-            InputSourceSpec::RemotePhone { session_id: "deadbeef".to_string() }
+            InputSourceSpec::RemotePhone {
+                session_id: "deadbeef".to_string()
+            }
         );
     }
 
@@ -226,13 +257,17 @@ mod tests {
         // Bare "phone:" carries no session — stay total and treat it as a device.
         assert_eq!(
             InputSourceSpec::parse("phone:"),
-            InputSourceSpec::Device { name: "phone:".to_string() }
+            InputSourceSpec::Device {
+                name: "phone:".to_string()
+            }
         );
     }
 
     #[test]
     fn round_trip_remote_phone() {
-        let spec = InputSourceSpec::RemotePhone { session_id: "ab12cd34".to_string() };
+        let spec = InputSourceSpec::RemotePhone {
+            session_id: "ab12cd34".to_string(),
+        };
         assert_eq!(spec.to_id(), "phone:ab12cd34");
         assert_eq!(InputSourceSpec::parse(&spec.to_id()), spec);
     }

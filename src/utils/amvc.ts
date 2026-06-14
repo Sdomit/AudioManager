@@ -33,6 +33,7 @@ export function parseAmvcHelperOutput(stdout: string): AmvcQueryResult {
     missing: Array.isArray(data.missing)
       ? (data.missing as string[]).filter((v) => typeof v === "string")
       : [],
+    device_enabled: typeof data.device_enabled === "boolean" ? data.device_enabled : undefined,
   };
 }
 
@@ -52,6 +53,11 @@ export function queryAmvcHelper(): Promise<AmvcQueryResult> {
 /** Spawn the helper installer. Resolves immediately; helper runs in background. */
 export function launchAmvcInstaller(): Promise<void> {
   return invoke<void>("launch_amvc_installer");
+}
+
+/** Enable or disable the AMVC device node. Requires amvc-helper to be elevated. */
+export function setAmvcDeviceEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("amvc_set_device_enabled", { enabled });
 }
 
 // ── Routing preset ────────────────────────────────────────────────────────────

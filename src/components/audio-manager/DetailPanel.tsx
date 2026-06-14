@@ -7,6 +7,9 @@ import type {
   Bus,
   BusId,
   DetailSelection,
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
   Send,
   TapSpec,
 } from "./types";
@@ -20,6 +23,8 @@ interface DetailPanelProps {
   activeRecordings: ActiveRecording[];
   onInputGainChange: (id: string, v: number) => void;
   onInputMuted: (id: string) => void;
+  onInputDsp: (id: string, dsp: DspConfig) => void;
+  onApplyStreamVoice: (id: string) => void;
   onRemoveInput: (id: string) => void;
   onToggleSend: (inputId: string, busId: BusId) => void;
   onSendGainChange: (inputId: string, busId: BusId, v: number) => void;
@@ -27,10 +32,17 @@ interface DetailPanelProps {
   onBusVolumeChange: (id: BusId, v: number) => void;
   onBusEnabledChange: (id: BusId) => void;
   onBusMutedChange: (id: BusId) => void;
+  onBusBufferSizeChange: (id: BusId, frames: number | null) => void;
+  onBusLatencyModeChange: (id: BusId, mode: string) => void;
+  onBusLimiterChange: (id: BusId, limiter: LimiterConfig) => void;
+  onBusEqChange: (id: BusId, eq: EqConfig) => void;
   onPickDevice: (id: BusId) => void;
   onSelectInputContext: (id: string) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
+  /** True when shown in node view — hide the input's in-panel DSP chain so
+   *  the canvas is the single place to edit effects. */
+  inputOnly?: boolean;
 }
 
 /**
@@ -64,8 +76,11 @@ export function DetailPanel(props: DetailPanelProps) {
           onToggleSend={(busId) => props.onToggleSend(input.id, busId)}
           onSendGainChange={(busId, v) => props.onSendGainChange(input.id, busId, v)}
           onSendMuted={(busId, muted) => props.onSendMuted(input.id, busId, muted)}
+          onDspChange={(dsp) => props.onInputDsp(input.id, dsp)}
+          onApplyStreamVoice={() => props.onApplyStreamVoice(input.id)}
           onStartRecording={props.onStartRecording}
           onStopRecording={props.onStopRecording}
+          inputOnly={props.inputOnly}
         />
       </aside>
     );
@@ -93,6 +108,10 @@ export function DetailPanel(props: DetailPanelProps) {
         onToggleMuted={() => props.onBusMutedChange(bus.id)}
         onPickDevice={() => props.onPickDevice(bus.id)}
         onSelectInput={props.onSelectInputContext}
+        onBufferSizeChange={(frames) => props.onBusBufferSizeChange(bus.id, frames)}
+        onLatencyModeChange={(mode) => props.onBusLatencyModeChange(bus.id, mode)}
+        onEqChange={(eq) => props.onBusEqChange(bus.id, eq)}
+        onLimiterChange={(limiter) => props.onBusLimiterChange(bus.id, limiter)}
         onStartRecording={props.onStartRecording}
         onStopRecording={props.onStopRecording}
       />

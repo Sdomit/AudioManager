@@ -17,7 +17,9 @@ pub struct DeviceListError {
 
 impl<E: std::fmt::Display> From<E> for DeviceListError {
     fn from(e: E) -> Self {
-        Self { message: e.to_string() }
+        Self {
+            message: e.to_string(),
+        }
     }
 }
 

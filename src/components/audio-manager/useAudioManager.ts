@@ -17,6 +17,13 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import * as ipc from "../../ipc/commands";
 import { busRoleFor, uiVolumeToBackend } from "./adapters";
+import {
+  b1ProtectLimiter,
+  defaultDspConfig,
+  defaultEq,
+  defaultLimiter,
+  streamVoiceConfig,
+} from "./dspDefaults";
 import { mockStreamSetupSteps } from "./mockData";
 import {
   hydrate as fetchHydrate,
@@ -35,6 +42,9 @@ import type {
   BusRole,
   Density,
   DetailSelection,
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
   Preset,
   RecordingFile,
   RoutingView,
@@ -133,8 +143,12 @@ type Action =
   | { type: "set_bus_device"; id: BusId; device: string | null }
   | { type: "rename_bus"; id: BusId; name: string }
   | { type: "set_bus_role"; id: BusId; role: BusRole | null }
+  | { type: "set_bus_buffer_size"; id: BusId; frames: number | null }
+  | { type: "set_bus_limiter"; id: BusId; limiter: LimiterConfig }
+  | { type: "set_bus_eq"; id: BusId; eq: EqConfig }
   | { type: "set_input_gain"; id: string; gain: number }
   | { type: "set_input_muted"; id: string; muted: boolean }
+  | { type: "set_input_dsp"; id: string; dsp: DspConfig }
   | { type: "remove_input"; id: string }
   | { type: "add_input" }
   | { type: "toggle_send"; inputId: string; busId: BusId }
@@ -223,11 +237,23 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
         role: action.role ?? defaultBusRoleFor(b.id),
       }));
 
+    case "set_bus_buffer_size":
+      return updateBus(state, action.id, (b) => ({ ...b, bufferSizeFrames: action.frames }));
+
+    case "set_bus_limiter":
+      return updateBus(state, action.id, (b) => ({ ...b, limiter: action.limiter }));
+
+    case "set_bus_eq":
+      return updateBus(state, action.id, (b) => ({ ...b, eq: action.eq }));
+
     case "set_input_gain":
       return updateInput(state, action.id, (i) => ({ ...i, gain: clamp01(action.gain) }));
 
     case "set_input_muted":
       return updateInput(state, action.id, (i) => ({ ...i, muted: action.muted }));
+
+    case "set_input_dsp":
+      return updateInput(state, action.id, (i) => ({ ...i, dsp: action.dsp }));
 
     case "remove_input":
       return {
@@ -250,6 +276,7 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
         gain: 0.7,
         muted: false,
         level: 0,
+        dsp: defaultDspConfig(),
       };
       return { ...state, inputs: [...state.inputs, next], selection: { kind: "input", inputId: id } };
     }
@@ -374,6 +401,12 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
               level: 0,
               clipUntil: null,
               error: null,
+              bufferSizeFrames: null,
+              underruns: 0,
+              overruns: 0,
+              eq: defaultEq(),
+              limiter: defaultLimiter(),
+              loudness: null,
             };
         return {
           ...merged,
@@ -392,6 +425,7 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
               gain: is.gain,
               muted: is.muted,
               level: 0,
+              dsp: defaultDspConfig(),
             };
       });
       const inputIds = new Set(nextInputs.map((i) => i.id));
@@ -805,6 +839,63 @@ export function useAudioManager(): UseAudioManager {
     [],
   );
 
+  const setBusBufferSize = useCallback(
+    (id: BusId, frames: number | null) => {
+      const prev = getBus(id)?.bufferSizeFrames ?? null;
+      dispatch({ type: "set_bus_buffer_size", id, frames });
+      // Rebuilds the engine, so refresh to pick up the resulting state
+      // (running/error). Not throttled — discrete control, not a slider.
+      ipc
+        .setBusBufferSize(id, frames)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("setBusBufferSize failed:", e);
+          dispatch({ type: "set_bus_buffer_size", id, frames: prev });
+          refresh();
+        });
+    },
+    [getBus, refresh],
+  );
+
+  const setBusLatencyMode = useCallback(
+    (id: BusId, mode: string) => {
+      // Rebuilds the engine (sets buffer_size_frames behind the scenes), so
+      // refresh to pick up the resulting running/error + derived mode state.
+      ipc
+        .setBusLatencyMode(id, mode)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("setBusLatencyMode failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
+  const setBusLimiter = useCallback(
+    (id: BusId, limiter: LimiterConfig) => {
+      dispatch({ type: "set_bus_limiter", id, limiter });
+      scheduleWrite(`bus-dsp:${id}`, () => {
+        const bus = getBus(id);
+        if (!bus) return Promise.resolve();
+        return ipc.updateBusDsp(id, { eq: bus.eq, limiter: bus.limiter });
+      });
+    },
+    [getBus, scheduleWrite],
+  );
+
+  const setBusEq = useCallback(
+    (id: BusId, eq: EqConfig) => {
+      dispatch({ type: "set_bus_eq", id, eq });
+      scheduleWrite(`bus-dsp:${id}`, () => {
+        const bus = getBus(id);
+        if (!bus) return Promise.resolve();
+        return ipc.updateBusDsp(id, { eq: bus.eq, limiter: bus.limiter });
+      });
+    },
+    [getBus, scheduleWrite],
+  );
+
   const setInputGain = useCallback(
     (id: string, gain: number) => {
       recordHistory(`input_gain:${id}`);
@@ -837,6 +928,53 @@ export function useAudioManager(): UseAudioManager {
         });
     },
     [getInput],
+  );
+
+  const setInputDsp = useCallback(
+    (id: string, dsp: DspConfig) => {
+      dispatch({ type: "set_input_dsp", id, dsp });
+      scheduleWrite(`input-dsp:${id}`, () => {
+        const input = getInput(id);
+        if (!input) return Promise.resolve();
+        // DSP is stored per-input in the graph; the busId arg only selects
+        // which running engine gets the live seqlock publish. Push to every
+        // bus this input is routed to so whichever engine is live updates
+        // immediately. With no routes, one call still persists it to the graph.
+        const routed = Array.from(
+          new Set(
+            stateRef.current.sends
+              .filter((s) => s.inputId === id)
+              .map((s) => s.busId),
+          ),
+        );
+        const targets: BusId[] = routed.length > 0 ? routed : ["A1"];
+        // Live publish to every routed bus's engine. A single non-running bus
+        // can reject without aborting the others (graph persistence already
+        // happened via the dispatch above), but a publish that failed on EVERY
+        // target is a real error — surface it so scheduleWrite's error path runs.
+        return Promise.allSettled(
+          targets.map((busId) => ipc.updateInputDsp(busId, id, input.dsp)),
+        ).then((results) => {
+          if (results.every((r) => r.status === "rejected")) {
+            throw (results[0] as PromiseRejectedResult).reason;
+          }
+        });
+      });
+    },
+    [getInput, scheduleWrite],
+  );
+
+  // Apply the Stream Voice profile to an input AND arm B1 protection in one
+  // action (#33). Both writes go through the existing setInputDsp fan-out and
+  // setBusLimiter paths, so they clamp, publish live, and persist like any other
+  // edit. Config-only — never starts an engine.
+  const applyStreamVoice = useCallback(
+    (id: string) => {
+      recordHistory(`stream_voice:${id}`);
+      setInputDsp(id, streamVoiceConfig());
+      setBusLimiter("B1", b1ProtectLimiter());
+    },
+    [setInputDsp, setBusLimiter],
   );
 
   const removeInput = useCallback(
@@ -1235,6 +1373,10 @@ export function useAudioManager(): UseAudioManager {
     setBusDevice,
     renameBus,
     setBusRoleOverride,
+    setBusBufferSize,
+    setBusLatencyMode,
+    setBusLimiter,
+    setBusEq,
     startRecording,
     startMasterRecording,
     stopRecording,
@@ -1247,6 +1389,8 @@ export function useAudioManager(): UseAudioManager {
     closeRecordingsPanel,
     setInputGain,
     setInputMuted,
+    setInputDsp,
+    applyStreamVoice,
     removeInput,
     addInput,
     toggleSend,
