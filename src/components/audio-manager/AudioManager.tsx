@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BusContextMenu } from "./BusContextMenu";
+import { EqSampleRateContext } from "./EqGraph";
+import { DEFAULT_EQ_SR } from "./eqResponse";
 import { BusRail } from "./BusRail";
 import { CableNotice } from "./CableNotice";
 import { busRoleFor } from "./adapters";
@@ -98,6 +100,37 @@ export function AudioManager() {
   const [cableNoticeDismissed, setCableNoticeDismissed] = useState(false);
   const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
   const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
+  // Engine sample rate for EQ response curves: DSP runs at the output device's
+  // rate, so use the SELECTED bus's device rate (for input EQ, the first bus the
+  // input feeds — that engine processes its DSP). Falls back to the default
+  // output device, then 48 kHz.
+  const eqSampleRate = useMemo(() => {
+    const rateOf = (deviceId: string | null | undefined) =>
+      deviceId
+        ? outputDevicesCache.find((d) => d.id === deviceId)?.default_sample_rate
+        : undefined;
+    const sel = state.selection;
+    let busDevice: string | null | undefined;
+    if (sel.kind === "bus") {
+      busDevice = state.buses.find((b) => b.id === sel.busId)?.device;
+    } else if (sel.kind === "input") {
+      // A routed bus has a live engine when it is enabled + configured (covers
+      // running / clipping / silent); prefer those — a disabled or unconfigured
+      // routed bus has no engine — then any configured routed bus.
+      const routedBuses = state.sends
+        .filter((s) => s.inputId === sel.inputId)
+        .map((s) => state.buses.find((b) => b.id === s.busId));
+      const chosen =
+        routedBuses.find((b) => b?.enabled && b?.device) ??
+        routedBuses.find((b) => b?.device);
+      busDevice = chosen?.device;
+    }
+    return (
+      rateOf(busDevice) ??
+      outputDevicesCache.find((d) => d.is_default)?.default_sample_rate ??
+      DEFAULT_EQ_SR
+    );
+  }, [state.selection, state.buses, state.sends, outputDevicesCache]);
   const [inputDevicesCache, setInputDevicesCache] = useState<DeviceInfo[]>([]);
 
   // Re-poll device lists and recompute AudioManager-cable presence. Runs at
@@ -332,7 +365,13 @@ export function AudioManager() {
         onOpenStreamSetup={am.openStreamSetup}
       />
 
-      <AmvcBanner />
+      {/* Slot order A1/A2/B1/B2 is the sync-plan contract — don't trust
+          array order. */}
+      <AmvcBanner
+        busNames={(["A1", "A2", "B1", "B2"] as const).map(
+          (id) => state.buses.find((b) => b.id === id)?.label ?? id,
+        )}
+      />
 
       {state.presetBannerVisible && loadedPreset && (
         <PresetBanner preset={loadedPreset} onDismiss={am.dismissPresetBanner} />
@@ -399,9 +438,16 @@ export function AudioManager() {
           onRemoveInput={am.removeInput}
           onInputGainChange={am.setInputGain}
           onBusVolumeChange={am.setBusVolume}
+          onInputDsp={am.setInputDsp}
+          onBusEq={am.setBusEq}
+          onBusLimiter={am.setBusLimiter}
         />
 
-        {state.routingView !== "nodes" && (
+        {/* Detail panel: always present in matrix/flow; in the nodes canvas it
+            appears only when a bus/input is selected, so per-bus/per-input
+            settings (DSP, buffer size, limiter) are reachable from every view. */}
+        {(state.routingView !== "nodes" || state.selection.kind !== "none") && (
+          <EqSampleRateContext.Provider value={eqSampleRate}>
           <DetailPanel
             selection={state.selection}
             buses={state.buses}
@@ -414,6 +460,8 @@ export function AudioManager() {
               if (!input) return;
               am.setInputMuted(id, !input.muted);
             }}
+            onInputDsp={am.setInputDsp}
+            onApplyStreamVoice={am.applyStreamVoice}
             onRemoveInput={am.removeInput}
             onToggleSend={am.toggleSend}
             onSendGainChange={am.setSendGain}
@@ -429,13 +477,19 @@ export function AudioManager() {
               if (!bus) return;
               am.setBusMuted(id, !bus.muted);
             }}
+            onBusBufferSizeChange={am.setBusBufferSize}
+            onBusLatencyModeChange={am.setBusLatencyMode}
+            onBusLimiterChange={am.setBusLimiter}
+            onBusEqChange={am.setBusEq}
             onPickDevice={(id) => setBusPickerFor(id)}
             onSelectInputContext={(id) =>
               am.setSelection({ kind: "input", inputId: id })
             }
             onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
             onStopRecording={(id: string) => void am.stopRecording(id)}
+            inputOnly={state.routingView === "nodes"}
           />
+          </EqSampleRateContext.Provider>
         )}
       </main>
 

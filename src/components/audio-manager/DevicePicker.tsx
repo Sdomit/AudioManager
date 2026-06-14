@@ -107,19 +107,26 @@ export function DevicePicker({
     }
     let cancelled = false;
     setSessionsLoading(true);
-    ipc
-      .listAudioSessions()
-      .then((items) => {
-        if (!cancelled) setSessions(items);
-      })
-      .catch(() => {
-        if (!cancelled) setSessions([]);
-      })
-      .finally(() => {
-        if (!cancelled) setSessionsLoading(false);
-      });
+    const load = () => {
+      ipc
+        .listAudioSessions()
+        .then((items) => {
+          if (!cancelled) setSessions(items);
+        })
+        .catch(() => {
+          if (!cancelled) setSessions([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSessionsLoading(false);
+        });
+    };
+    load();
+    // Re-poll while the picker is open so apps that start/stop playing after it
+    // opened are reflected (and stale stopped apps drop off the list).
+    const timer = setInterval(load, 3000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [open, wantsLoopback]);
 

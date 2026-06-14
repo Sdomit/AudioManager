@@ -115,7 +115,12 @@ mod imp {
         let id = next_sub_id();
         let ring = RingBuffer::<f32>::new(LOOPBACK_RING_SIZE);
         let (producer, consumer) = ring.split();
-        let sub = Subscriber { id, producer, peak, index };
+        let sub = Subscriber {
+            id,
+            producer,
+            peak,
+            index,
+        };
 
         // Fast path: attach to a LIVE capture. A capture that hit a read error
         // has flagged itself `failed` (it never touches the map); evict it here
@@ -296,14 +301,23 @@ mod imp {
             }
         };
 
-        let stream_mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns };
+        let stream_mode = StreamMode::EventsShared {
+            autoconvert: true,
+            buffer_duration_hns,
+        };
         client.initialize_client(&desired, &Direction::Capture, &stream_mode)?;
 
         let event = client.set_get_eventhandle()?;
         let capture = client.get_audiocaptureclient()?;
         client.start_stream()?;
 
-        Ok(CaptureSession { client, capture, event, blockalign, channels: LOOPBACK_CHANNELS })
+        Ok(CaptureSession {
+            client,
+            capture,
+            event,
+            blockalign,
+            channels: LOOPBACK_CHANNELS,
+        })
     }
 
     fn run_capture_loop(
@@ -311,7 +325,13 @@ mod imp {
         subs: &Arc<Mutex<Vec<Subscriber>>>,
         stop: &AtomicBool,
     ) {
-        let CaptureSession { client, capture, event, blockalign, channels } = session;
+        let CaptureSession {
+            client,
+            capture,
+            event,
+            blockalign,
+            channels,
+        } = session;
         let frame_bytes = blockalign.max(channels as usize * 4);
         let mut bytes: VecDeque<u8> = VecDeque::new();
         // Converted samples for the current wake, reused across iterations to
@@ -343,22 +363,23 @@ mod imp {
                     let _ = client.stop_stream();
                     return;
                 }
-                while bytes.len() >= frame_bytes {
-                    let mut s = 0;
-                    while s + 4 <= frame_bytes {
-                        let b0 = bytes.pop_front().unwrap();
-                        let b1 = bytes.pop_front().unwrap();
-                        let b2 = bytes.pop_front().unwrap();
-                        let b3 = bytes.pop_front().unwrap();
-                        let sample = f32::from_le_bytes([b0, b1, b2, b3]);
+                let avail_frames = bytes.len() / frame_bytes;
+                if avail_frames > 0 {
+                    let consume = avail_frames * frame_bytes;
+                    // Drain whole frames in one contiguous pass: chunks_exact(4)
+                    // over a slice instead of 4× pop_front per sample. Leftover
+                    // partial-frame bytes stay queued for the next read.
+                    let block = bytes.make_contiguous();
+                    for chunk in block[..consume].chunks_exact(4) {
+                        let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                         let sample = if sample.is_finite() { sample } else { 0.0 };
                         let abs = sample.abs();
                         if abs > block_peak {
                             block_peak = abs;
                         }
                         scratch.push(sample);
-                        s += 4;
                     }
+                    bytes.drain(..consume);
                 }
             }
 
@@ -369,11 +390,21 @@ mod imp {
             // realtime output path), so contention with (un)subscribe is brief.
             let mut guard = subs.lock().unwrap();
             for sub in guard.iter_mut() {
-                // Push whole stereo frames only. Pushing samples singly lets a
-                // ring overrun drop one of L/R, shifting frame parity on the
-                // pair-popping consumer and swapping channels permanently (#PR31-1).
-                push_frames(&mut sub.producer, &scratch, LOOPBACK_CHANNELS as usize);
+                // Push whole stereo frames only. A per-sample push lets a ring
+                // overrun drop one of L/R, shifting frame parity on the
+                // pair-popping consumer and swapping channels permanently
+                // (#PR31-1). push_frames drops whole frames and returns the
+                // dropped sample count for overrun telemetry.
+                let over =
+                    push_frames(&mut sub.producer, &scratch, LOOPBACK_CHANNELS as usize) as u32;
                 store_max(&sub.peak[sub.index].input_peak, block_peak);
+                // Overrun: this subscriber's ring was full, so `over` samples
+                // were dropped before the mixer could read them.
+                if over > 0 {
+                    sub.peak[sub.index]
+                        .overrun
+                        .fetch_add(over, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         }
 
@@ -464,6 +495,8 @@ mod tests {
             gain: std::sync::atomic::AtomicU32::new(1.0f32.to_bits()),
             muted: std::sync::atomic::AtomicBool::new(false),
             input_peak: std::sync::atomic::AtomicU32::new(0),
+            overrun: std::sync::atomic::AtomicU32::new(0),
+            underrun: std::sync::atomic::AtomicU32::new(0),
         }]);
         let err = subscribe_system(48_000, slots, 0).unwrap_err();
         assert!(err.message.contains("Windows"));

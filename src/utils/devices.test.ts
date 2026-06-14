@@ -27,9 +27,11 @@ describe("isAudioManagerVirtualDevice", () => {
     expect(isAudioManagerVirtualDevice("AudioManager Cable 1 Playback")).toBe(true);
   });
 
-  it("requires the prefix at position 0", () => {
-    expect(isAudioManagerVirtualDevice("My AudioManager device")).toBe(false);
-    expect(isAudioManagerVirtualDevice(" AudioManager Cable 1")).toBe(false);
+  it("matches the AudioManager brand anywhere in the name", () => {
+    // Windows surfaces endpoints as "Speakers (AudioManager Cable 1)", so the
+    // brand is mid-string — match by substring, not a position-0 prefix.
+    expect(isAudioManagerVirtualDevice("Speakers (AudioManager Cable 1)")).toBe(true);
+    expect(isAudioManagerVirtualDevice(" AudioManager Cable 1")).toBe(true);
   });
 
   it("rejects third-party and physical devices", () => {

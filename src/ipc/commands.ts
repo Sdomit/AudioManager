@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AmvcQueryResult,
+  AmvcSyncPlan,
   AudioSessionInfo,
+  BusDspConfig,
   BusId,
   BusStatus,
   DeviceInfo,
+  DspConfig,
   EngineStatus,
   InputChannel,
   PhonePairedDevice,
@@ -208,6 +211,51 @@ export const queryAmvcHelper = (): Promise<AmvcQueryResult> =>
 /** Spawn the amvc-helper installer in the background. */
 export const launchAmvcInstaller = (): Promise<void> =>
   invoke<void>("launch_amvc_installer");
+
+/** Plan endpoint-name sync (read-only; no elevation). busNames in A1/A2/B1/B2 order. */
+export const amvcPlanEndpointSync = (busNames: string[]): Promise<AmvcSyncPlan> =>
+  invoke<AmvcSyncPlan>("amvc_plan_endpoint_sync", { busNames });
+
+/** Apply endpoint-name sync (requires the app to run elevated). */
+export const amvcApplyEndpointSync = (busNames: string[]): Promise<AmvcSyncPlan> =>
+  invoke<AmvcSyncPlan>("amvc_apply_endpoint_sync", { busNames });
+
+/** Revert renamed endpoints to their backed-up originals. Returns count restored. */
+export const amvcRestoreEndpointNames = (): Promise<number> =>
+  invoke<number>("amvc_restore_endpoint_names");
+
+/** Set the output callback buffer size in frames for a bus. null = driver
+ *  default. Valid range: 32–8192. Triggers an engine rebuild if running. */
+export const setBusBufferSize = (
+  busId: BusId,
+  frames: number | null,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_buffer_size", { busId, frames });
+
+/** Set a bus's latency mode (#35) — a named preset over the raw buffer size.
+ *  "stable" = driver default, "low" = 256, "ultra-low" = 128 frames. Rebuilds. */
+export const setBusLatencyMode = (
+  busId: BusId,
+  mode: string,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("set_bus_latency_mode", { busId, mode });
+
+/** Update a running input's DSP chain live. Stores to graph (survives rebuild)
+ *  and publishes to the engine seqlock — audio callback picks up next block. */
+export const updateInputDsp = (
+  busId: BusId,
+  deviceId: string,
+  config: DspConfig,
+): Promise<void> =>
+  invoke<void>("update_input_dsp", { busId, deviceId, config });
+
+/** Update a running bus's DSP (final limiter) live. Stores to BusConfig and
+ *  publishes to the engine seqlock — audio callback picks up next block. */
+export const updateBusDsp = (
+  busId: BusId,
+  config: BusDspConfig,
+): Promise<BusStatus> =>
+  invoke<BusStatus>("update_bus_dsp", { busId, config });
 
 // ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
 

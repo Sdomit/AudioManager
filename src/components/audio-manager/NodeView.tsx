@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   iconForBusRole,
   iconForKind,
@@ -13,9 +14,24 @@ import type {
   Bus,
   BusId,
   DetailSelection,
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
   Send,
   TapSpec,
 } from "./types";
+import {
+  NodeFxPopover,
+  countBusFx,
+  countInputFx,
+  orderedInputFx,
+  reorderInputFx,
+  setInputFxEnabled,
+  INPUT_FX_DEFS,
+  inputFxEnabled,
+  type InputFxKey,
+  type NodeFxTarget,
+} from "./NodeFxPopover";
 import { gainToDb } from "./units";
 import { bipartiteToGraph } from "./graphAdapter";
 import {
@@ -81,6 +97,12 @@ interface NodeViewProps {
   onRemoveInput?: (id: string) => void;
   onInputGainChange: (id: string, v: number) => void;
   onBusVolumeChange: (id: BusId, v: number) => void;
+  /** Per-input DSP chain edit (denoise/HPF/gate/EQ/comp/limiter). */
+  onInputDsp: (id: string, dsp: DspConfig) => void;
+  /** Per-bus EQ edit. */
+  onBusEq: (id: BusId, eq: EqConfig) => void;
+  /** Per-bus limiter edit. */
+  onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
 }
 
 interface MarqueeState {
@@ -101,6 +123,10 @@ const GROUP_W = 180;
 const GROUP_H = 56;
 const COL_PAD = 18;
 const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
+// On-canvas per-input effect boxes (chained off the input, before its wires).
+const FX_W = 120;
+const FX_H = 36;
+const FX_GAP = 28;
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
 
@@ -125,6 +151,8 @@ interface DragState {
   hoverBusId: BusId | null;
   /** Group drop target. Null when nothing is hovered or hovering a bus. */
   hoverGroupId: string | null;
+  /** Floating-fx drop target — claim that fx for this input on drop. */
+  hoverFloatId: string | null;
   /**
    * True if the candidate edge would be accepted by the generalized
    * graph (no cycle, ports compatible, no duplicate). Drives ghost-wire
@@ -154,7 +182,7 @@ function dropReasonFor(code: string): string {
 }
 
 interface NodeDragState {
-  kind: "input" | "bus" | "group";
+  kind: "input" | "bus" | "group" | "fx" | "float";
   id: string;
   startMouseX: number;
   startMouseY: number;
@@ -182,17 +210,53 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
+// FX node ids live in the shared `nodePositions` map alongside input/bus/group
+// nodes so the existing drag/clamp/persistence machinery handles them for free.
+// Form: `fx:<inputId>:<stage>`.
+const FX_NODE_PREFIX = "fx:";
+function fxNodeId(inputId: string, key: string): NodeId {
+  return `${FX_NODE_PREFIX}${inputId}:${key}`;
+}
+function isFxNodeId(id: NodeId): boolean {
+  return id.startsWith(FX_NODE_PREFIX);
+}
+
+// Floating fx: a placeholder effect node parked on the canvas with no input
+// owner. Drag any input's out-port onto its in-port to claim it (enables that
+// stage on that input + removes the placeholder).
+const FLOAT_NODE_PREFIX = "float:";
+function floatNodeId(floatId: string): NodeId {
+  return `${FLOAT_NODE_PREFIX}${floatId}`;
+}
+function isFloatNodeId(id: NodeId): boolean {
+  return id.startsWith(FLOAT_NODE_PREFIX);
+}
+function floatIdFromNodeId(id: NodeId): string | null {
+  return id.startsWith(FLOAT_NODE_PREFIX)
+    ? id.slice(FLOAT_NODE_PREFIX.length)
+    : null;
+}
+
 // ── Layout helpers ────────────────────────────────────────────────────
 // Node footprint by graph NodeId kind. Centralizes the size lookup that
 // the clamp / drag / placement paths used to each duplicate inline.
 function nodeWidth(nid: NodeId): number {
-  return isInputNodeId(nid) ? INPUT_W : isBusNodeId(nid) ? BUS_W : GROUP_W;
+  if (isInputNodeId(nid)) return INPUT_W;
+  if (isBusNodeId(nid)) return BUS_W;
+  if (isFxNodeId(nid) || isFloatNodeId(nid)) return FX_W;
+  return GROUP_W;
 }
 function nodeHeight(nid: NodeId): number {
-  return isInputNodeId(nid) ? INPUT_H : isBusNodeId(nid) ? BUS_H : GROUP_H;
+  if (isInputNodeId(nid)) return INPUT_H;
+  if (isBusNodeId(nid)) return BUS_H;
+  if (isFxNodeId(nid) || isFloatNodeId(nid)) return FX_H;
+  return GROUP_H;
 }
 
-// Clamp a node's top-left so the whole node stays inside [0, bound-size].
+// Clamp a node's top-left to the world box. The world is the (canvasW × canvasH)
+// box centered at origin extended by `DRAG_MARGIN` in every direction, so a node
+// can be dragged off the seeded layout in any direction (up/left included).
+const DRAG_MARGIN = 4000;
 function clampToBounds(
   x: number,
   y: number,
@@ -201,18 +265,16 @@ function clampToBounds(
   bw: number,
   bh: number,
 ): NodePos {
-  const maxX = Math.max(0, bw - w);
-  const maxY = Math.max(0, bh - h);
-  return { x: Math.min(maxX, Math.max(0, x)), y: Math.min(maxY, Math.max(0, y)) };
+  const minX = -DRAG_MARGIN;
+  const minY = -DRAG_MARGIN;
+  const maxX = Math.max(minX, bw + DRAG_MARGIN - w);
+  const maxY = Math.max(minY, bh + DRAG_MARGIN - h);
+  return { x: Math.min(maxX, Math.max(minX, x)), y: Math.min(maxY, Math.max(minY, y)) };
 }
 
 // Bus column x: sit at a comfortable, readable distance from the input
 // column rather than pinned to the far right edge (which left a large
 // dead gap in the middle on wide canvases). Never overflow the canvas.
-function busColumnXFor(boundsW: number): number {
-  return Math.min(boundsW - BUS_W - COL_PAD, COL_PAD + INPUT_W + COL_GAP_BETWEEN);
-}
-
 // Keep the (canvasW × canvasH) world box within the visible viewport.
 // Nodes are always clamped inside the box, so a visible box guarantees
 // every node stays on screen. When the box is smaller than the viewport
@@ -225,9 +287,14 @@ function clampView(
   viewW: number,
   viewH: number,
 ): Viewport {
+  // Free pan in all directions: the world is 10000×10000, far larger than
+  // anyone's screen, so locking the viewport to the world's left/top edge
+  // (the old `Math.min(0, …)` upper bound) made pan-right and pan-down feel
+  // jammed. Now we only re-center the viewport when the world happens to be
+  // SMALLER than the viewport (zoomed out past 1×); otherwise t is untouched.
   const clampAxis = (t: number, content: number, viewport: number) => {
     if (content <= viewport) return (viewport - content) / 2;
-    return Math.min(0, Math.max(viewport - content, t));
+    return t;
   };
   return {
     zoom: v.zoom,
@@ -259,6 +326,7 @@ const LS_INPUTS_LEGACY = "am.nodePositions.inputs";
 const LS_BUSES_LEGACY  = "am.nodePositions.buses";
 const LS_VIEW          = "am.nodeView.viewport";
 const LS_GROUPS        = "am.nodeGroups.v1";
+const LS_FLOATING_FX   = "am.floatingFx.v1";
 const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
 
 /**
@@ -317,6 +385,26 @@ function loadGroups(): Map<string, GroupMeta> {
   return new Map();
 }
 
+/** Frontend-only floating-fx placeholder: stage label, awaiting an input. */
+interface FloatingFxMeta { stage: InputFxKey; }
+
+function loadFloatingFx(): Map<string, FloatingFxMeta> {
+  try {
+    const raw = localStorage.getItem(LS_FLOATING_FX);
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<[string, FloatingFxMeta]>;
+      return new Map(arr);
+    }
+  } catch {}
+  return new Map();
+}
+
+let floatIdCounter = 0;
+function nextFloatId(): string {
+  floatIdCounter += 1;
+  return `f_${Date.now().toString(36)}_${floatIdCounter.toString(36)}`;
+}
+
 function loadLocalEdges(): Map<string, GraphEdge> {
   try {
     const raw = localStorage.getItem(LS_LOCAL_EDGES);
@@ -358,8 +446,38 @@ export function NodeView({
   onRemoveInput,
   onInputGainChange,
   onBusVolumeChange,
+  onInputDsp,
+  onBusEq,
+  onBusLimiter,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  // The Routing header renders `<div id="am-node-toolbar-slot" />` when in node
+  // view; we portal the canvas toolbar into it so the top bar carries the zoom
+  // controls + Reset layout + Add input / Group buttons instead of stacking
+  // another row above the canvas. Slot lookup happens after mount.
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    const update = () => setToolbarSlot(document.getElementById("am-node-toolbar-slot"));
+    update();
+    // The slot is created by RoutingView when the view toggles to "nodes" —
+    // observe so we re-resolve if it mounts after NodeView (or remounts).
+    const obs = new MutationObserver(update);
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, []);
+  // Open node FX editor (anchored at the click). Null when closed.
+  const [openFx, setOpenFx] = useState<NodeFxTarget | null>(null);
+  const openInputFx = useCallback((id: string, e: React.MouseEvent) => {
+    // Screen coords (popover is position:fixed), clamped so it stays on-screen.
+    const x = Math.min(Math.max(8, e.clientX - 150), window.innerWidth - 320);
+    const y = Math.min(Math.max(8, e.clientY), window.innerHeight - 200);
+    setOpenFx({ kind: "input", id, x, y });
+  }, []);
+  const openBusFx = useCallback((id: BusId, e: React.MouseEvent) => {
+    const x = Math.min(Math.max(8, e.clientX - 150), window.innerWidth - 320);
+    const y = Math.min(Math.max(8, e.clientY), window.innerHeight - 200);
+    setOpenFx({ kind: "bus", id, x, y });
+  }, []);
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
   const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
     w: MIN_CANVAS_W,
@@ -477,10 +595,13 @@ export function NodeView({
   // adapter will translate these into real engine nodes.
   const [localGroups, setLocalGroups] = useState<Map<string, GroupMeta>>(loadGroups);
   const [localEdges, setLocalEdges] = useState<Map<string, GraphEdge>>(loadLocalEdges);
+  const [floatingFx, setFloatingFx] = useState<Map<string, FloatingFxMeta>>(loadFloatingFx);
   const localGroupsRef = useRef(localGroups);
   const localEdgesRef = useRef(localEdges);
+  const floatingFxRef = useRef(floatingFx);
   useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
   useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
+  useEffect(() => { floatingFxRef.current = floatingFx; }, [floatingFx]);
   useEffect(() => {
     try {
       localStorage.setItem(LS_GROUPS, JSON.stringify(Array.from(localGroups.entries())));
@@ -491,13 +612,19 @@ export function NodeView({
       localStorage.setItem(LS_LOCAL_EDGES, JSON.stringify(Array.from(localEdges.entries())));
     } catch {}
   }, [localEdges]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_FLOATING_FX, JSON.stringify(Array.from(floatingFx.entries())));
+    } catch {}
+  }, [floatingFx]);
 
   // Sync inputs+buses → seed defaults, prune removed. One effect now.
   useEffect(() => {
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      const busColX = busColumnXFor(boundsRef.current.w);
+      // Hug the input column (not the right edge of the huge world canvas).
+      const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -515,14 +642,27 @@ export function NodeView({
       const aliveInputs = new Set(inputs.map((i) => inputNodeId(i.id)));
       const aliveBuses = new Set(buses.map((b) => busNodeId(b.id)));
       const aliveGroups = new Set(Array.from(localGroupsRef.current.keys()).map(groupNodeId));
+      // Stage `k` is alive iff its input is alive AND enabled in that input's dsp.
+      const aliveFx = new Set<NodeId>();
+      for (const i of inputs) {
+        for (const chip of orderedInputFx(i.dsp)) {
+          aliveFx.add(fxNodeId(i.id, chip.key));
+        }
+      }
+      const aliveFloats = new Set<NodeId>();
+      for (const fid of floatingFxRef.current.keys()) {
+        aliveFloats.add(floatNodeId(fid));
+      }
       for (const id of Array.from(next.keys())) {
         if (isInputNodeId(id) && !aliveInputs.has(id)) { next.delete(id); changed = true; }
         else if (isBusNodeId(id) && !aliveBuses.has(id)) { next.delete(id); changed = true; }
         else if (isGroupNodeId(id) && !aliveGroups.has(id)) { next.delete(id); changed = true; }
+        else if (isFxNodeId(id) && !aliveFx.has(id)) { next.delete(id); changed = true; }
+        else if (isFloatNodeId(id) && !aliveFloats.has(id)) { next.delete(id); changed = true; }
       }
       return changed ? next : prev;
     });
-  }, [inputs, buses]);
+  }, [inputs, buses, floatingFx]);
 
   // Prune local edges whose endpoints no longer exist.
   useEffect(() => {
@@ -562,6 +702,216 @@ export function NodeView({
     return m;
   }, [nodePositions]);
 
+  // Per-input effect boxes: enabled effects rendered as a node chain hanging
+  // off the input (input → fx → fx → …). The input's outgoing wires then start
+  // at the last box, so audio visibly flows through the chain.
+  //
+  // Each fx node has its own position in `nodePositions` (id = `fx:<inputId>:<key>`).
+  // First time we see an enabled stage we seed its position from the auto-layout
+  // chain spot; after that the user can drag the box anywhere via the standard
+  // node-drag machinery, and the connectors follow.
+  const inputFxLayout = useMemo(() => {
+    interface FxBox {
+      key: InputFxKey;
+      label: string;
+      x: number;
+      y: number;
+      /** in-port (left) + out-port (right) centers, for wires + drop targets. */
+      inX: number;
+      outX: number;
+      portY: number;
+    }
+    interface InputFxRow {
+      boxes: FxBox[];
+      origin: { x: number; y: number };
+      connectors: { x1: number; y1: number; x2: number; y2: number }[];
+    }
+    const map = new Map<string, InputFxRow>();
+    for (const input of inputs) {
+      const pos = inputPositions.get(input.id);
+      if (!pos) continue;
+      const inCy = pos.y + INPUT_H / 2;
+      const inRightX = pos.x + INPUT_W;
+      const boxes: FxBox[] = [];
+      const connectors: InputFxRow["connectors"] = [];
+      // Cursor for the auto-layout fallback (used only when an fx box has no
+      // stored position yet — i.e. it was just enabled this render).
+      let autoX = inRightX;
+      let prevOutX = inRightX;
+      let prevOutY = inCy;
+      // Boxes follow the WIRED order (dsp.order), so re-wiring reshuffles the
+      // chain visually as well as in the engine.
+      for (const chip of orderedInputFx(input.dsp)) {
+        const nid = fxNodeId(input.id, chip.key);
+        const stored = nodePositions.get(nid);
+        const autoBoxX = autoX + FX_GAP;
+        const bx = stored?.x ?? autoBoxX;
+        const by = stored?.y ?? inCy - FX_H / 2;
+        const cy = by + FX_H / 2;
+        boxes.push({
+          key: chip.key,
+          label: chip.label,
+          x: bx,
+          y: by,
+          inX: bx,
+          outX: bx + FX_W,
+          portY: cy,
+        });
+        // Connector from previous out-port to this in-port. Works for any
+        // position (free-form), drawing a polyline → straight is fine here.
+        connectors.push({ x1: prevOutX, y1: prevOutY, x2: bx, y2: cy });
+        prevOutX = bx + FX_W;
+        prevOutY = cy;
+        autoX = autoBoxX + FX_W;
+      }
+      const origin = { x: prevOutX, y: prevOutY };
+      map.set(input.id, { boxes, origin, connectors });
+    }
+    return map;
+  }, [inputs, inputPositions, nodePositions]);
+
+  // Seed `nodePositions` for fx boxes that don't have a stored position yet
+  // (effects just enabled, or new inputs). One-shot: subsequent renders read
+  // the stored value. Drag/clamp paths share the unified map.
+  useEffect(() => {
+    setNodePositions((prev) => {
+      let next: Map<NodeId, NodePos> | null = null;
+      for (const input of inputs) {
+        const ipos = prev.get(inputNodeId(input.id));
+        if (!ipos) continue;
+        const inCy = ipos.y + INPUT_H / 2;
+        let autoX = ipos.x + INPUT_W;
+        for (const chip of orderedInputFx(input.dsp)) {
+          const nid = fxNodeId(input.id, chip.key);
+          const bx = autoX + FX_GAP;
+          autoX = bx + FX_W;
+          if (!prev.get(nid)) {
+            if (!next) next = new Map(prev);
+            next.set(nid, { x: bx, y: inCy - FX_H / 2 });
+          }
+        }
+      }
+      return next ?? prev;
+    });
+  }, [inputs]);
+
+  // FX reorder wire-drag: drag one fx box's OUT port onto another's IN port to
+  // place it immediately before that one. Self-contained (fx ports only) so the
+  // input→bus wiring system is untouched. Coords are canvas-space.
+  const [fxDrag, setFxDrag] = useState<{
+    inputId: string;
+    fromKey: InputFxKey;
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+    hoverKey: InputFxKey | null;
+    hoverBusId: BusId | null;
+  } | null>(null);
+  const fxDragRef = useRef(fxDrag);
+  useEffect(() => {
+    fxDragRef.current = fxDrag;
+  }, [fxDrag]);
+
+  const onFxPortDown = useCallback(
+    (inputId: string, fromKey: InputFxKey, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const row = inputFxLayout.get(inputId);
+      const box = row?.boxes.find((b) => b.key === fromKey);
+      if (!box) return;
+      const { x, y } = toCanvas(e.clientX, e.clientY);
+      setFxDrag({
+        inputId,
+        fromKey,
+        startX: box.outX,
+        startY: box.portY,
+        curX: x,
+        curY: y,
+        hoverKey: null,
+        hoverBusId: null,
+      });
+    },
+    [inputFxLayout],
+  );
+
+  useEffect(() => {
+    if (!fxDrag) return;
+    const onMove = (e: MouseEvent) => {
+      const { x, y } = toCanvas(e.clientX, e.clientY);
+      const d = fxDragRef.current;
+      if (!d) return;
+      // Bus in-ports take precedence (drag-to-route). Sweep bus left-edge ports.
+      let hoverBusId: BusId | null = null;
+      for (const [bid, p] of busPositions) {
+        const dx = x - p.x;
+        const dy = y - (p.y + BUS_H / 2);
+        if (dx * dx + dy * dy < 32 * 32 && isBusId(bid)) {
+          hoverBusId = bid;
+          break;
+        }
+      }
+      let hoverKey: InputFxKey | null = null;
+      if (!hoverBusId) {
+        const row = inputFxLayout.get(d.inputId);
+        if (row) {
+          for (const b of row.boxes) {
+            if (b.key === d.fromKey) continue;
+            const dx = x - b.inX;
+            const dy = y - b.portY;
+            if (dx * dx + dy * dy < 28 * 28) {
+              hoverKey = b.key;
+              break;
+            }
+          }
+        }
+      }
+      setFxDrag((s) => (s ? { ...s, curX: x, curY: y, hoverKey, hoverBusId } : null));
+    };
+    const onUp = () => {
+      const d = fxDragRef.current;
+      if (d && d.hoverBusId) {
+        // Drop on a bus → ensure this input routes there (chain feeds the send
+        // tail). onToggleSend TOGGLES, so fire only when no send exists yet —
+        // re-dropping on an already-routed bus must not delete the route (and
+        // its gain/mute). Toggling off is done by clicking the wire, not here.
+        const alreadyRouted = sends.some(
+          (s) => s.inputId === d.inputId && s.busId === d.hoverBusId,
+        );
+        if (!alreadyRouted) {
+          onToggleSend(d.inputId, d.hoverBusId);
+        }
+      } else if (d && d.hoverKey) {
+        const input = inputs.find((i) => i.id === d.inputId);
+        if (input) {
+          onInputDsp(d.inputId, reorderInputFx(input.dsp, d.fromKey, d.hoverKey));
+        }
+      }
+      setFxDrag(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [fxDrag, inputFxLayout, inputs, onInputDsp, onToggleSend, sends, busPositions, toCanvas]);
+
+  // Add-effect menu (anchored at the "+" box). Null when closed.
+  const [addFxMenu, setAddFxMenu] = useState<{
+    inputId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const toggleInputFx = useCallback(
+    (inputId: string, key: InputFxKey, on: boolean) => {
+      const input = inputs.find((i) => i.id === inputId);
+      if (!input) return;
+      onInputDsp(inputId, setInputFxEnabled(input.dsp, key, on));
+    },
+    [inputs, onInputDsp],
+  );
+
   // Back-compat refs + setters for code paths written against the old
   // split (Map<inputId, Pos> + Map<BusId, Pos>) model. They read from /
   // write through the unified `nodePositions` source of truth.
@@ -580,10 +930,16 @@ export function NodeView({
     return p ? { x: p.x, y: p.y + BUS_H / 2 } : null;
   };
 
-  const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W);
-  const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H);
+  // Canvas is a fixed large world (effectively limitless for hand-laid graphs)
+  // so users can pan freely and drag nodes far apart without hitting an edge.
+  // The default viewport stays at {0,0,1}, and `resetLayout` places nodes at
+  // (COL_PAD, ...) so the visible top-left is where the nodes are.
+  const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W, 10_000);
+  const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H, 10_000);
   boundsRef.current = { w: canvasW, h: canvasH };
-  const busColumnX = busColumnXFor(canvasW);
+  // Bus column hugs the input column instead of the (now huge) right edge so
+  // the initial layout still fits in the visible viewport.
+  const busColumnX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
 
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
@@ -628,6 +984,7 @@ export function NodeView({
         curY: startY,
         hoverBusId: null,
         hoverGroupId: null,
+        hoverFloatId: null,
         dropOk: true,
         dropReason: null,
       });
@@ -637,7 +994,11 @@ export function NodeView({
 
   // ── Mouse handlers for moving a node ──────────────────────────────────
   const handleNodeMouseDown = useCallback(
-    (kind: "input" | "bus" | "group", id: string, e: React.MouseEvent) => {
+    (
+      kind: "input" | "bus" | "group" | "fx" | "float",
+      id: string,
+      e: React.MouseEvent,
+    ) => {
       // Only left mouse button initiates a drag.
       if (e.button !== 0) return;
       // Ignore clicks on interactive children (ports, buttons).
@@ -646,6 +1007,8 @@ export function NodeView({
       const nid =
         kind === "input" ? inputNodeId(id)
         : kind === "bus" ? busNodeId(id as BusId)
+        : kind === "fx" ? (id as NodeId) // already a fxNodeId
+        : kind === "float" ? (id as NodeId) // already a floatNodeId
         : groupNodeId(id);
       const pos = nodePosRef.current.get(nid);
       if (!pos) return;
@@ -723,6 +1086,7 @@ export function NodeView({
       // group input ports sit on the left edge of their nodes.
       let hoverBusId: BusId | null = null;
       let hoverGroupId: string | null = null;
+      let hoverFloatId: string | null = null;
       for (const [nid, pos] of nodePosRef.current) {
         if (isBusNodeId(nid)) {
           const portX = pos.x;
@@ -731,7 +1095,7 @@ export function NodeView({
           const dy = y - portY;
           if (dx * dx + dy * dy < 32 * 32) {
             const bid = busIdFromNodeId(nid);
-            if (bid) { hoverBusId = bid; hoverGroupId = null; break; }
+            if (bid) { hoverBusId = bid; hoverGroupId = null; hoverFloatId = null; break; }
           }
         } else if (isGroupNodeId(nid)) {
           const portX = pos.x;
@@ -740,7 +1104,17 @@ export function NodeView({
           const dy = y - portY;
           if (dx * dx + dy * dy < 32 * 32) {
             const gid = groupIdFromNodeId(nid);
-            if (gid) { hoverGroupId = gid; hoverBusId = null; break; }
+            if (gid) { hoverGroupId = gid; hoverBusId = null; hoverFloatId = null; break; }
+          }
+        } else if (isFloatNodeId(nid)) {
+          // Float in-port is on the left edge, vertically centered.
+          const portX = pos.x;
+          const portY = pos.y + FX_H / 2;
+          const dx = x - portX;
+          const dy = y - portY;
+          if (dx * dx + dy * dy < 28 * 28) {
+            const fid = floatIdFromNodeId(nid);
+            if (fid) { hoverFloatId = fid; hoverBusId = null; hoverGroupId = null; break; }
           }
         }
       }
@@ -782,7 +1156,16 @@ export function NodeView({
 
       setDrag((d) =>
         d
-          ? { ...d, curX: x, curY: y, hoverBusId, hoverGroupId, dropOk, dropReason }
+          ? {
+              ...d,
+              curX: x,
+              curY: y,
+              hoverBusId,
+              hoverGroupId,
+              hoverFloatId,
+              dropOk,
+              dropReason,
+            }
           : null,
       );
     };
@@ -795,7 +1178,21 @@ export function NodeView({
       // from NodeView on release.
       const d = dragRef.current;
       if (d && d.dropOk) {
-        if (d.hoverBusId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
+        if (d.hoverFloatId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
+          // Float drop → claim the floating fx for this input: enable that
+          // stage on the input and remove the placeholder. The chain re-derives
+          // via dsp.order on the next render.
+          const meta = floatingFxRef.current.get(d.hoverFloatId);
+          const input = inputs.find((i) => i.id === d.fromInputId);
+          if (meta && input) {
+            onInputDsp(d.fromInputId, setInputFxEnabled(input.dsp, meta.stage, true));
+            setFloatingFx((prev) => {
+              const next = new Map(prev);
+              next.delete(d.hoverFloatId!);
+              return next;
+            });
+          }
+        } else if (d.hoverBusId && isInputNodeId(d.fromNodeId) && d.fromInputId) {
           // Bipartite input → bus — flip via the backend send action.
           onToggleSend(d.fromInputId, d.hoverBusId);
         } else if (d.hoverBusId || d.hoverGroupId) {
@@ -834,7 +1231,7 @@ export function NodeView({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [drag, onToggleSend, toCanvas]);
+  }, [drag, onToggleSend, onInputDsp, inputs, toCanvas]);
 
   // ── Node-drag effect (moving a node around the canvas) ───────────────
   useEffect(() => {
@@ -1152,6 +1549,15 @@ export function NodeView({
     handleNodeMouseDown("bus", id, e), [handleNodeMouseDown]);
   const onGroupNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
     handleNodeMouseDown("group", id, e), [handleNodeMouseDown]);
+  // Fx node drag. `id` is the full fxNodeId (`fx:<inputId>:<key>`); the drag
+  // handler treats it as already-formed so it can share `nodePositions` with
+  // input/bus/group nodes via the unified clamp/move infrastructure.
+  const onFxNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
+    handleNodeMouseDown("fx", id, e), [handleNodeMouseDown]);
+  // Floating fx node uses the same generic drag path; id is the full
+  // floatNodeId(`float:<floatId>`).
+  const onFloatNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
+    handleNodeMouseDown("float", id, e), [handleNodeMouseDown]);
 
   // Start a drag-connect from a group's output port.
   const onGroupPortMouseDown = useCallback(
@@ -1172,6 +1578,7 @@ export function NodeView({
         curY: startY,
         hoverBusId: null,
         hoverGroupId: null,
+        hoverFloatId: null,
         dropOk: true,
         dropReason: null,
       });
@@ -1352,9 +1759,17 @@ export function NodeView({
       const toH = nodeHeightFor(toNode);
       const inMeta = asInputNode(fromNode);
       const busMeta = asBusNode(toNode);
+      // If the source input has on-canvas effect boxes, start the wire at the
+      // last box (audio flows input → fx chain → bus).
+      let ip = { x: fromPos.x + fromW, y: fromPos.y + fromH / 2 };
+      const fromInputId = inputIdFromNodeId(edge.fromNode);
+      if (fromInputId) {
+        const row = inputFxLayout.get(fromInputId);
+        if (row && row.boxes.length > 0) ip = row.origin;
+      }
       out.push({
         edge,
-        ip: { x: fromPos.x + fromW, y: fromPos.y + fromH / 2 },
+        ip,
         bp: { x: toPos.x,           y: toPos.y   + toH   / 2 },
         color: busMeta ? busColor(busMeta.backing.id) : "rgba(170,180,200,0.7)",
         input: inMeta?.backing ?? null,
@@ -1362,7 +1777,7 @@ export function NodeView({
       });
     }
     return out;
-  }, [graph, nodePositions]);
+  }, [graph, nodePositions, inputFxLayout]);
 
   return (
     <div
@@ -1383,62 +1798,72 @@ export function NodeView({
       role="region"
       aria-label="Node graph routing"
     >
-      <div className={styles.zoomBar} onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          className={styles.zoomBtn}
-          onClick={() => zoomBy(1 / 1.2)}
-          title="Zoom out"
-          aria-label="Zoom out"
-        >
-          −
-        </button>
-        <button
-          type="button"
-          className={styles.zoomReadout}
-          onClick={resetView}
-          title="Reset zoom (100%)"
-        >
-          {Math.round(view.zoom * 100)}%
-        </button>
-        <button
-          type="button"
-          className={styles.zoomBtn}
-          onClick={() => zoomBy(1.2)}
-          title="Zoom in"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        <button
-          type="button"
-          className={styles.resetBtn}
-          onClick={resetLayout}
-          title="Reset node positions"
-        >
-          Reset layout
-        </button>
-        {onAddInput && (
-          <button
-            type="button"
-            className={styles.addInputBtn}
-            onClick={onAddInput}
-            title="Add input device"
-            aria-label="Add input device"
-          >
-            + Add input
-          </button>
-        )}
-        <button
-          type="button"
-          className={styles.addGroupBtn}
-          onClick={addGroup}
-          title="Add a group node (frontend only)"
-          aria-label="Add group node"
-        >
-          + Group
-        </button>
-      </div>
+      {(() => {
+        const toolbar = (
+          <div className={styles.zoomBar} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className={styles.zoomBtn}
+              onClick={() => zoomBy(1 / 1.2)}
+              title="Zoom out"
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className={styles.zoomReadout}
+              onClick={resetView}
+              title="Reset zoom (100%)"
+            >
+              {Math.round(view.zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className={styles.zoomBtn}
+              onClick={() => zoomBy(1.2)}
+              title="Zoom in"
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className={styles.resetBtn}
+              onClick={resetLayout}
+              title="Reset node positions"
+            >
+              Reset layout
+            </button>
+            {onAddInput && (
+              <button
+                type="button"
+                className={styles.addInputBtn}
+                onClick={onAddInput}
+                title="Add input device"
+                aria-label="Add input device"
+              >
+                + Add input
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.addGroupBtn}
+              onClick={addGroup}
+              title="Add a group node (frontend only)"
+              aria-label="Add group node"
+            >
+              + Group
+            </button>
+          </div>
+        );
+        // Portal the toolbar up into the Routing header next to the
+        // Flow/Nodes/Matrix toggle when the slot is mounted; fall back to
+        // rendering in place during the first paint so it never disappears.
+        return toolbarSlot
+          ? createPortal(toolbar, toolbarSlot)
+          : toolbar;
+      })()}
       <div
         className={styles.canvasTransform}
         style={{
@@ -1505,11 +1930,52 @@ export function NodeView({
             );
           })}
 
+          {/* Connectors linking an input to its effect chain. Curved like
+              the main input→bus wires for visual consistency across the tool. */}
+          {Array.from(inputFxLayout.values()).flatMap((row) =>
+            row.connectors.map((c, i) => {
+              const dx = Math.max(20, Math.abs(c.x2 - c.x1));
+              const d = `M ${c.x1} ${c.y1} C ${c.x1 + dx * 0.5} ${c.y1}, ${c.x2 - dx * 0.5} ${c.y2}, ${c.x2} ${c.y2}`;
+              return (
+                <path
+                  key={`fxc-${c.x1}-${c.y1}-${i}`}
+                  d={d}
+                  stroke="rgba(170,180,200,0.55)"
+                  strokeWidth={2.5}
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              );
+            }),
+          )}
+
+          {/* Ghost wire while reordering an fx node (out-port → in-port).
+              Same Bezier shape as the input→bus ghost for visual consistency. */}
+          {fxDrag && (() => {
+            const dx = Math.max(20, Math.abs(fxDrag.curX - fxDrag.startX));
+            const d = `M ${fxDrag.startX} ${fxDrag.startY} C ${fxDrag.startX + dx * 0.5} ${fxDrag.startY}, ${fxDrag.curX - dx * 0.5} ${fxDrag.curY}, ${fxDrag.curX} ${fxDrag.curY}`;
+            return (
+              <path
+                d={d}
+                stroke={
+                  fxDrag.hoverKey || fxDrag.hoverBusId
+                    ? "rgba(110,168,254,0.95)"
+                    : "rgba(170,180,200,0.7)"
+                }
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeDasharray="6 6"
+                fill="none"
+              />
+            );
+          })()}
+
           {/* Ghost wire while dragging. Invalid drop (cycle / port
               mismatch) paints the ghost red AND pulses to draw the
               eye, plus a tooltip explains the rejection. */}
           {drag && (() => {
-            const hasTarget = !!drag.hoverBusId || !!drag.hoverGroupId;
+            const hasTarget =
+              !!drag.hoverBusId || !!drag.hoverGroupId || !!drag.hoverFloatId;
             const invalid = hasTarget && !drag.dropOk;
             const targetColor = drag.hoverBusId
               ? busColor(drag.hoverBusId)
@@ -1600,7 +2066,73 @@ export function NodeView({
               onPortMouseDown={handlePortMouseDown}
               onRecToggle={onInputRecToggle}
               onGainChange={(v) => onInputGainChange(input.id, v)}
+              fxCount={countInputFx(input.dsp)}
+              onFxOpen={openInputFx}
+              onAddFxRequest={(id, e) =>
+                setAddFxMenu({ inputId: id, x: e.clientX, y: e.clientY })
+              }
             />
+          );
+        })}
+
+        {/* Per-input effect boxes chained off the input + add button */}
+        {inputs.map((input) => {
+          const row = inputFxLayout.get(input.id);
+          if (!row) return null;
+          return (
+            <Fragment key={`fx-${input.id}`}>
+              {row.boxes.map((b) => {
+                const isDropTarget =
+                  fxDrag?.inputId === input.id && fxDrag.hoverKey === b.key;
+                const fxNid = fxNodeId(input.id, b.key);
+                const isMoving =
+                  nodeDrag?.kind === "fx" && nodeDrag.id === fxNid;
+                return (
+                  <div
+                    key={b.key}
+                    className={`${styles.fxNode} ${isDropTarget ? styles.fxNodeDrop : ""} ${
+                      isMoving ? styles.nodeMoving : ""
+                    }`}
+                    style={{ left: b.x, top: b.y, width: FX_W, height: FX_H }}
+                    onMouseDown={(e) => onFxNodeMouseDown(fxNid, e)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openInputFx(input.id, e);
+                    }}
+                    title={`${b.label} — click to edit, drag the box to reposition, drag the right dot to reorder`}
+                  >
+                    <span className={styles.fxPortIn} aria-hidden>
+                      <span className={styles.fxPortDot} />
+                    </span>
+                    <span className={styles.fxNodeKind}>FX</span>
+                    <span className={styles.fxNodeLabel}>{b.label}</span>
+                    <button
+                      type="button"
+                      className={styles.fxPortOut}
+                      onMouseDown={(e) => onFxPortDown(input.id, b.key, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      title={`Drag onto another effect's input to reorder ${b.label}`}
+                      aria-label={`Reorder ${b.label}`}
+                    >
+                      <span className={styles.fxPortDot} />
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.fxNodeRemove}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleInputFx(input.id, b.key, false);
+                      }}
+                      title={`Remove ${b.label}`}
+                      aria-label={`Remove ${b.label}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </Fragment>
           );
         })}
 
@@ -1610,7 +2142,8 @@ export function NodeView({
           if (!pos) return null;
           const isSelected = selection.kind === "bus" && selection.busId === bus.id;
           const isHover = hoverBus === bus.id;
-          const isDragTarget = drag?.hoverBusId === bus.id;
+          const isDragTarget =
+            drag?.hoverBusId === bus.id || fxDrag?.hoverBusId === bus.id;
           const isMoving = nodeDrag?.kind === "bus" && nodeDrag.id === bus.id;
           const isMulti = selBuses.has(bus.id);
           const busOutSpec: TapSpec = { kind: "bus_out", bus_id: bus.id };
@@ -1636,7 +2169,55 @@ export function NodeView({
               onNodeMouseDown={onBusNodeMouseDown}
               onRecToggle={onBusRecToggle}
               onVolumeChange={(v) => onBusVolumeChange(bus.id, v)}
+              fxCount={countBusFx(bus)}
+              onFxOpen={openBusFx}
             />
+          );
+        })}
+
+        {/* Floating fx placeholders — drag any input's out-port onto an in-port
+            to claim (= enable that stage on that input + remove placeholder). */}
+        {Array.from(floatingFx.entries()).map(([fid, meta]) => {
+          const nid = floatNodeId(fid);
+          const pos = nodePositions.get(nid);
+          if (!pos) return null;
+          const label =
+            INPUT_FX_DEFS.find((d) => d.key === meta.stage)?.label ?? meta.stage;
+          const isMoving = nodeDrag?.kind === "float" && nodeDrag.id === nid;
+          const isDropTarget = drag?.hoverFloatId === fid;
+          return (
+            <div
+              key={nid}
+              className={`${styles.floatFx} ${isMoving ? styles.nodeMoving : ""} ${
+                isDropTarget ? styles.fxNodeDrop : ""
+              }`}
+              style={{ left: pos.x, top: pos.y, width: FX_W, height: FX_H }}
+              onMouseDown={(e) => onFloatNodeMouseDown(nid, e)}
+              title={`Floating ${label} — wire an input here to claim`}
+            >
+              <span className={styles.inputPort} aria-hidden>
+                <span className={styles.portInner} />
+              </span>
+              <span className={styles.fxNodeKind}>FLOATING FX</span>
+              <span className={styles.fxNodeLabel}>{label}</span>
+              <button
+                type="button"
+                className={styles.fxNodeRemove}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFloatingFx((prev) => {
+                    const next = new Map(prev);
+                    next.delete(fid);
+                    return next;
+                  });
+                }}
+                title="Remove placeholder"
+                aria-label="Remove floating effect"
+              >
+                ×
+              </button>
+            </div>
           );
         })}
 
@@ -1714,6 +2295,62 @@ export function NodeView({
       </div>
       </div>
 
+      {openFx && (
+        <NodeFxPopover
+          target={openFx}
+          inputs={inputs}
+          buses={buses}
+          onInputDsp={onInputDsp}
+          onBusEq={onBusEq}
+          onBusLimiter={onBusLimiter}
+          onClose={() => setOpenFx(null)}
+        />
+      )}
+
+      {addFxMenu &&
+        (() => {
+          const input = inputs.find((i) => i.id === addFxMenu.inputId);
+          if (!input) return null;
+          const available = INPUT_FX_DEFS.filter(
+            (d) => !inputFxEnabled(input.dsp, d.key),
+          );
+          return (
+            <>
+              <div
+                className={styles.bgCtxBackdrop}
+                onClick={() => setAddFxMenu(null)}
+                aria-hidden
+              />
+              <div
+                className={styles.bgCtxMenu}
+                role="menu"
+                aria-label="Add effect"
+                style={{ left: addFxMenu.x, top: addFxMenu.y }}
+              >
+                {available.length === 0 ? (
+                  <div className={styles.bgCtxItem} aria-disabled>
+                    All effects added
+                  </div>
+                ) : (
+                  available.map((d) => (
+                    <button
+                      key={d.key}
+                      role="menuitem"
+                      className={styles.bgCtxItem}
+                      onClick={() => {
+                        toggleInputFx(addFxMenu.inputId, d.key, true);
+                        setAddFxMenu(null);
+                      }}
+                    >
+                      + {d.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          );
+        })()}
+
       {bgCtx && (
         <>
           <div
@@ -1743,6 +2380,61 @@ export function NodeView({
                 + Add input device…
               </button>
             )}
+            {inputs.length > 0 && (
+              <>
+                <div className={styles.bgCtxSep} aria-hidden />
+                <div className={styles.bgCtxHeading}>Add effect to…</div>
+                {inputs.map((input) => (
+                  <button
+                    key={`addfx-${input.id}`}
+                    role="menuitem"
+                    className={styles.bgCtxItem}
+                    onClick={() => {
+                      setAddFxMenu({
+                        inputId: input.id,
+                        x: bgCtx.x,
+                        y: bgCtx.y,
+                      });
+                      setBgCtx(null);
+                    }}
+                  >
+                    {input.name}
+                  </button>
+                ))}
+              </>
+            )}
+            <div className={styles.bgCtxSep} aria-hidden />
+            <div className={styles.bgCtxHeading}>Add floating effect</div>
+            {INPUT_FX_DEFS.map((d) => (
+              <button
+                key={`float-${d.key}`}
+                role="menuitem"
+                className={styles.bgCtxItem}
+                onClick={() => {
+                  // Convert the click screen coords back to canvas-space so the
+                  // floating fx spawns where the user right-clicked (not 0,0).
+                  const { x: cx, y: cy } = toCanvas(bgCtx.x, bgCtx.y);
+                  const id = nextFloatId();
+                  setFloatingFx((prev) => {
+                    const next = new Map(prev);
+                    next.set(id, { stage: d.key });
+                    return next;
+                  });
+                  setNodePositions((prev) => {
+                    const next = new Map(prev);
+                    next.set(floatNodeId(id), {
+                      x: Math.max(0, cx - FX_W / 2),
+                      y: Math.max(0, cy - FX_H / 2),
+                    });
+                    return next;
+                  });
+                  setBgCtx(null);
+                }}
+              >
+                + {d.label}
+              </button>
+            ))}
+            <div className={styles.bgCtxSep} aria-hidden />
             <button
               role="menuitem"
               className={styles.bgCtxItem}
@@ -1901,6 +2593,10 @@ interface InputNodeProps {
   onPortMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: string) => void;
   onGainChange: (v: number) => void;
+  fxCount: number;
+  onFxOpen: (id: string, e: React.MouseEvent) => void;
+  /** Right-click on the input body opens the add-effect menu (#37 phase 2). */
+  onAddFxRequest: (id: string, e: React.MouseEvent) => void;
 }
 
 const InputNode = memo(function InputNode({
@@ -1922,6 +2618,9 @@ const InputNode = memo(function InputNode({
   onPortMouseDown,
   onRecToggle,
   onGainChange,
+  fxCount,
+  onFxOpen,
+  onAddFxRequest,
 }: InputNodeProps) {
   const id = input.id;
   return (
@@ -1936,6 +2635,11 @@ const InputNode = memo(function InputNode({
       onClick={(e) => {
         e.stopPropagation();
         onSelect(id);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onAddFxRequest(id, e);
       }}
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={() => onMouseLeave(id)}
@@ -1982,6 +2686,19 @@ const InputNode = memo(function InputNode({
       >
         <span className={styles.portInner} />
       </button>
+      <button
+        type="button"
+        className={`${styles.fxBadge} ${fxCount > 0 ? styles.fxBadgeActive : ""}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFxOpen(id, e);
+        }}
+        title={fxCount > 0 ? `${fxCount} effect(s) — click to edit` : "Add effects"}
+        aria-label={`Effects for ${input.name}`}
+      >
+        FX{fxCount > 0 ? ` ${fxCount}` : ""}
+      </button>
       {!(recDisabled && !recArmed) && (
         <button
           type="button"
@@ -2020,6 +2737,8 @@ interface BusNodeProps {
   onNodeMouseDown: (id: string, e: React.MouseEvent) => void;
   onRecToggle: (id: BusId) => void;
   onVolumeChange: (v: number) => void;
+  fxCount: number;
+  onFxOpen: (id: BusId, e: React.MouseEvent) => void;
 }
 
 const BusNode = memo(function BusNode({
@@ -2039,6 +2758,8 @@ const BusNode = memo(function BusNode({
   onNodeMouseDown,
   onRecToggle,
   onVolumeChange,
+  fxCount,
+  onFxOpen,
 }: BusNodeProps) {
   const id = bus.id;
   return (
@@ -2110,6 +2831,19 @@ const BusNode = memo(function BusNode({
           <span>{stateLabel(bus.state)}</span>
         </div>
       </div>
+      <button
+        type="button"
+        className={`${styles.fxBadge} ${fxCount > 0 ? styles.fxBadgeActive : ""}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFxOpen(bus.id, e);
+        }}
+        title={fxCount > 0 ? `${fxCount} effect(s) — click to edit` : "Add effects"}
+        aria-label={`Effects for ${bus.label}`}
+      >
+        FX{fxCount > 0 ? ` ${fxCount}` : ""}
+      </button>
       {!(recDisabled && !recArmed) && (
         <button
           type="button"

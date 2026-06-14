@@ -7,6 +7,16 @@
 - Code blocks unchanged, technical terms exact
 - Pattern: `[thing] [action] [reason]. [next step].`
 
+## Continuing development — use the skill
+
+For any dev task on this repo (resume work, new phase/PROMPT, implement/fix, or
+before staging), invoke the **`audiomanager-dev`** skill (`/audiomanager-dev`). It
+loads the orient→plan→implement→verify→review loop, the exact verify gate, the
+phase + Codex-review process, the file map, and the token-discipline rules — so the
+session stays correct and cheap. Skill lives in the main repo `.claude/skills/`
+(local-only; `.claude/` is gitignored). If absent (fresh clone / worktree), the
+process below still applies.
+
 ## Code search & navigation
 
 Prefer the `codebase-memory-mcp` tools over raw Grep/Glob for symbol lookup, call graphs, and architecture queries. They are pre-indexed and 10–100x cheaper in tokens.

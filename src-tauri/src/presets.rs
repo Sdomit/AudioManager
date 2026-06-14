@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::audio::bus::{BusConfig, BusId, BusRuntime};
 use crate::audio::devices::{list_input_devices, list_output_devices, DeviceInfo};
+use crate::audio::dsp::{BusDspConfig, DspConfig};
 use crate::audio::graph::{AudioGraph, InputChannel, InputSend};
 use crate::audio::mixer::EngineError;
 use crate::audio::routing::Route;
@@ -53,6 +54,8 @@ pub struct PresetInputV2 {
     pub gain: f32,
     pub muted: bool,
     pub sends: Vec<PresetSendV2>,
+    #[serde(default)]
+    pub dsp: DspConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,6 +66,12 @@ pub struct PresetBusV2 {
     pub volume: f32,
     pub muted: bool,
     pub enabled: bool,
+    #[serde(default)]
+    pub dsp: BusDspConfig,
+    /// Output callback buffer size in frames. `None` = driver default (#35).
+    /// `serde(default)` so presets saved before #35 load as None.
+    #[serde(default)]
+    pub buffer_size_frames: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -376,6 +385,7 @@ pub fn migrate_v1_to_v2(
                 gain: 1.0,
                 muted: false,
                 sends,
+                dsp: DspConfig::default(),
             },
         );
     }
@@ -614,6 +624,8 @@ fn build_preset_v2_with_maps(
             volume: runtime.config.volume,
             muted: runtime.config.muted,
             enabled: runtime.config.enabled,
+            dsp: runtime.config.dsp.clone(),
+            buffer_size_frames: runtime.config.buffer_size_frames,
         });
     }
 
@@ -629,6 +641,7 @@ fn build_preset_v2_with_maps(
             },
             gain: input.gain,
             muted: input.muted,
+            dsp: input.dsp.clone(),
             sends: input
                 .sends
                 .iter()
@@ -738,6 +751,8 @@ fn default_bus(id: BusId) -> PresetBusV2 {
         volume: 1.0,
         muted: false,
         enabled: false,
+        dsp: BusDspConfig::default(),
+        buffer_size_frames: None,
     }
 }
 
@@ -857,6 +872,136 @@ mod tests {
     }
 
     #[test]
+    fn preset_input_v2_deserializes_without_dsp() {
+        // Preset saved before #32 has no `dsp` key on inputs.
+        let json = r#"{"device":{"id":"mic","name":"Mic"},"gain":1.0,"muted":false,"sends":[]}"#;
+        let input: PresetInputV2 = serde_json::from_str(json).unwrap();
+        assert_eq!(input.dsp, DspConfig::default());
+    }
+
+    #[test]
+    fn preset_bus_v2_deserializes_without_dsp() {
+        let json =
+            r#"{"id":"B1","name":"B1","output":null,"volume":1.0,"muted":false,"enabled":false}"#;
+        let bus: PresetBusV2 = serde_json::from_str(json).unwrap();
+        assert_eq!(bus.dsp, BusDspConfig::default());
+        // Pre-#35 presets have no buffer key → driver default.
+        assert_eq!(bus.buffer_size_frames, None);
+    }
+
+    #[test]
+    fn preset_bus_v2_round_trips_buffer_size() {
+        let bus = PresetBusV2 {
+            id: BusId::A1,
+            name: "A1".to_string(),
+            output: None,
+            volume: 1.0,
+            muted: false,
+            enabled: false,
+            dsp: BusDspConfig::default(),
+            buffer_size_frames: Some(256),
+        };
+        let json = serde_json::to_string(&bus).unwrap();
+        let back: PresetBusV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.buffer_size_frames, Some(256));
+        assert_eq!(back, bus);
+    }
+
+    #[test]
+    fn preset_input_v2_round_trips_dsp() {
+        let mut dsp = DspConfig::default();
+        dsp.gate.enabled = true;
+        dsp.compressor.ratio = 3.0;
+        let input = PresetInputV2 {
+            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            gain: 1.0,
+            muted: false,
+            sends: default_sends(),
+            dsp: dsp.clone(),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let back: PresetInputV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.dsp, dsp);
+    }
+
+    #[test]
+    fn preset_round_trips_input_dsp_order() {
+        use crate::audio::dsp::DspStage;
+        // A non-canonical wired order must survive save/load.
+        let mut dsp = DspConfig::default();
+        dsp.order = vec![
+            DspStage::Limiter,
+            DspStage::Comp,
+            DspStage::Eq,
+            DspStage::Gate,
+            DspStage::Hpf,
+            DspStage::Denoise,
+        ];
+        let input = PresetInputV2 {
+            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            gain: 1.0,
+            muted: false,
+            sends: default_sends(),
+            dsp: dsp.clone(),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let back: PresetInputV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.dsp.order, dsp.order);
+    }
+
+    #[test]
+    fn preset_without_order_loads_canonical() {
+        use crate::audio::dsp::DspStage;
+        // Pre-order presets (no `order` key) default to canonical order.
+        let json = r#"{"device":{"id":"mic","name":"Mic"},"gain":1.0,
+            "muted":false,"sends":[],"dsp":{}}"#;
+        let back: PresetInputV2 = serde_json::from_str(json).unwrap();
+        assert_eq!(back.dsp.order, DspStage::ALL.to_vec());
+    }
+
+    #[test]
+    fn preset_round_trips_eq_band_kind_and_bus_eq() {
+        use crate::audio::dsp::BandKind;
+        // Input EQ with a non-default band shape.
+        let mut dsp = DspConfig::default();
+        dsp.eq.enabled = true;
+        dsp.eq.bands[3].enabled = true;
+        dsp.eq.bands[3].kind = BandKind::HighShelf;
+        dsp.eq.bands[3].gain_db = -3.0;
+        // Bus EQ enabled with a low-pass band.
+        let mut bus_dsp = BusDspConfig::default();
+        bus_dsp.eq.enabled = true;
+        bus_dsp.eq.bands[2].enabled = true;
+        bus_dsp.eq.bands[2].kind = BandKind::LowPass;
+
+        let input = PresetInputV2 {
+            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            gain: 1.0,
+            muted: false,
+            sends: default_sends(),
+            dsp: dsp.clone(),
+        };
+        let bus = PresetBusV2 {
+            id: BusId::A1,
+            name: "A1".to_string(),
+            output: None,
+            volume: 1.0,
+            muted: false,
+            enabled: false,
+            dsp: bus_dsp.clone(),
+            buffer_size_frames: None,
+        };
+        let input_back: PresetInputV2 =
+            serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
+        let bus_back: PresetBusV2 =
+            serde_json::from_str(&serde_json::to_string(&bus).unwrap()).unwrap();
+        assert_eq!(input_back.dsp, dsp);
+        assert_eq!(bus_back.dsp, bus_dsp);
+        assert_eq!(input_back.dsp.eq.bands[3].kind, BandKind::HighShelf);
+        assert_eq!(bus_back.dsp.eq.bands[2].kind, BandKind::LowPass);
+    }
+
+    #[test]
     fn validate_v2_rejects_duplicate_input_ids() {
         let mut preset = PresetFileV2 {
             schema_version: SCHEMA_VERSION_V2,
@@ -869,12 +1014,14 @@ mod tests {
                     gain: 1.0,
                     muted: false,
                     sends: default_sends(),
+                    dsp: DspConfig::default(),
                 },
                 PresetInputV2 {
                     device: PresetDeviceRef { id: " mic ".to_string(), name: "Mic 2".to_string() },
                     gain: 1.0,
                     muted: false,
                     sends: default_sends(),
+                    dsp: DspConfig::default(),
                 },
             ],
         };
@@ -894,6 +1041,7 @@ mod tests {
                 gain: 1.0,
                 muted: false,
                 sends: vec![default_send(BusId::A1), default_send(BusId::A1)],
+                dsp: DspConfig::default(),
             }],
         };
 
@@ -916,6 +1064,8 @@ mod tests {
                 volume: 9.0,
                 muted: false,
                 enabled: true,
+                dsp: BusDspConfig::default(),
+                buffer_size_frames: None,
             }],
             inputs: vec![PresetInputV2 {
                 device: PresetDeviceRef { id: " mic ".to_string(), name: "".to_string() },
@@ -927,6 +1077,7 @@ mod tests {
                     volume: 9.0,
                     muted: false,
                 }],
+                dsp: DspConfig::default(),
             }],
         };
 

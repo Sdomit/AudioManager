@@ -21,7 +21,9 @@ pub struct EngineError {
 // Display, so From<EngineError> for EngineError never conflicts with From<T> for T.
 impl<E: std::fmt::Display> From<E> for EngineError {
     fn from(e: E) -> Self {
-        Self { message: e.to_string() }
+        Self {
+            message: e.to_string(),
+        }
     }
 }
 
@@ -73,7 +75,9 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
 
             let input_device = host
                 .input_devices()
-                .map_err(|e| EngineError { message: e.to_string() })?
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?
                 .find(|d| d.name().ok().as_deref() == Some(in_name.as_str()))
                 .ok_or_else(|| EngineError {
                     message: format!("Input device not found: {in_name}"),
@@ -81,7 +85,9 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
 
             let output_device = host
                 .output_devices()
-                .map_err(|e| EngineError { message: e.to_string() })?
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?
                 .find(|d| d.name().ok().as_deref() == Some(out_name.as_str()))
                 .ok_or_else(|| EngineError {
                     message: format!("Output device not found: {out_name}"),
@@ -89,10 +95,14 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
 
             let in_cfg = input_device
                 .default_input_config()
-                .map_err(|e| EngineError { message: e.to_string() })?;
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?;
             let out_cfg = output_device
                 .default_output_config()
-                .map_err(|e| EngineError { message: e.to_string() })?;
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?;
 
             // v0.1: hard-fail on sample rate mismatch. User must set both devices
             // to the same rate (e.g. 48 kHz) in Windows Sound settings.
@@ -139,7 +149,9 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
                     |e| eprintln!("[audio] input stream error: {e}"),
                     None,
                 )
-                .map_err(|e| EngineError { message: e.to_string() })?;
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?;
 
             let output_stream = output_device
                 .build_output_stream(
@@ -165,14 +177,16 @@ pub fn start(input_name: &str, output_name: &str) -> Result<PassthroughEngine, E
                     |e| eprintln!("[audio] output stream error: {e}"),
                     None,
                 )
-                .map_err(|e| EngineError { message: e.to_string() })?;
+                .map_err(|e| EngineError {
+                    message: e.to_string(),
+                })?;
 
-            input_stream
-                .play()
-                .map_err(|e| EngineError { message: e.to_string() })?;
-            output_stream
-                .play()
-                .map_err(|e| EngineError { message: e.to_string() })?;
+            input_stream.play().map_err(|e| EngineError {
+                message: e.to_string(),
+            })?;
+            output_stream.play().map_err(|e| EngineError {
+                message: e.to_string(),
+            })?;
 
             Ok((input_stream, output_stream))
         })();

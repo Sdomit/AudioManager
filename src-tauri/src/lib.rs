@@ -1,4 +1,5 @@
 mod amvc;
+mod amvc_sync;
 mod audio;
 mod net;
 mod presets;
@@ -12,6 +13,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::devices::{DeviceInfo, DeviceListError};
+use audio::dsp::{BusDspConfig, DspConfig};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerInput};
 use audio::source::InputSourceSpec;
@@ -110,7 +112,7 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
     // Centralized teardown: stops recorders first, then drops the engine
     // so WASAPI handles are released before the restart attempt.
     tear_down_engine(inner, bus_id);
-    let (enabled, output_id, bus_vol, bus_muted) = {
+    let (enabled, output_id, bus_vol, bus_muted, bus_dsp, buffer_size_frames) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
         })?;
@@ -119,6 +121,8 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
             bus.config.output_device_id.clone(),
             bus.config.volume,
             bus.config.muted,
+            bus.config.dsp.clone(),
+            bus.config.buffer_size_frames,
         )
     };
 
@@ -136,14 +140,22 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
 
     let mixer_inputs: Vec<MixerInput> = active_inputs
         .into_iter()
-        .map(|(id, vol, muted)| MixerInput {
+        .map(|(id, vol, muted, dsp)| MixerInput {
             source: InputSourceSpec::parse(&id),
             gain: vol,
             muted,
+            dsp,
         })
         .collect();
 
-    match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted) {
+    match audio::mixer::start(
+        &output_id,
+        &mixer_inputs,
+        bus_vol,
+        bus_muted,
+        bus_dsp,
+        buffer_size_frames,
+    ) {
         Ok(engine) => {
             let input_errors: Vec<String> = engine
                 .inputs
@@ -293,6 +305,14 @@ fn apply_preset_state(
         bus.config.volume = BusConfig::clamp_volume(bus_preset.volume);
         bus.config.muted = bus_preset.muted;
         bus.config.enabled = bus_preset.enabled;
+        let mut bus_dsp = bus_preset.dsp.clone();
+        bus_dsp.clamp();
+        bus.config.dsp = bus_dsp;
+        // Clamp the persisted buffer size to the same [32, 8192] range the live
+        // command enforces; an out-of-range value falls back to driver default.
+        bus.config.buffer_size_frames = bus_preset
+            .buffer_size_frames
+            .filter(|f| (32..=8192).contains(f));
         bus.last_error = None;
     }
 
@@ -309,6 +329,10 @@ fn apply_preset_state(
                 message: format!("Failed to apply preset input '{}'", input_preset.device.id),
             });
         }
+
+        inner
+            .graph
+            .set_input_dsp(&input_preset.device.id, input_preset.dsp.clone());
 
         for send in &input_preset.sends {
             if !inner.graph.set_send(&input_preset.device.id, send.bus_id, send.enabled) {
@@ -789,25 +813,38 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let mut buses = Vec::with_capacity(inner.buses.len());
 
     for bus in inner.buses.values() {
-        let (output_peak, clipped_recently) = match bus.engine.as_ref() {
-            Some(engine) => {
-                let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
-                for (idx, info) in engine.inputs.iter().enumerate() {
-                    let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
-                    input_peaks_by_device
-                        .entry(info.device_name.clone())
-                        .and_modify(|current| {
-                            if peak > *current {
-                                *current = peak;
-                            }
-                        })
-                        .or_insert(peak);
+        let (output_peak, clipped_recently, underruns, overruns, loudness) =
+            match bus.engine.as_ref() {
+                Some(engine) => {
+                    let (input_peaks, output_peak, clipped_recently) =
+                        engine.read_and_reset_meters();
+                    for (idx, info) in engine.inputs.iter().enumerate() {
+                        let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
+                        input_peaks_by_device
+                            .entry(info.device_name.clone())
+                            .and_modify(|current| {
+                                if peak > *current {
+                                    *current = peak;
+                                }
+                            })
+                            .or_insert(peak);
+                    }
+                    let (un, ov) = engine.read_and_reset_xruns();
+                    (output_peak, clipped_recently, un, ov, engine.read_loudness())
                 }
-                (output_peak, clipped_recently)
-            }
-            None => (0.0, false),
-        };
-        buses.push(bus.status_from_meters(output_peak, clipped_recently));
+                None => (
+                    0.0,
+                    false,
+                    0,
+                    0,
+                    audio::meters::LoudnessSnapshot::default(),
+                ),
+            };
+        let mut status = bus.status_from_meters(output_peak, clipped_recently);
+        status.underruns = underruns;
+        status.overruns = overruns;
+        status.loudness = loudness;
+        buses.push(status);
     }
 
     let input_peaks = input_peaks_by_device
@@ -902,6 +939,129 @@ fn rename_bus(
         message: format!("Unknown bus: {bus_id:?}"),
     })?;
     bus.config.name = trimmed.to_string();
+    Ok(bus.read_status())
+}
+
+/// Set the output callback buffer size in frames. `None` reverts to the driver
+/// default. Changes take effect on the next engine start (i.e. this triggers a
+/// rebuild when the bus is running). Accepted range: 32–8192 frames (#35).
+#[tauri::command]
+fn set_bus_buffer_size(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    frames: Option<u32>,
+) -> Result<BusStatus, EngineError> {
+    if let Some(f) = frames {
+        if !(32..=8192).contains(&f) {
+            return Err(EngineError {
+                message: format!("buffer_size_frames must be in [32, 8192], got {f}"),
+            });
+        }
+    }
+    let mut inner = state.inner.lock().unwrap();
+    {
+        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
+            message: format!("Unknown bus: {bus_id:?}"),
+        })?;
+        bus.config.buffer_size_frames = frames;
+    }
+    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+        let _ = store_last_error(&mut inner, err.clone());
+        let bus = inner.buses.get(&bus_id).expect("bus exists");
+        return Ok(bus.read_status());
+    }
+    let bus = inner.buses.get(&bus_id).expect("bus exists");
+    Ok(bus.read_status())
+}
+
+/// Set a bus's output latency mode (#35) — a named preset over the raw buffer
+/// size: Stable = driver default, Low = 256 frames, UltraLow = 128 frames. Sets
+/// `buffer_size_frames` accordingly and rebuilds the bus if running.
+#[tauri::command]
+fn set_bus_latency_mode(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    mode: String,
+) -> Result<BusStatus, EngineError> {
+    let parsed = audio::bus::LatencyMode::parse(&mode).ok_or_else(|| EngineError {
+        message: format!("unknown latency mode: {mode}"),
+    })?;
+    let mut inner = state.inner.lock().unwrap();
+    {
+        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
+            message: format!("Unknown bus: {bus_id:?}"),
+        })?;
+        bus.config.buffer_size_frames = parsed.frames();
+    }
+    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+        let _ = store_last_error(&mut inner, err.clone());
+        let bus = inner.buses.get(&bus_id).expect("bus exists");
+        return Ok(bus.read_status());
+    }
+    let bus = inner.buses.get(&bus_id).expect("bus exists");
+    Ok(bus.read_status())
+}
+
+/// Update a running engine's DSP parameters for one input, live. Stores the
+/// clamped config in the graph (so rebuild picks it up later) and publishes to
+/// the engine's seqlock if the engine is running — the audio callback reloads
+/// on the next block without a restart.
+///
+/// `device_id` is the canonical input id (device name, "sys:default", etc.).
+/// Returns an error if `bus_id` or `device_id` is not found.
+#[tauri::command]
+fn update_input_dsp(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    device_id: String,
+    config: DspConfig,
+) -> Result<(), EngineError> {
+    // Clamp once up front so the LIVE seqlock publish gets the same normalized
+    // config the graph stores. Critical for `order`: the realtime packer assumes
+    // a full 6-stage permutation, so a partial/duplicate order from a caller
+    // would otherwise double-run or skip stages. (set_input_dsp re-clamps the
+    // stored copy; harmless.)
+    let mut config = config;
+    config.clamp();
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_input_dsp(&device_id, config.clone()) {
+        return Err(EngineError {
+            message: format!("Unknown input: {device_id}"),
+        });
+    }
+    // Live-publish if the engine is running. The engine's input order matches
+    // effective_inputs_for_bus, so find the slot index by device_id.
+    if let Some(engine) = inner.buses.get(&bus_id).and_then(|b| b.engine.as_ref()) {
+        if let Some(idx) = engine
+            .inputs
+            .iter()
+            .position(|info| info.device_name == device_id)
+        {
+            engine.update_input_dsp(idx, &config);
+        }
+    }
+    Ok(())
+}
+
+/// Update a running bus's DSP (final limiter), live. Stores the clamped config
+/// in `BusConfig` (survives rebuild) and publishes to the engine's seqlock if
+/// running — the audio callback reloads on the next block without a restart.
+#[tauri::command]
+fn update_bus_dsp(
+    state: tauri::State<AppState>,
+    bus_id: BusId,
+    config: BusDspConfig,
+) -> Result<BusStatus, EngineError> {
+    let mut config = config;
+    config.clamp();
+    let mut inner = state.inner.lock().unwrap();
+    let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
+        message: format!("Unknown bus: {bus_id:?}"),
+    })?;
+    bus.config.dsp = config.clone();
+    if let Some(engine) = bus.engine.as_ref() {
+        engine.update_bus_dsp(&config);
+    }
     Ok(bus.read_status())
 }
 
@@ -1174,6 +1334,8 @@ mod tests {
             volume: 1.0,
             muted: false,
             enabled: false,
+            dsp: Default::default(),
+            buffer_size_frames: None,
         }
     }
 
@@ -1229,6 +1391,7 @@ mod tests {
                         muted: false,
                     },
                 ],
+                dsp: Default::default(),
             }],
         };
 
@@ -1533,6 +1696,10 @@ pub fn run() {
             set_bus_volume,
             set_bus_enabled,
             rename_bus,
+            set_bus_buffer_size,
+            set_bus_latency_mode,
+            update_input_dsp,
+            update_bus_dsp,
             start_recording,
             start_master_recording,
             stop_recording,
@@ -1545,6 +1712,10 @@ pub fn run() {
             open_recordings_folder,
             amvc::query_amvc_helper,
             amvc::launch_amvc_installer,
+            amvc::amvc_set_device_enabled,
+            amvc_sync::amvc_plan_endpoint_sync,
+            amvc_sync::amvc_apply_endpoint_sync,
+            amvc_sync::amvc_restore_endpoint_names,
             phone_server_status,
             phone_create_session,
             phone_list_sessions,

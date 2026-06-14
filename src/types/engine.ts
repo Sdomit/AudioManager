@@ -73,6 +73,133 @@ export interface PresetLoadResult {
 /** Fixed bus identifier. Serialized as a plain string by the backend. */
 export type BusId = "A1" | "A2" | "B1" | "B2";
 
+// ── DSP chain config (mirrors src-tauri/src/audio/dsp/config.rs) ─────────────
+
+/** Neural denoiser backend (mirrors Rust `DenoiseBackend`, snake_case wire). */
+export type DenoiseBackend = "rnnoise" | "deep_filter_net";
+
+/** Neural noise suppression, first in the chain. RNNoise = 48 kHz mono, ~10 ms
+ *  latency (#37). `deep_filter_net` is reserved for a phase-2 upgrade. */
+export interface DenoiseConfig {
+  enabled: boolean;
+  backend: DenoiseBackend;
+}
+
+/** High-pass filter. */
+export interface HpfConfig {
+  enabled: boolean;
+  freq_hz: number;
+}
+
+/** Noise gate / downward expander. */
+export interface GateConfig {
+  enabled: boolean;
+  threshold_db: number;
+  attack_ms: number;
+  release_ms: number;
+  hold_ms: number;
+}
+
+/** Filter shape for one EQ band (mirrors Rust `BandKind`, snake_case wire form). */
+export type BandKind =
+  | "peaking"
+  | "low_shelf"
+  | "high_shelf"
+  | "low_pass"
+  | "high_pass"
+  | "notch";
+
+/** One parametric EQ band. `kind` selects the filter shape. */
+export interface EqBand {
+  enabled: boolean;
+  kind: BandKind;
+  freq_hz: number;
+  q: number;
+  gain_db: number;
+}
+
+/** Fixed-band parametric EQ (backend normalizes to MAX_EQ_BANDS = 4). */
+export interface EqConfig {
+  enabled: boolean;
+  bands: EqBand[];
+}
+
+/** Feed-forward compressor. `makeup_db` is a ±24 dB trim. */
+export interface CompressorConfig {
+  enabled: boolean;
+  threshold_db: number;
+  ratio: number;
+  attack_ms: number;
+  release_ms: number;
+  makeup_db: number;
+}
+
+/** Brick-wall peak limiter. */
+export interface LimiterConfig {
+  enabled: boolean;
+  threshold_db: number;
+  attack_ms: number;
+  release_ms: number;
+}
+
+/** One stage in the per-input chain (mirrors Rust `DspStage`, snake_case). */
+export type DspStage = "denoise" | "hpf" | "gate" | "eq" | "comp" | "limiter";
+
+/** Stereo image controls (#34): pan/balance, mono fold, channel swap,
+ *  per-channel phase invert, mid/side width. Applied after the ordered chain.
+ *  Only meaningful on 2-channel inputs. */
+export interface StereoConfig {
+  /** Balance/pan, -1 (hard left) .. 1 (hard right). 0 = center. */
+  pan: number;
+  mono: boolean;
+  swap: boolean;
+  invert_left: boolean;
+  invert_right: boolean;
+  /** Mid (center) scale, 0 .. 2. 1 = transparent. */
+  center_level: number;
+  /** Side (width) scale, 0 .. 2. 1 = transparent, 0 = mono. */
+  width: number;
+}
+
+/** Per-input effect chain. `order` is the wired processing order; default
+ *  Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. The stereo stage runs
+ *  after the ordered chain. */
+export interface DspConfig {
+  /** Schema version (#36). Optional: omitted by the frontend; the backend
+   *  defaults a missing value to legacy 0 and migrates it to current on clamp. */
+  version?: number;
+  denoise: DenoiseConfig;
+  hpf: HpfConfig;
+  gate: GateConfig;
+  eq: EqConfig;
+  compressor: CompressorConfig;
+  limiter: LimiterConfig;
+  order: DspStage[];
+  stereo: StereoConfig;
+}
+
+/** Per-bus effect chain, processed post-sum/pre-clip: EQ -> Limiter. */
+export interface BusDspConfig {
+  eq: EqConfig;
+  limiter: LimiterConfig;
+}
+
+/** Stream-confidence verdict (#38): a recommendation, not just numbers. */
+export type LoudnessVerdict = "no_signal" | "too_quiet" | "healthy" | "too_hot";
+
+/** Streaming loudness snapshot (#38). All levels floored at -70 (JSON-safe). */
+export interface LoudnessSnapshot {
+  /** Un-weighted short-term RMS, dBFS. */
+  rms_db: number;
+  /** K-weighted momentary loudness (400 ms), LUFS. */
+  lufs_momentary: number;
+  /** K-weighted short-term loudness (3 s), LUFS. */
+  lufs_short: number;
+  /** Highest 4x-oversampled inter-sample peak over the last 400 ms, dBTP. */
+  true_peak_db: number;
+  verdict: LoudnessVerdict;
+}
+
 export interface BusStatus {
   id: BusId;
   name: string;
@@ -85,6 +212,18 @@ export interface BusStatus {
   output_peak: number;
   clipped_recently: boolean;
   last_error: string | null;
+  /** Per-bus DSP chain. Optional for back-compat with pre-#32 payloads. */
+  dsp?: BusDspConfig;
+  /** Dropout counters since last poll. 0 when no engine or no dropouts. */
+  underruns?: number;
+  overruns?: number;
+  /** Output callback buffer size in frames. null = driver default (#35). */
+  buffer_size_frames?: number | null;
+  /** Streaming loudness meters (#38). Absent on pre-#38 payloads. */
+  loudness?: LoudnessSnapshot;
+  /** Named latency mode buffer_size_frames maps to, or null for a custom
+   *  frame count that matches no preset (#35). "stable" | "low" | "ultra-low". */
+  latency_mode?: string | null;
 }
 
 export interface SystemStatus {
@@ -106,6 +245,8 @@ export interface InputChannel {
   gain: number;
   muted: boolean;
   sends: InputSend[];
+  /** Per-input DSP chain. Optional for back-compat with pre-#32 payloads. */
+  dsp?: DspConfig;
 }
 
 export interface InputPeakStatus {
@@ -164,6 +305,8 @@ export interface AmvcStatus {
   names_aligned: boolean;
   detected: string[];
   missing: string[];
+  /** `true` = device enabled (endpoints visible in Windows Sound), `false` = disabled, `undefined` = driver not present. */
+  device_enabled?: boolean;
 }
 
 /**
@@ -175,6 +318,28 @@ export interface AmvcStatus {
 export type AmvcQueryResult =
   | ({ kind: "ok" } & AmvcStatus)
   | { kind: "unavailable"; reason: string };
+
+/** Bus slot an AMVC render endpoint backs. */
+export type AmvcBusSlot = "a1" | "a2" | "b1" | "b2";
+
+/** One endpoint's current vs. desired Windows name token. */
+export interface AmvcEndpointPlan {
+  guid: string;
+  slot: AmvcBusSlot;
+  current: string;
+  target: string;
+  needs_change: boolean;
+}
+
+/**
+ * Result of planning/applying AMVC endpoint name sync.
+ * `aligned` = nothing to change. `can_write` = process can write HKLM (≈ elevated).
+ */
+export interface AmvcSyncPlan {
+  endpoints: AmvcEndpointPlan[];
+  aligned: boolean;
+  can_write: boolean;
+}
 
 // ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
 

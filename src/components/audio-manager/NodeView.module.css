@@ -25,10 +25,8 @@
 }
 
 .zoomBar {
-  position: absolute;
-  top: 12px;
-  right: 16px;
-  z-index: 30;
+  /* Portalled into the Routing header (RoutingView's .nodeToolbarSlot), so
+     this is a static flex strip, not an absolute overlay. */
   display: flex;
   align-items: center;
   gap: 4px;
@@ -86,6 +84,47 @@
 .addGroupBtn:hover {
   background: var(--am-surface-3);
   color: var(--am-text-primary);
+}
+
+/* Flow / Nodes / Matrix switch inside the zoom bar. Lets users switch routing
+ * view without reaching back up to the routing-panel header. Segmented group
+ * with a single rounded border, sized to sit alongside the zoom buttons. */
+.viewSwitch {
+  display: inline-flex;
+  align-items: stretch;
+  margin: 0 4px;
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm, 4px);
+  background: var(--am-surface-1);
+  overflow: hidden;
+}
+.viewSwitchBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--am-border-subtle);
+  color: var(--am-text-tertiary);
+  cursor: pointer;
+}
+.viewSwitchBtn:last-child {
+  border-right: none;
+}
+.viewSwitchBtn:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
+}
+.viewSwitchBtnActive {
+  background: var(--am-accent);
+  color: #fff;
+}
+.viewSwitchBtnActive:hover {
+  background: var(--am-accent);
+  color: #fff;
 }
 
 .canvas {
@@ -359,6 +398,203 @@
     background var(--am-dur-fast);
 }
 .busNode .recBadge { right: 6px; }
+
+.fxBadge {
+  position: absolute;
+  top: 4px;
+  right: 40px;
+  height: 16px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: var(--am-text-tertiary);
+  background: var(--am-surface-3);
+  border: 1px solid var(--am-border-default);
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.8;
+  z-index: 3;
+  transition: color var(--am-dur-fast), border-color var(--am-dur-fast),
+    background var(--am-dur-fast), opacity var(--am-dur-fast);
+}
+.busNode .fxBadge { right: 28px; }
+.fxBadge:hover {
+  opacity: 1;
+  color: var(--am-text-primary);
+  border-color: var(--am-accent, #6ea8fe);
+}
+.fxBadgeActive {
+  opacity: 1;
+  color: var(--am-accent, #6ea8fe);
+  border-color: var(--am-accent, #6ea8fe);
+  background: rgba(110, 168, 254, 0.12);
+}
+
+/* On-canvas per-input effect boxes (input → fx → fx → … → buses). Card shape
+   matches input/bus nodes (rounded, subtle gradient, drop shadow) so the canvas
+   reads as one design language. Left/right port dots are positioned absolutely
+   and bleed past the card edge by half a dot, matching input/bus port look. */
+.fxNode {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 10px;
+  background: linear-gradient(180deg,
+    var(--am-surface-2, #232733) 0%,
+    var(--am-surface-1, #1b1e26) 100%);
+  border: 1px solid var(--am-border-default);
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  cursor: grab;
+  z-index: 4;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transition: border-color var(--am-dur-fast), color var(--am-dur-fast),
+    box-shadow var(--am-dur-fast), transform var(--am-dur-fast);
+}
+.fxNode:active { cursor: grabbing; }
+.fxNode:hover {
+  border-color: var(--am-accent, #6ea8fe);
+  color: var(--am-text-primary);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+.fxNodeKind {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+}
+
+/* Floating placeholder fx — unclaimed, awaiting an input drop. Dashed border
+   distinguishes it from an active input-owned fx. Shares port + remove styles. */
+.floatFx {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 10px;
+  background: var(--am-surface-1, #1b1e26);
+  border: 1px dashed var(--am-text-tertiary);
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  cursor: grab;
+  z-index: 4;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transition: border-color var(--am-dur-fast), color var(--am-dur-fast),
+    box-shadow var(--am-dur-fast);
+}
+.floatFx:active { cursor: grabbing; }
+.floatFx:hover {
+  border-color: var(--am-accent, #6ea8fe);
+  color: var(--am-text-primary);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+.fxPortIn,
+.fxPortOut {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  z-index: 5;
+}
+.fxPortIn {
+  left: -8px;
+  cursor: default;
+}
+.fxPortOut {
+  right: -8px;
+  cursor: grab;
+}
+.fxPortOut:active {
+  cursor: grabbing;
+}
+.fxPortDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--am-surface-1);
+  border: 2px solid var(--am-text-tertiary);
+  transition: border-color var(--am-dur-fast), background var(--am-dur-fast),
+    transform var(--am-dur-fast);
+}
+.fxPortOut:hover .fxPortDot {
+  border-color: var(--am-accent, #6ea8fe);
+  transform: scale(1.2);
+}
+.fxNodeDrop {
+  border-color: var(--am-accent, #6ea8fe) !important;
+  box-shadow: 0 0 0 2px rgba(110, 168, 254, 0.4);
+}
+.fxNodeDrop .fxPortIn .fxPortDot {
+  border-color: var(--am-accent, #6ea8fe);
+  background: var(--am-accent, #6ea8fe);
+}
+
+.fxNodeLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fxNodeRemove {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--am-text-tertiary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fxNodeRemove:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--am-meter-clip, #ef4444);
+}
+.fxAddNode {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--am-border-default);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--am-text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 4;
+  transition: border-color var(--am-dur-fast), color var(--am-dur-fast),
+    background var(--am-dur-fast);
+}
+.fxAddNode:hover {
+  border-color: var(--am-accent, #6ea8fe);
+  color: var(--am-accent, #6ea8fe);
+  background: rgba(110, 168, 254, 0.08);
+}
+
 .recBadge:hover:not(:disabled) {
   opacity: 1;
   color: var(--am-meter-clip, #EF4444);
@@ -637,6 +873,19 @@
 
 .bgCtxItem:hover {
   background: var(--am-surface-3, rgba(255, 255, 255, 0.05));
+}
+.bgCtxSep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--am-border-subtle, rgba(255, 255, 255, 0.08));
+}
+.bgCtxHeading {
+  padding: 4px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--am-text-tertiary, rgba(255, 255, 255, 0.45));
 }
 
 /* ── Group node (Phase G-1d, frontend-only DAG demo) ───────────────── */

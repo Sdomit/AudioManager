@@ -260,6 +260,8 @@ mod tests {
                     gain: AtomicU32::new(1.0f32.to_bits()),
                     muted: AtomicBool::new(false),
                     input_peak: AtomicU32::new(0),
+                    overrun: AtomicU32::new(0),
+                    underrun: AtomicU32::new(0),
                 })
                 .collect(),
         )

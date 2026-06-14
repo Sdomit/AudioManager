@@ -1,7 +1,9 @@
 pub mod bus;
 pub mod devices;
+pub mod dsp;
 pub mod graph;
 pub mod loopback;
+pub mod meters;
 pub mod mixer;
 pub mod passthrough;
 pub mod recorder;

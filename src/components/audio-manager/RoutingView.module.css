@@ -40,20 +40,21 @@
   background: var(--am-surface-2);
   border: 1px solid var(--am-border-default);
   border-radius: var(--am-radius-md);
-  padding: 2px;
-  gap: 2px;
+  padding: 4px;
+  gap: 4px;
 }
 
 .toggleBtn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  font-size: var(--am-text-12);
-  font-weight: 500;
+  gap: 8px;
+  padding: 9px 16px;
+  font-size: var(--am-text-14, 14px);
+  font-weight: 600;
   color: var(--am-text-secondary);
-  border-radius: 5px;
+  border-radius: 7px;
   transition: background var(--am-dur-fast), color var(--am-dur-fast);
+  min-height: 32px;
 }
 .toggleBtn:hover { color: var(--am-text-primary); }
 
@@ -61,6 +62,16 @@
   background: var(--am-surface-4);
   color: var(--am-text-primary);
   box-shadow: var(--am-elev-1);
+}
+
+/* Canvas toolbar slot — fills the gap between the title row and the view
+   toggle, takes whatever NodeView portals into it. */
+.nodeToolbarSlot {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
 }
 
 .body {

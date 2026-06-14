@@ -8,6 +8,9 @@ import type {
   Bus,
   BusId,
   DetailSelection,
+  DspConfig,
+  EqConfig,
+  LimiterConfig,
   RoutingView as RoutingViewKind,
   Send,
   TapSpec,
@@ -38,6 +41,9 @@ interface RoutingViewProps {
   onRemoveInput: (id: string) => void;
   onInputGainChange: (id: string, v: number) => void;
   onBusVolumeChange: (id: BusId, v: number) => void;
+  onInputDsp: (id: string, dsp: DspConfig) => void;
+  onBusEq: (id: BusId, eq: EqConfig) => void;
+  onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
 }
 
 /**
@@ -65,6 +71,9 @@ export function RoutingView({
   onRemoveInput,
   onInputGainChange,
   onBusVolumeChange,
+  onInputDsp,
+  onBusEq,
+  onBusLimiter,
 }: RoutingViewProps) {
   return (
     <section className={styles.routing} aria-label="Routing">
@@ -75,6 +84,11 @@ export function RoutingView({
             {sends.filter((s) => s.enabled).length} active sends
           </span>
         </div>
+        {/* Canvas toolbar (zoom / Reset layout / Add input / Group) is
+            portalled into here by NodeView when this view is active. */}
+        {view === "nodes" && (
+          <div id="am-node-toolbar-slot" className={styles.nodeToolbarSlot} />
+        )}
         <ViewToggle view={view} onChange={onViewChange} />
       </header>
 
@@ -120,6 +134,9 @@ export function RoutingView({
             onRemoveInput={onRemoveInput}
             onInputGainChange={onInputGainChange}
             onBusVolumeChange={onBusVolumeChange}
+            onInputDsp={onInputDsp}
+            onBusEq={onBusEq}
+            onBusLimiter={onBusLimiter}
           />
         )}
       </div>
@@ -142,7 +159,7 @@ function ViewToggle({
         className={`${styles.toggleBtn} ${view === "flow" ? styles.toggleBtnActive : ""}`}
         onClick={() => onChange("flow")}
       >
-        <FlowIcon size={14} />
+        <FlowIcon size={18} />
         <span>Flow</span>
       </button>
       <button
@@ -151,7 +168,7 @@ function ViewToggle({
         className={`${styles.toggleBtn} ${view === "nodes" ? styles.toggleBtnActive : ""}`}
         onClick={() => onChange("nodes")}
       >
-        <ChainIcon size={14} />
+        <ChainIcon size={18} />
         <span>Nodes</span>
       </button>
       <button
@@ -160,7 +177,7 @@ function ViewToggle({
         className={`${styles.toggleBtn} ${view === "matrix" ? styles.toggleBtnActive : ""}`}
         onClick={() => onChange("matrix")}
       >
-        <GridIcon size={14} />
+        <GridIcon size={18} />
         <span>Matrix</span>
       </button>
     </div>
