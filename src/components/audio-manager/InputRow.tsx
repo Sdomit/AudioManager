@@ -1,4 +1,4 @@
-import { MeterCanvas } from "./MeterCanvas";
+import { StereoMeter } from "./StereoMeter";
 import { MuteIcon, iconForKind } from "./Icon";
 import type { AudioInput } from "./types";
 import styles from "./InputRow.module.css";
@@ -57,7 +57,16 @@ export function InputRow({
           </span>
         </div>
         <div className={styles.meterRow}>
-          <MeterCanvas level={input.level} width={170} height={6} variant="input" peakHold={false} />
+          <StereoMeter
+            levelL={input.levelL}
+            levelR={input.levelR}
+            level={input.level}
+            channels={input.channels}
+            width={170}
+            height={10}
+            variant="input"
+            peakHold={false}
+          />
           <div className={styles.gainContainer}>
             <input
               type="range"

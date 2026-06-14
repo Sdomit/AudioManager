@@ -404,7 +404,13 @@ struct EngineStatus {
 #[derive(serde::Serialize)]
 struct InputPeakStatus {
     device_id: String,
+    /// Raw pre-DSP capture peak (mono). Kept for back-compat / aria labels.
     peak: f32,
+    /// Post-stereo per-channel peaks (#feature10) — track pan / mono / width.
+    peak_l: f32,
+    peak_r: f32,
+    /// Source channel count (1 = mono → UI renders a single meter bar).
+    channels: u16,
 }
 
 #[derive(serde::Serialize)]
@@ -475,7 +481,7 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
     let a1 = inner.buses.get(&BusId::A1);
     match a1.and_then(|b| b.engine.as_ref()) {
         Some(engine) => {
-            let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
+            let (input_meters, output_peak, clipped_recently) = engine.read_and_reset_meters();
             EngineStatus {
                 status: "running",
                 output_device: Some(engine.output_device_name.clone()),
@@ -484,7 +490,8 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
                     .iter()
                     .map(|input| input.device_name.clone())
                     .collect(),
-                input_peaks,
+                // Legacy shape exposes only the capture peak.
+                input_peaks: input_meters.iter().map(|m| m.capture).collect(),
                 output_peak,
                 clipped_recently,
                 last_error: a1.and_then(|b| b.last_error.clone()).or(inner.last_error.clone()),
@@ -829,25 +836,33 @@ fn list_buses(state: tauri::State<AppState>) -> Vec<BusStatus> {
 fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let inner = state.inner.lock().unwrap();
 
-    let mut input_peaks_by_device: BTreeMap<String, f32> = BTreeMap::new();
+    // Per-device meter aggregate (a device may feed more than one bus engine;
+    // take the max across them). `channels` comes from the engine's input info.
+    #[derive(Default, Clone, Copy)]
+    struct DeviceMeterAgg {
+        capture: f32,
+        peak_l: f32,
+        peak_r: f32,
+        channels: u16,
+    }
+    let mut input_peaks_by_device: BTreeMap<String, DeviceMeterAgg> = BTreeMap::new();
     let mut buses = Vec::with_capacity(inner.buses.len());
 
     for bus in inner.buses.values() {
         let (output_peak, clipped_recently, underruns, overruns, loudness) =
             match bus.engine.as_ref() {
                 Some(engine) => {
-                    let (input_peaks, output_peak, clipped_recently) =
+                    let (input_meters, output_peak, clipped_recently) =
                         engine.read_and_reset_meters();
                     for (idx, info) in engine.inputs.iter().enumerate() {
-                        let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
-                        input_peaks_by_device
+                        let m = input_meters.get(idx).copied().unwrap_or_default();
+                        let agg = input_peaks_by_device
                             .entry(info.device_name.clone())
-                            .and_modify(|current| {
-                                if peak > *current {
-                                    *current = peak;
-                                }
-                            })
-                            .or_insert(peak);
+                            .or_default();
+                        agg.capture = agg.capture.max(m.capture);
+                        agg.peak_l = agg.peak_l.max(m.peak_l);
+                        agg.peak_r = agg.peak_r.max(m.peak_r);
+                        agg.channels = agg.channels.max(info.channels);
                     }
                     let (un, ov) = engine.read_and_reset_xruns();
                     (output_peak, clipped_recently, un, ov, engine.read_loudness())
@@ -869,7 +884,13 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
 
     let input_peaks = input_peaks_by_device
         .into_iter()
-        .map(|(device_id, peak)| InputPeakStatus { device_id, peak })
+        .map(|(device_id, a)| InputPeakStatus {
+            device_id,
+            peak: a.capture,
+            peak_l: a.peak_l,
+            peak_r: a.peak_r,
+            channels: a.channels,
+        })
         .collect();
 
     SystemStatus {

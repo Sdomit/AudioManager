@@ -6,7 +6,7 @@ import {
   PlusIcon,
 } from "./Icon";
 import { InputDspControls } from "./DspControls";
-import { MeterCanvas } from "./MeterCanvas";
+import { StereoMeter } from "./StereoMeter";
 import { RecordButton } from "./RecordButton";
 import type {
   ActiveRecording,
@@ -19,6 +19,13 @@ import type {
 } from "./types";
 import { gainToDb } from "./units";
 import styles from "./InputDetail.module.css";
+
+/** Compact pan readout: "C" at center, "L 42" / "R 80" off-center. */
+function panLabel(pan: number): string {
+  if (Math.abs(pan) < 0.01) return "C";
+  const pct = Math.round(Math.abs(pan) * 100);
+  return pan < 0 ? `L ${pct}` : `R ${pct}`;
+}
 
 interface InputDetailProps {
   input: AudioInput;
@@ -67,6 +74,13 @@ export function InputDetail({
 }: InputDetailProps) {
   const sendMap = new Map<BusId, Send>();
   sends.forEach((s) => sendMap.set(s.busId, s));
+
+  // Stereo image (#feature3): pan positions the signal between L/R; mono folds
+  // a stereo source so both channels carry the same content. Both mutate the
+  // existing DspConfig.stereo block and flow through the live onDspChange path.
+  const stereo = input.dsp.stereo;
+  const updateStereo = (patch: Partial<typeof stereo>) =>
+    onDspChange({ ...input.dsp, stereo: { ...stereo, ...patch } });
   const preSpec: TapSpec = { kind: "input_pre", device_id: input.id };
   // Pre-gain capture is only possible while at least one bus engine has
   // this input loaded (it taps inside the bus engine's output callback).
@@ -108,7 +122,16 @@ export function InputDetail({
 
       {/* Meter */}
       <div className={styles.meterBlock}>
-        <MeterCanvas level={input.level} width={300} height={10} peakHold variant="input" />
+        <StereoMeter
+          levelL={input.levelL}
+          levelR={input.levelR}
+          level={input.level}
+          channels={input.channels}
+          width={300}
+          height={16}
+          peakHold
+          variant="input"
+        />
       </div>
 
       {/* Master controls */}
@@ -151,6 +174,52 @@ export function InputDetail({
           />
         </div>
       </section>
+
+      {/* Stereo image: pan + mono (#feature3). Shown only in node view, where
+          the DSP chain — and its full Stereo editor in InputDspControls — is
+          hidden. The normal detail view edits pan/mono/width there instead, so
+          we don't render a second, partial stereo editor for the same state. */}
+      {inputOnly && (
+        <section className={styles.section}>
+          <div className={styles.sectionTitle}>Stereo</div>
+        <div className={styles.gainRow}>
+          <span className={styles.gainLabel}>Pan</span>
+          <div className={styles.gainSliderWrap}>
+            <input
+              type="range"
+              min={-1}
+              max={1}
+              step={0.01}
+              value={stereo.pan}
+              onChange={(e) => updateStereo({ pan: Number(e.target.value) })}
+              onDoubleClick={() => updateStereo({ pan: 0 })}
+              className={styles.nativeSlider}
+              style={{ accentColor: "var(--am-accent)" }}
+              aria-label="Pan: left / right balance"
+            />
+          </div>
+          <span className={styles.gainReadout}>{panLabel(stereo.pan)}</span>
+        </div>
+        <div className={styles.masterActions}>
+          <button
+            className={`${styles.muteBtn} ${stereo.mono ? styles.muteBtnActive : ""}`}
+            onClick={() => updateStereo({ mono: !stereo.mono })}
+            aria-pressed={stereo.mono}
+            title={stereo.mono ? "Switch to stereo" : "Fold to mono (both channels)"}
+          >
+            <span>{stereo.mono ? "Mono" : "Stereo"}</span>
+          </button>
+          <button
+            className={styles.muteBtn}
+            onClick={() => updateStereo({ pan: 0 })}
+            disabled={Math.abs(stereo.pan) < 0.001}
+            title="Center pan"
+          >
+            <span>Center</span>
+          </button>
+        </div>
+        </section>
+      )}
 
       {/* DSP chain (hidden in node view — fx are edited on the canvas). */}
       {!inputOnly && (

@@ -81,10 +81,27 @@ export interface AudioInput {
   /** UI scale 0..1 */
   gain: number;
   muted: boolean;
-  /** Current input meter level 0..1.2 */
+  /** Current input meter level 0..1.2 (max of L/R; aria + mono fallback). */
   level: number;
+  /** Post-stereo per-channel meter levels 0..1.2 (#feature10). Absent until the
+   *  first meter poll; components fall back to `level` when undefined. */
+  levelL?: number;
+  levelR?: number;
+  /** Source channel count (1 = mono → single meter bar). Absent → treat as stereo. */
+  channels?: number;
   /** Per-input effect chain HPF→Gate→EQ→Comp→Limiter (#32). */
   dsp: DspConfig;
+}
+
+/** Per-input meter sample from the fast meter poll (#feature10). */
+export interface InputMeterLevel {
+  /** max(L, R, capture) — aria label + mono fallback. */
+  level: number;
+  /** Post-stereo per-channel levels 0..1.2 (follow pan / mono / width). */
+  levelL: number;
+  levelR: number;
+  /** Source channel count (1 = mono → single meter bar). */
+  channels: number;
 }
 
 export interface Send {

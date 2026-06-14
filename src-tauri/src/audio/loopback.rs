@@ -495,6 +495,8 @@ mod tests {
             gain: std::sync::atomic::AtomicU32::new(1.0f32.to_bits()),
             muted: std::sync::atomic::AtomicBool::new(false),
             input_peak: std::sync::atomic::AtomicU32::new(0),
+            peak_l: std::sync::atomic::AtomicU32::new(0),
+            peak_r: std::sync::atomic::AtomicU32::new(0),
             overrun: std::sync::atomic::AtomicU32::new(0),
             underrun: std::sync::atomic::AtomicU32::new(0),
         }]);

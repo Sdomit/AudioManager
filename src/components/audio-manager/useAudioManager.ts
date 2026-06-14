@@ -44,6 +44,7 @@ import type {
   DetailSelection,
   DspConfig,
   EqConfig,
+  InputMeterLevel,
   LimiterConfig,
   Preset,
   RecordingFile,
@@ -164,7 +165,11 @@ type Action =
   | { type: "set_selection"; selection: DetailSelection }
   | { type: "open_stream_setup" }
   | { type: "close_stream_setup" }
-  | { type: "tick_meters"; busLevels: Record<BusId, number>; inputLevels: Record<string, number> }
+  | {
+      type: "tick_meters";
+      busLevels: Record<BusId, number>;
+      inputLevels: Record<string, InputMeterLevel>;
+    }
   | { type: "restore_snapshot"; snap: Snapshot }
   | { type: "set_undo_redo_flags"; canUndo: boolean; canRedo: boolean }
   | { type: "set_recordings"; recordings: ActiveRecording[] }
@@ -471,10 +476,21 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
             state: deriveBusStateWithClip(b, hasAnySend(state.sends, b.id), clipping),
           };
         }),
-        inputs: state.inputs.map((i) => ({
-          ...i,
-          level: i.muted ? 0 : action.inputLevels[i.id] ?? i.level,
-        })),
+        // Input meters reflect the captured signal regardless of mute or
+        // routing (#feature2): a muted/unrouted input still shows movement so
+        // you can see the source is live. The stereo legs follow pan / mono /
+        // width (#feature10). No sample this tick → keep the prior values.
+        inputs: state.inputs.map((i) => {
+          const m = action.inputLevels[i.id];
+          if (!m) return i;
+          return {
+            ...i,
+            level: m.level,
+            levelL: m.levelL,
+            levelR: m.levelR,
+            channels: m.channels,
+          };
+        }),
       };
 
     default:

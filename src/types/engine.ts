@@ -251,7 +251,13 @@ export interface InputChannel {
 
 export interface InputPeakStatus {
   device_id: string;
+  /** Raw pre-DSP capture peak (mono). Kept for back-compat / aria labels. */
   peak: number;
+  /** Post-stereo per-channel peaks (#feature10) — follow pan / mono / width. */
+  peak_l: number;
+  peak_r: number;
+  /** Source channel count (1 = mono → UI renders a single meter bar). */
+  channels: number;
 }
 
 // ── Recording ────────────────────────────────────────────────────────────────

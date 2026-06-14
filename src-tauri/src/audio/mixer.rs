@@ -59,6 +59,14 @@ pub struct InputSlotShared {
     pub gain: AtomicU32, // f32 bits
     pub muted: AtomicBool,
     pub input_peak: AtomicU32, // f32 bits
+    /// Post-stereo per-channel peaks (#feature10). Written by the output
+    /// callback after the per-input DSP chain (which ends with the stereo
+    /// stage), so they track pan / mono-fold / width — unlike `input_peak`
+    /// which is the raw pre-DSP capture peak. Pre-fader (gain not applied),
+    /// matching `input_peak`'s semantics. Both legs equal a mono input
+    /// (the scratch mirrors ch0). f32 bits.
+    pub peak_l: AtomicU32,
+    pub peak_r: AtomicU32,
     /// Dropout telemetry. `overrun` counts samples lost on the producer side —
     /// either the ring was full when the capture/input callback tried to push,
     /// or the mixer trimmed a drifted ring to bound latency (resync). `underrun`
@@ -67,6 +75,16 @@ pub struct InputSlotShared {
     /// each meter poll (`read_and_reset_xruns`).
     pub overrun: AtomicU32,
     pub underrun: AtomicU32,
+}
+
+/// Per-input meter snapshot drained by [`MixerEngine::read_and_reset_meters`].
+/// `capture` is the raw pre-DSP peak (mono); `peak_l`/`peak_r` are the
+/// post-stereo-stage per-channel peaks that track pan / mono-fold / width.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InputMeter {
+    pub capture: f32,
+    pub peak_l: f32,
+    pub peak_r: f32,
 }
 
 pub struct MixerInputInfo {
@@ -202,15 +220,19 @@ impl MixerEngine {
     }
 
     /// Read current meters and reset them for the next polling interval.
-    pub fn read_and_reset_meters(&self) -> (Vec<f32>, f32, bool) {
-        let input_peaks = self
+    pub fn read_and_reset_meters(&self) -> (Vec<InputMeter>, f32, bool) {
+        let input_meters = self
             .shared
             .iter()
-            .map(|slot| take_peak(&slot.input_peak))
+            .map(|slot| InputMeter {
+                capture: take_peak(&slot.input_peak),
+                peak_l: take_peak(&slot.peak_l),
+                peak_r: take_peak(&slot.peak_r),
+            })
             .collect();
         let output_peak = take_peak(&self.meters.output_peak);
         let clipped = self.meters.clipped.swap(false, Ordering::Relaxed);
-        (input_peaks, output_peak, clipped)
+        (input_meters, output_peak, clipped)
     }
 
     /// Read the streaming loudness snapshot (#38). Pure loads — all four
@@ -431,6 +453,8 @@ pub fn start(
             gain: AtomicU32::new(gain.to_bits()),
             muted: AtomicBool::new(*muted),
             input_peak: AtomicU32::new(0.0f32.to_bits()),
+            peak_l: AtomicU32::new(0.0f32.to_bits()),
+            peak_r: AtomicU32::new(0.0f32.to_bits()),
             overrun: AtomicU32::new(0),
             underrun: AtomicU32::new(0),
         })
@@ -875,6 +899,11 @@ pub fn start(
                         };
                         let mut block_output_peak = 0.0f32;
                         let mut block_clipped = false;
+                        // Post-stereo per-channel peak per input, accumulated over
+                        // this block and flushed to the slots below. Stack arrays —
+                        // no allocation on the audio thread (#feature10).
+                        let mut block_in_peak_l = [0.0f32; MAX_INPUTS];
+                        let mut block_in_peak_r = [0.0f32; MAX_INPUTS];
 
                         // Bulk-drain each input ring once per block. pop_slice is a
                         // single head-index update vs one atomic per sample; the tail
@@ -958,6 +987,20 @@ pub fn start(
 
                                 // DSP already applied block-wide above (process_block).
                                 // s0/s1 read from the processed scratch buffer.
+
+                                // Track post-stereo per-channel peak (#feature10).
+                                // Pre-fader: `g` is applied at mix time below, so
+                                // this mirrors `input_peak`'s pre-gain semantics and
+                                // reflects pan / mono-fold / width. Mono inputs mirror
+                                // ch0 into s1, so both legs read equal.
+                                let al = s0.abs();
+                                if al > block_in_peak_l[i] {
+                                    block_in_peak_l[i] = al;
+                                }
+                                let ar = s1.abs();
+                                if ar > block_in_peak_r[i] {
+                                    block_in_peak_r[i] = ar;
+                                }
 
                                 // Fan-out: InputPre / InputPost taps for input i.
                                 if !active_taps.is_empty() {
@@ -1043,6 +1086,12 @@ pub fn start(
                                     }
                                 }
                             }
+                        }
+
+                        // Flush post-stereo per-channel input peaks (#feature10).
+                        for i in 0..n {
+                            store_max(&slots[i].peak_l, block_in_peak_l[i]);
+                            store_max(&slots[i].peak_r, block_in_peak_r[i]);
                         }
 
                         store_max(&shared_meters.output_peak, block_output_peak);
@@ -1178,6 +1227,8 @@ mod tests {
                 gain: AtomicU32::new(1.0f32.to_bits()),
                 muted: AtomicBool::new(false),
                 input_peak: AtomicU32::new(peak.to_bits()),
+                peak_l: AtomicU32::new(peak.to_bits()),
+                peak_r: AtomicU32::new(peak.to_bits()),
                 overrun: AtomicU32::new(0),
                 underrun: AtomicU32::new(0),
             })
@@ -1341,13 +1392,16 @@ mod tests {
 
         let (input_peaks, output_peak, clipped) = engine.read_and_reset_meters();
         assert_eq!(input_peaks.len(), 2);
-        assert!((input_peaks[0] - 0.35).abs() < f32::EPSILON);
-        assert!((input_peaks[1] - 0.7).abs() < f32::EPSILON);
+        assert!((input_peaks[0].capture - 0.35).abs() < f32::EPSILON);
+        assert!((input_peaks[1].capture - 0.7).abs() < f32::EPSILON);
+        // test_engine seeds the post-stereo legs equal to capture.
+        assert!((input_peaks[0].peak_l - 0.35).abs() < f32::EPSILON);
+        assert!((input_peaks[0].peak_r - 0.35).abs() < f32::EPSILON);
         assert!((output_peak - 0.9).abs() < f32::EPSILON);
         assert!(clipped);
 
         let (input_peaks2, output_peak2, clipped2) = engine.read_and_reset_meters();
-        assert_eq!(input_peaks2, vec![0.0, 0.0]);
+        assert_eq!(input_peaks2, vec![InputMeter::default(), InputMeter::default()]);
         assert_eq!(output_peak2, 0.0);
         assert!(!clipped2);
     }
