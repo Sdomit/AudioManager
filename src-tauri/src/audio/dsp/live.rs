@@ -22,7 +22,7 @@
 use std::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 
 use super::config::{
-    BandKind, BusDspConfig, DenoiseBackend, DspConfig, DspStage, EqBand, MAX_EQ_BANDS,
+    BandKind, BusDspConfig, DenoiseBackend, DspConfig, DspStage, EqBand, StereoConfig, MAX_EQ_BANDS,
 };
 
 /// Pack a 6-stage order (each stage 0..5) into 3-bit fields of a u32 so the
@@ -174,6 +174,53 @@ impl AtomicGate {
     }
 }
 
+/// Stereo image params delivered by value through the seqlock. The processor is
+/// stateless, so this is the whole effect — no precomputed coefficients.
+struct AtomicStereo {
+    pan: AtomicF32,
+    center_level: AtomicF32,
+    width: AtomicF32,
+    mono: AtomicBool,
+    swap: AtomicBool,
+    invert_left: AtomicBool,
+    invert_right: AtomicBool,
+}
+
+impl AtomicStereo {
+    fn new() -> Self {
+        let d = StereoConfig::default();
+        Self {
+            pan: AtomicF32::new(d.pan),
+            center_level: AtomicF32::new(d.center_level),
+            width: AtomicF32::new(d.width),
+            mono: AtomicBool::new(d.mono),
+            swap: AtomicBool::new(d.swap),
+            invert_left: AtomicBool::new(d.invert_left),
+            invert_right: AtomicBool::new(d.invert_right),
+        }
+    }
+    fn store(&self, c: StereoConfig) {
+        self.pan.store(c.pan);
+        self.center_level.store(c.center_level);
+        self.width.store(c.width);
+        self.mono.store(c.mono, RELAXED);
+        self.swap.store(c.swap, RELAXED);
+        self.invert_left.store(c.invert_left, RELAXED);
+        self.invert_right.store(c.invert_right, RELAXED);
+    }
+    fn load(&self) -> StereoConfig {
+        StereoConfig {
+            pan: self.pan.load(),
+            center_level: self.center_level.load(),
+            width: self.width.load(),
+            mono: self.mono.load(RELAXED),
+            swap: self.swap.load(RELAXED),
+            invert_left: self.invert_left.load(RELAXED),
+            invert_right: self.invert_right.load(RELAXED),
+        }
+    }
+}
+
 struct AtomicComp {
     enabled: AtomicBool,
     threshold_db: AtomicF32,
@@ -271,6 +318,7 @@ pub struct InputDspSnapshot {
     pub gate: (bool, GateCoeffs),
     pub comp: (bool, CompressorCoeffs),
     pub limiter: (bool, LimiterCoeffs),
+    pub stereo: StereoConfig,
 }
 
 /// Stack copy of one bus's effect parameter set.
@@ -294,6 +342,7 @@ pub struct InputDspShared {
     gate: AtomicGate,
     comp: AtomicComp,
     limiter: AtomicLimiter,
+    stereo: AtomicStereo,
 }
 
 impl InputDspShared {
@@ -310,6 +359,7 @@ impl InputDspShared {
             gate: AtomicGate::new(),
             comp: AtomicComp::new(),
             limiter: AtomicLimiter::new(),
+            stereo: AtomicStereo::new(),
         };
         s.write_fields(cfg, sample_rate);
         s
@@ -372,6 +422,7 @@ impl InputDspShared {
                 sr,
             ),
         );
+        self.stereo.store(cfg.stereo);
     }
 
     fn read_fields(&self) -> InputDspSnapshot {
@@ -384,6 +435,7 @@ impl InputDspShared {
             gate: self.gate.load(),
             comp: self.comp.load(),
             limiter: self.limiter.load(),
+            stereo: self.stereo.load(),
         }
     }
 
@@ -539,6 +591,7 @@ pub struct InputDspSlots {
     eq: [BiquadFilter; MAX_EQ_BANDS],
     comp: Compressor,
     limiter: Limiter,
+    stereo: StereoConfig,
 }
 
 impl InputDspSlots {
@@ -589,6 +642,7 @@ impl InputDspSlots {
             eq,
             comp,
             limiter,
+            stereo: StereoConfig::default(),
         }
     }
 
@@ -625,6 +679,7 @@ impl InputDspSlots {
         if s.limiter.0 && !lim_was {
             self.limiter.reset();
         }
+        self.stereo = s.stereo;
     }
 
     /// Process one stereo frame through the enabled effects in chain order.
@@ -647,6 +702,11 @@ impl InputDspSlots {
         }
         if self.limiter.is_enabled() {
             self.limiter.process(buf, channels);
+        }
+        // Stereo image stage (#34): after the tonal chain, pre-gain. Stateless
+        // per-frame; only meaningful when both channels are present.
+        if channels == 2 && self.stereo.is_active() {
+            self.stereo.process_frame(buf);
         }
     }
 
@@ -696,6 +756,16 @@ impl InputDspSlots {
                         process_block_effect(&mut self.limiter, interleaved, channels);
                     }
                 }
+            }
+        }
+        // Stereo image stage (#34): after the ordered tonal chain, pre-gain.
+        // Stateless per-frame; skipped on mono (needs both channels).
+        if channels == 2 && self.stereo.is_active() {
+            for frame in interleaved.chunks_exact_mut(2) {
+                let mut b = [frame[0], frame[1]];
+                self.stereo.process_frame(&mut b);
+                frame[0] = b[0];
+                frame[1] = b[1];
             }
         }
     }
@@ -792,6 +862,43 @@ mod tests {
         let mut buf = [0.42, -0.17];
         slots.process(&mut buf, 2);
         assert_eq!(buf, [0.42, -0.17]);
+    }
+
+    #[test]
+    fn stereo_pan_applies_through_seqlock() {
+        let shared = InputDspShared::new(&DspConfig::default(), SR);
+        let mut slots = InputDspSlots::new(SR);
+        assert!(shared.reload_if_changed(&mut slots));
+
+        let mut c = DspConfig::default();
+        c.stereo.pan = 1.0; // hard right
+        c.clamp();
+        shared.publish(&c, SR);
+        assert!(shared.reload_if_changed(&mut slots));
+
+        let mut buf = [0.5, 0.5, 0.5, 0.5];
+        slots.process_block(&mut buf, 2);
+        // Left frames silenced, right held.
+        assert!(buf[0].abs() < 1e-6 && buf[2].abs() < 1e-6);
+        assert!((buf[1] - 0.5).abs() < 1e-6 && (buf[3] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stereo_skipped_on_mono_block() {
+        let shared = InputDspShared::new(&DspConfig::default(), SR);
+        let mut slots = InputDspSlots::new(SR);
+        assert!(shared.reload_if_changed(&mut slots));
+
+        let mut c = DspConfig::default();
+        c.stereo.pan = 1.0;
+        c.clamp();
+        shared.publish(&c, SR);
+        assert!(shared.reload_if_changed(&mut slots));
+
+        // Mono (channels=1): stereo stage is inert, signal passes untouched.
+        let mut buf = [0.5, 0.5, 0.5];
+        slots.process_block(&mut buf, 1);
+        assert_eq!(buf, [0.5, 0.5, 0.5]);
     }
 
     #[test]

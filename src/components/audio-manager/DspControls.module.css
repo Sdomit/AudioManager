@@ -152,3 +152,41 @@
   transform: translateX(14px);
   background: #fff;
 }
+
+/* ── Stereo section ─────────────────────────────────────────────── */
+.stereoReset {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm, 4px);
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.stereoReset:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-1);
+  flex-wrap: wrap;
+}
+.pill {
+  font-size: var(--am-text-11);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm, 4px);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background var(--am-dur-fast), border-color var(--am-dur-fast),
+    color var(--am-dur-fast);
+}
+.pill[data-on] {
+  background: var(--am-accent);
+  border-color: var(--am-accent);
+  color: #fff;
+}

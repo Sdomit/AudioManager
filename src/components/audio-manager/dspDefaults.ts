@@ -19,6 +19,7 @@ import type {
   GateConfig,
   HpfConfig,
   LimiterConfig,
+  StereoConfig,
 } from "../../types/engine";
 
 export const MAX_EQ_BANDS = 4;
@@ -95,6 +96,32 @@ export function defaultLimiter(): LimiterConfig {
   return { enabled: false, threshold_db: -1, attack_ms: 0.5, release_ms: 100 };
 }
 
+export function defaultStereo(): StereoConfig {
+  return {
+    pan: 0,
+    mono: false,
+    swap: false,
+    invert_left: false,
+    invert_right: false,
+    center_level: 1,
+    width: 1,
+  };
+}
+
+/** True when any stereo control departs from transparent identity (mirrors the
+ *  Rust `StereoConfig::is_active`). */
+export function isStereoActive(s: StereoConfig): boolean {
+  return (
+    s.pan !== 0 ||
+    s.mono ||
+    s.swap ||
+    s.invert_left ||
+    s.invert_right ||
+    s.center_level !== 1 ||
+    s.width !== 1
+  );
+}
+
 /** Canonical stage order (matches the Rust default). */
 export const DEFAULT_DSP_ORDER: DspStage[] = [
   "denoise",
@@ -114,6 +141,7 @@ export function defaultDspConfig(): DspConfig {
     compressor: defaultCompressor(),
     limiter: defaultLimiter(),
     order: [...DEFAULT_DSP_ORDER],
+    stereo: defaultStereo(),
   };
 }
 
@@ -135,6 +163,9 @@ export const DSP_RANGE = {
   limThreshold: [-12, 0, 0.5] as const,
   limAttack: [0, 10, 0.1] as const,
   limRelease: [0, 500, 5] as const,
+  stereoPan: [-1, 1, 0.01] as const,
+  stereoCenter: [0, 2, 0.01] as const,
+  stereoWidth: [0, 2, 0.01] as const,
 } as const;
 
 /** Allowed fixed output buffer sizes (frames). `null` = driver default. */

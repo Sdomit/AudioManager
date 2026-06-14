@@ -143,8 +143,25 @@ export interface LimiterConfig {
 /** One stage in the per-input chain (mirrors Rust `DspStage`, snake_case). */
 export type DspStage = "denoise" | "hpf" | "gate" | "eq" | "comp" | "limiter";
 
+/** Stereo image controls (#34): pan/balance, mono fold, channel swap,
+ *  per-channel phase invert, mid/side width. Applied after the ordered chain.
+ *  Only meaningful on 2-channel inputs. */
+export interface StereoConfig {
+  /** Balance/pan, -1 (hard left) .. 1 (hard right). 0 = center. */
+  pan: number;
+  mono: boolean;
+  swap: boolean;
+  invert_left: boolean;
+  invert_right: boolean;
+  /** Mid (center) scale, 0 .. 2. 1 = transparent. */
+  center_level: number;
+  /** Side (width) scale, 0 .. 2. 1 = transparent, 0 = mono. */
+  width: number;
+}
+
 /** Per-input effect chain. `order` is the wired processing order; default
- *  Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. */
+ *  Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. The stereo stage runs
+ *  after the ordered chain. */
 export interface DspConfig {
   denoise: DenoiseConfig;
   hpf: HpfConfig;
@@ -153,6 +170,7 @@ export interface DspConfig {
   compressor: CompressorConfig;
   limiter: LimiterConfig;
   order: DspStage[];
+  stereo: StereoConfig;
 }
 
 /** Per-bus effect chain, processed post-sum/pre-clip: EQ -> Limiter. */

@@ -22,8 +22,16 @@ import type {
   GateConfig,
   HpfConfig,
   LimiterConfig,
+  StereoConfig,
 } from "../../types/engine";
-import { BAND_KINDS, bandUsesGain, bandUsesQ, DSP_RANGE } from "./dspDefaults";
+import {
+  BAND_KINDS,
+  bandUsesGain,
+  bandUsesQ,
+  defaultStereo,
+  DSP_RANGE,
+  isStereoActive,
+} from "./dspDefaults";
 import { EqGraph } from "./EqGraph";
 import styles from "./DspControls.module.css";
 
@@ -36,6 +44,8 @@ function Param({
   unit,
   precision = 0,
   disabled,
+  format,
+  onReset,
   onChange,
 }: {
   label: string;
@@ -44,6 +54,10 @@ function Param({
   unit?: string;
   precision?: number;
   disabled?: boolean;
+  /** Custom readout (overrides `value.toFixed`/`unit`), e.g. pan "L50". */
+  format?: (v: number) => string;
+  /** Double-click on the slider snaps back to this value (e.g. recenter). */
+  onReset?: () => void;
   onChange: (v: number) => void;
 }) {
   const [min, max, step] = range;
@@ -62,12 +76,123 @@ function Param({
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
+        onDoubleClick={onReset}
         className={styles.slider}
       />
       <span className={styles.paramValue}>
-        {value.toFixed(precision)}
-        {unit ? <span className={styles.unit}>{unit}</span> : null}
+        {format ? (
+          format(value)
+        ) : (
+          <>
+            {value.toFixed(precision)}
+            {unit ? <span className={styles.unit}>{unit}</span> : null}
+          </>
+        )}
       </span>
+    </div>
+  );
+}
+
+function fmtPan(pan: number): string {
+  if (pan === 0) return "C";
+  const pct = Math.round(Math.abs(pan) * 100);
+  return pan < 0 ? `L${pct}` : `R${pct}`;
+}
+
+/** Stereo image controls (#34). Always visible (no enable toggle): the controls
+ *  default to transparent, and Reset restores that. */
+function StereoSection({
+  stereo,
+  onChange,
+}: {
+  stereo: StereoConfig;
+  onChange: (next: StereoConfig) => void;
+}) {
+  const patch = (p: Partial<StereoConfig>) => onChange({ ...stereo, ...p });
+  const active = isStereoActive(stereo);
+  return (
+    <div className={styles.effect} data-on={active ? "" : undefined}>
+      <div className={styles.effectHeader}>
+        <span className={styles.effectTitle}>Stereo</span>
+        <button
+          type="button"
+          className={styles.stereoReset}
+          disabled={!active}
+          onClick={() => onChange(defaultStereo())}
+        >
+          Reset
+        </button>
+      </div>
+      <div className={styles.params}>
+        <Param
+          label="Pan"
+          value={stereo.pan}
+          range={DSP_RANGE.stereoPan}
+          format={fmtPan}
+          onReset={() => patch({ pan: 0 })}
+          onChange={(v) => patch({ pan: v })}
+        />
+        <div className={styles.toggleRow}>
+          <button
+            type="button"
+            className={styles.pill}
+            data-on={stereo.mono ? "" : undefined}
+            aria-pressed={stereo.mono}
+            title="Sum to mono"
+            onClick={() => patch({ mono: !stereo.mono })}
+          >
+            Mono
+          </button>
+          <button
+            type="button"
+            className={styles.pill}
+            data-on={stereo.swap ? "" : undefined}
+            aria-pressed={stereo.swap}
+            title="Swap left / right"
+            onClick={() => patch({ swap: !stereo.swap })}
+          >
+            Swap L/R
+          </button>
+          <button
+            type="button"
+            className={styles.pill}
+            data-on={stereo.invert_left ? "" : undefined}
+            aria-pressed={stereo.invert_left}
+            title="Invert left polarity"
+            onClick={() => patch({ invert_left: !stereo.invert_left })}
+          >
+            Ø L
+          </button>
+          <button
+            type="button"
+            className={styles.pill}
+            data-on={stereo.invert_right ? "" : undefined}
+            aria-pressed={stereo.invert_right}
+            title="Invert right polarity"
+            onClick={() => patch({ invert_right: !stereo.invert_right })}
+          >
+            Ø R
+          </button>
+        </div>
+        <Param
+          label="Center"
+          value={stereo.center_level}
+          range={DSP_RANGE.stereoCenter}
+          unit="×"
+          precision={2}
+          onReset={() => patch({ center_level: 1 })}
+          onChange={(v) => patch({ center_level: v })}
+        />
+        <Param
+          label="Width"
+          value={stereo.width}
+          range={DSP_RANGE.stereoWidth}
+          unit="×"
+          precision={2}
+          onReset={() => patch({ width: 1 })}
+          onChange={(v) => patch({ width: v })}
+        />
+      </div>
     </div>
   );
 }
@@ -431,6 +556,11 @@ export function InputDspControls({
           onChange={(v) => setLim({ release_ms: v })}
         />
       </EffectSection>
+
+      <StereoSection
+        stereo={dsp.stereo}
+        onChange={(stereo) => onChange({ ...dsp, stereo })}
+      />
     </div>
   );
 }

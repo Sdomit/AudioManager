@@ -344,8 +344,109 @@ fn normalize_order(order: &mut Vec<DspStage>) {
     *order = out;
 }
 
+/// Stereo image controls (#34): pan/balance, mono fold, channel swap, per-channel
+/// phase invert, and mid/side width. Stateless — pure per-frame math on an `[L, R]`
+/// pair, so it crosses the realtime boundary by value (no envelopes, no coeffs).
+/// Only meaningful on 2-channel inputs; the realtime path skips it on mono.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct StereoConfig {
+    /// Balance/pan, `-1.0` (hard left) .. `1.0` (hard right). `0.0` = center.
+    pub pan: f32,
+    /// Fold both channels to their average (true mono).
+    pub mono: bool,
+    /// Swap left and right.
+    pub swap: bool,
+    /// Invert the left channel's polarity.
+    pub invert_left: bool,
+    /// Invert the right channel's polarity.
+    pub invert_right: bool,
+    /// Mid (center) component scale, `0.0` .. `2.0`. `1.0` = transparent.
+    pub center_level: f32,
+    /// Side (difference) component scale, `0.0` .. `2.0`. `1.0` = transparent,
+    /// `0.0` = mono, `> 1.0` = widen.
+    pub width: f32,
+}
+
+impl Default for StereoConfig {
+    fn default() -> Self {
+        Self {
+            pan: 0.0,
+            mono: false,
+            swap: false,
+            invert_left: false,
+            invert_right: false,
+            center_level: 1.0,
+            width: 1.0,
+        }
+    }
+}
+
+impl StereoConfig {
+    pub fn clamp(&mut self) {
+        let d = Self::default();
+        self.pan = clamp_finite(self.pan, d.pan, -1.0, 1.0);
+        self.center_level = clamp_finite(self.center_level, d.center_level, 0.0, 2.0);
+        self.width = clamp_finite(self.width, d.width, 0.0, 2.0);
+    }
+
+    /// True when any control departs from transparent identity. The realtime
+    /// path skips the whole stage when this is false.
+    pub fn is_active(&self) -> bool {
+        self.pan != 0.0
+            || self.mono
+            || self.swap
+            || self.invert_left
+            || self.invert_right
+            || self.center_level != 1.0
+            || self.width != 1.0
+    }
+
+    /// Apply the stereo image transform to one interleaved `[L, R]` frame.
+    /// Order: swap → phase → mono → mid/side → pan. Pan uses an equal-power
+    /// taper renormalized to unity at center and clamped at `1.0`, so it behaves
+    /// as an attenuate-only balance law (no channel is ever boosted).
+    #[inline]
+    pub fn process_frame(&self, frame: &mut [f32; 2]) {
+        let (mut l, mut r) = (frame[0], frame[1]);
+
+        if self.swap {
+            std::mem::swap(&mut l, &mut r);
+        }
+        if self.invert_left {
+            l = -l;
+        }
+        if self.invert_right {
+            r = -r;
+        }
+        if self.mono {
+            let m = (l + r) * 0.5;
+            l = m;
+            r = m;
+        }
+        if self.center_level != 1.0 || self.width != 1.0 {
+            let m = (l + r) * 0.5 * self.center_level;
+            let s = (l - r) * 0.5 * self.width;
+            l = m + s;
+            r = m - s;
+        }
+        if self.pan != 0.0 {
+            let theta = (self.pan + 1.0) * std::f32::consts::FRAC_PI_4;
+            let (sin, cos) = theta.sin_cos();
+            let gl = (cos * std::f32::consts::SQRT_2).min(1.0);
+            let gr = (sin * std::f32::consts::SQRT_2).min(1.0);
+            l *= gl;
+            r *= gr;
+        }
+
+        frame[0] = l;
+        frame[1] = r;
+    }
+}
+
 /// Full per-input effect chain. `order` carries the wired processing order
-/// (default: Denoise → HPF → Gate → EQ → Compressor → Limiter).
+/// (default: Denoise → HPF → Gate → EQ → Compressor → Limiter). The stereo
+/// image stage runs after the ordered chain, pre-gain (see `live.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DspConfig {
     #[serde(default)]
@@ -364,6 +465,10 @@ pub struct DspConfig {
     /// load with the canonical order.
     #[serde(default = "default_dsp_order")]
     pub order: Vec<DspStage>,
+    /// Stereo image controls, applied after the ordered chain. `serde(default)`
+    /// so pre-#34 configs load transparent.
+    #[serde(default)]
+    pub stereo: StereoConfig,
 }
 
 impl Default for DspConfig {
@@ -376,6 +481,7 @@ impl Default for DspConfig {
             compressor: CompressorConfig::default(),
             limiter: LimiterConfig::default(),
             order: default_dsp_order(),
+            stereo: StereoConfig::default(),
         }
     }
 }
@@ -392,6 +498,7 @@ impl DspConfig {
         self.compressor.clamp();
         self.limiter.clamp();
         normalize_order(&mut self.order);
+        self.stereo.clamp();
     }
 }
 
@@ -454,6 +561,106 @@ mod tests {
         assert_eq!(c.hpf.freq_hz, HpfConfig::default().freq_hz);
         assert_eq!(c.compressor.ratio, CompressorConfig::default().ratio);
         assert_eq!(c.gate.attack_ms, GateConfig::default().attack_ms);
+    }
+
+    #[test]
+    fn stereo_default_is_transparent() {
+        let s = StereoConfig::default();
+        assert!(!s.is_active());
+        let mut f = [0.42, -0.17];
+        s.process_frame(&mut f);
+        assert_eq!(f, [0.42, -0.17]);
+    }
+
+    #[test]
+    fn stereo_pan_attenuates_far_channel_never_boosts() {
+        // Hard right: left silenced, right held at unity (no boost).
+        let s = StereoConfig {
+            pan: 1.0,
+            ..StereoConfig::default()
+        };
+        let mut f = [0.8, 0.8];
+        s.process_frame(&mut f);
+        assert!(f[0].abs() < 1e-6, "left should be silenced, got {}", f[0]);
+        assert!((f[1] - 0.8).abs() < 1e-6, "right unchanged, got {}", f[1]);
+
+        // Center is unity on both channels (no -3 dB dip).
+        let c = StereoConfig {
+            pan: 0.0,
+            ..StereoConfig::default()
+        };
+        let mut g = [0.5, 0.5];
+        c.process_frame(&mut g);
+        assert_eq!(g, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn stereo_mono_folds_to_average() {
+        let s = StereoConfig {
+            mono: true,
+            ..StereoConfig::default()
+        };
+        let mut f = [1.0, 0.0];
+        s.process_frame(&mut f);
+        assert_eq!(f, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn stereo_swap_and_phase() {
+        let s = StereoConfig {
+            swap: true,
+            invert_left: true,
+            ..StereoConfig::default()
+        };
+        // swap first: l,r = 0.2,0.7 -> 0.7,0.2 ; then invert_left -> -0.7,0.2
+        let mut f = [0.2, 0.7];
+        s.process_frame(&mut f);
+        assert!((f[0] + 0.7).abs() < 1e-6);
+        assert!((f[1] - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stereo_width_zero_collapses_to_mono() {
+        let s = StereoConfig {
+            width: 0.0,
+            ..StereoConfig::default()
+        };
+        let mut f = [1.0, -1.0];
+        s.process_frame(&mut f);
+        // side killed -> both channels carry the mid (here 0).
+        assert!(f[0].abs() < 1e-6 && f[1].abs() < 1e-6);
+    }
+
+    #[test]
+    fn stereo_clamp_bounds_and_non_finite() {
+        let mut s = StereoConfig {
+            pan: 5.0,
+            center_level: -1.0,
+            width: f32::NAN,
+            ..StereoConfig::default()
+        };
+        s.clamp();
+        assert_eq!(s.pan, 1.0);
+        assert_eq!(s.center_level, 0.0);
+        assert_eq!(s.width, 1.0); // NaN -> default
+    }
+
+    #[test]
+    fn stereo_serde_missing_fields_default() {
+        let s: StereoConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(s, StereoConfig::default());
+        let m: StereoConfig = serde_json::from_str(r#"{"mono":true}"#).unwrap();
+        assert!(m.mono);
+        assert_eq!(m.width, 1.0);
+    }
+
+    #[test]
+    fn dsp_config_carries_stereo_through_serde_default() {
+        // A pre-#34 payload (no `stereo` key) loads transparent.
+        let json = r#"{"hpf":{"enabled":true,"freq_hz":120.0}}"#;
+        let c: DspConfig = serde_json::from_str(json).unwrap();
+        assert!(c.hpf.enabled);
+        assert_eq!(c.stereo, StereoConfig::default());
     }
 
     #[test]

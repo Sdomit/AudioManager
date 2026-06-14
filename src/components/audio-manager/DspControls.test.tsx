@@ -80,6 +80,35 @@ describe("InputDspControls", () => {
     const next = calls[calls.length - 1][0];
     expect(next.hpf.freq_hz).toBe(120);
   });
+
+  it("renders the always-visible Stereo section with pan + toggles", () => {
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
+    expect(screen.getByText("Stereo")).toBeTruthy();
+    expect(screen.getByText("Pan")).toBeTruthy();
+    expect(screen.getByText("Mono")).toBeTruthy();
+    expect(screen.getByText("Swap L/R")).toBeTruthy();
+  });
+
+  it("editing pan emits stereo.pan, preserving the chain", () => {
+    const onChange = vi.fn();
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("Pan"), { target: { value: "1" } });
+
+    const next = onChange.mock.calls.at(-1)![0];
+    expect(next.stereo.pan).toBe(1);
+    expect(next.limiter.threshold_db).toBe(-1);
+  });
+
+  it("Mono toggle flips stereo.mono", () => {
+    const onChange = vi.fn();
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Mono"));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].stereo.mono).toBe(true);
+  });
 });
 
 describe("BusLimiterControls", () => {
