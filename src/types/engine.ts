@@ -163,6 +163,9 @@ export interface StereoConfig {
  *  Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. The stereo stage runs
  *  after the ordered chain. */
 export interface DspConfig {
+  /** Schema version (#36). Optional: omitted by the frontend; the backend
+   *  defaults a missing value to legacy 0 and migrates it to current on clamp. */
+  version?: number;
   denoise: DenoiseConfig;
   hpf: HpfConfig;
   gate: GateConfig;

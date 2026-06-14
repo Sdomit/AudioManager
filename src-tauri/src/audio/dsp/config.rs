@@ -467,11 +467,25 @@ impl StereoConfig {
     }
 }
 
+/// Current DSP-config schema version. Bump when a field's meaning changes in a
+/// way `#[serde(default)]` cannot transparently handle, and add a migration arm
+/// in [`DspConfig::migrate`].
+pub const DSP_CONFIG_VERSION: u32 = 1;
+
+/// Schema version assumed for a payload that predates the `version` field.
+fn default_dsp_version() -> u32 {
+    0
+}
+
 /// Full per-input effect chain. `order` carries the wired processing order
 /// (default: Denoise → HPF → Gate → EQ → Compressor → Limiter). The stereo
 /// image stage runs after the ordered chain, pre-gain (see `live.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DspConfig {
+    /// Schema version this config was written with. `serde(default)` yields 0
+    /// for pre-versioning payloads; [`DspConfig::clamp`] migrates them current.
+    #[serde(default = "default_dsp_version")]
+    pub version: u32,
     #[serde(default)]
     pub denoise: DenoiseConfig,
     #[serde(default)]
@@ -497,6 +511,7 @@ pub struct DspConfig {
 impl Default for DspConfig {
     fn default() -> Self {
         Self {
+            version: DSP_CONFIG_VERSION,
             denoise: DenoiseConfig::default(),
             hpf: HpfConfig::default(),
             gate: GateConfig::default(),
@@ -514,6 +529,7 @@ impl DspConfig {
     /// order. Run on the IPC thread before publishing to the realtime atomics,
     /// so the audio callback only ever sees valid values.
     pub fn clamp(&mut self) {
+        self.migrate();
         self.denoise.clamp();
         self.hpf.clamp();
         self.gate.clamp();
@@ -522,6 +538,14 @@ impl DspConfig {
         self.limiter.clamp();
         normalize_order(&mut self.order);
         self.stereo.clamp();
+    }
+
+    /// Upgrade an older-schema config to the current version in place. Every
+    /// field added since v0 carries `#[serde(default)]`, so an older payload
+    /// already deserializes into the current shape; the only step today is
+    /// stamping the version. Future breaking changes match on `self.version`.
+    fn migrate(&mut self) {
+        self.version = DSP_CONFIG_VERSION;
     }
 }
 
@@ -563,6 +587,29 @@ mod tests {
         let mut cfg = DspConfig { denoise: DenoiseConfig { enabled: true, backend: DenoiseBackend::DeepFilterNet }, ..DspConfig::default() };
         cfg.clamp();
         assert_eq!(cfg.denoise.backend, DenoiseBackend::Rnnoise);
+    }
+
+    #[test]
+    fn default_has_current_schema_version() {
+        assert_eq!(DspConfig::default().version, DSP_CONFIG_VERSION);
+    }
+
+    #[test]
+    fn version_absent_payload_is_legacy_then_migrates() {
+        // A payload that predates the `version` field deserializes as v0.
+        let mut c: DspConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(c.version, 0, "missing version must read as legacy v0");
+        c.clamp();
+        assert_eq!(c.version, DSP_CONFIG_VERSION, "clamp migrates to current");
+    }
+
+    #[test]
+    fn version_round_trips_through_serde() {
+        let c = DspConfig::default();
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"version\":"), "version must serialize");
+        let back: DspConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, c);
     }
 
     #[test]
@@ -791,9 +838,11 @@ mod tests {
 
     #[test]
     fn config_deserializes_from_empty_object() {
-        // Missing keys fall back to per-field defaults (preset back-compat).
+        // Missing keys fall back to per-field defaults (preset back-compat); the
+        // version field's default is the legacy 0 marker (migrated to current on
+        // clamp), so an empty object is the default chain at version 0.
         let c: DspConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(c, DspConfig::default());
+        assert_eq!(c, DspConfig { version: 0, ..DspConfig::default() });
     }
 
     #[test]
