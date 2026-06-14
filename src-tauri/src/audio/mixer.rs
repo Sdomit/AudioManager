@@ -76,6 +76,14 @@ pub struct MixerInputInfo {
     pub device_name: String,
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
+    /// `Some(msg)` when this input could not be brought up (e.g. a loopback app
+    /// that isn't playing). The slot runs silent and the bus still starts
+    /// (#PR31-3). On a TOTAL failure (no live inputs) `rebuild_bus` turns this
+    /// into the bus's `last_error`; on a PARTIAL failure it only logs the
+    /// message (setting `last_error` would make the frontend flag the whole,
+    /// otherwise-working bus as errored). Surfacing partial failures per-input
+    /// in the UI needs a dedicated status field — tracked as a follow-up.
+    pub error: Option<String>,
 }
 
 /// Descriptor passed to `mixer::start` for each input.
@@ -143,6 +151,8 @@ struct StartInfo {
     out_channels: u16,
     sample_rate: u32,
     input_channels: Vec<u16>,
+    /// Per-input error (aligned with `input_channels`); `None` = input is live.
+    input_errors: Vec<Option<String>>,
     /// IPC-writable DSP shared blocks, one per input, seeded at engine start.
     /// Sent back to the main thread so `MixerEngine::update_input_dsp` can
     /// publish live parameter changes without restarting the engine.
@@ -290,6 +300,33 @@ pub(crate) fn store_max(target: &AtomicU32, value: f32) {
     }
 }
 
+/// Push interleaved samples to `producer` one whole frame at a time, dropping
+/// any frame that does not fully fit. A per-sample push lets a ring overrun
+/// split a frame (drop one of L/R), which shifts parity on the pair-popping
+/// consumer and swaps channels permanently — pushing whole frames only keeps
+/// the stream frame-aligned no matter when the ring fills (#PR31-1).
+///
+/// Returns the number of samples dropped (whole frames that didn't fit), for
+/// overrun telemetry.
+pub(crate) fn push_frames(
+    producer: &mut ringbuf::Producer<f32>,
+    interleaved: &[f32],
+    channels: usize,
+) -> usize {
+    if channels == 0 {
+        return 0;
+    }
+    let mut dropped = 0;
+    for frame in interleaved.chunks_exact(channels) {
+        if producer.remaining() >= channels {
+            producer.push_slice(frame);
+        } else {
+            dropped += channels;
+        }
+    }
+    dropped
+}
+
 fn take_peak(target: &AtomicU32) -> f32 {
     f32::from_bits(target.swap(0.0f32.to_bits(), Ordering::Relaxed))
 }
@@ -300,10 +337,22 @@ fn take_peak(target: &AtomicU32) -> f32 {
 /// exceed `max_backlog`, in which case it trims toward `target_backlog` (both in
 /// samples). Pure so the resync policy is unit-tested without running streams.
 #[inline]
-fn resync_drop(fill: usize, need: usize, target_backlog: usize, max_backlog: usize) -> usize {
+fn resync_drop(
+    fill: usize,
+    need: usize,
+    target_backlog: usize,
+    max_backlog: usize,
+    frame: usize,
+) -> usize {
     let post_read = fill.saturating_sub(need);
     if post_read > max_backlog {
-        post_read - target_backlog
+        let drop = post_read - target_backlog;
+        // Discard whole frames only. The ring fill can be odd (a producer that
+        // pushed a partial frame on overrun), so trimming an unrounded count
+        // could remove an odd number of samples and shift L/R parity on the
+        // pair-popping consumer — swapping channels permanently (#PR31-1).
+        let frame = frame.max(1);
+        drop - (drop % frame)
     } else {
         0
     }
@@ -458,6 +507,9 @@ pub fn start(
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
+            // Per-input error (None = live). A failed loopback/app input becomes
+            // a silent slot instead of failing the whole bus (#PR31-3).
+            let mut input_errors: Vec<Option<String>> = Vec::new();
             // Per-input fill snapshot for drift-aware SRC. Set only for
             // rate-mismatched device inputs; None for matched-rate and loopback.
             // Output callback writes consumer.len() here before each drain so the
@@ -497,6 +549,7 @@ pub fn start(
                         let (producer, consumer) = ring.split();
                         consumers.push((consumer, in_channels));
                         input_channels_meta.push(in_channels as u16);
+                        input_errors.push(None);
 
                         let mut in_stream_cfg: StreamConfig = in_cfg.into();
                         // Match the output's fixed buffer size on the input stream
@@ -515,16 +568,16 @@ pub fn start(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
-                                    let mut over = 0u32;
                                     for &s in data {
                                         let abs = s.abs();
                                         if abs > block_peak {
                                             block_peak = abs;
                                         }
-                                        if producer.push(s).is_err() {
-                                            over += 1;
-                                        }
                                     }
+                                    // Frame-atomic push so an overrun never swaps
+                                    // channels on the consumer; returns the dropped
+                                    // sample count for overrun telemetry (#PR31-1).
+                                    let over = push_frames(&mut producer, data, in_channels) as u32;
                                     store_max(&peak[i].input_peak, block_peak);
                                     if over > 0 {
                                         peak[i].overrun.fetch_add(over, Ordering::Relaxed);
@@ -574,11 +627,14 @@ pub fn start(
                                             }
                                         }
                                         resampler.process_frame(frame, |out| {
-                                            for &s in &out[..in_channels] {
-                                                if producer.push(s).is_err() {
-                                                    over += 1;
-                                                }
-                                            }
+                                            // Frame-atomic push: never split a
+                                            // resampled frame across an overrun;
+                                            // accumulate dropped samples (#PR31-1).
+                                            over += push_frames(
+                                                &mut producer,
+                                                &out[..in_channels],
+                                                in_channels,
+                                            ) as u32;
                                         });
                                     }
                                     store_max(&peak[i].input_peak, block_peak);
@@ -601,56 +657,81 @@ pub fn start(
                     // Loopback sources fill the same source-blind ring from a
                     // WASAPI capture thread. `autoconvert` delivers stereo f32 at
                     // the bus rate, so there is no rate gate and no channel check.
-                    InputSourceSpec::SystemLoopback => {
-                        let (consumer, ch, sub) = loopback::subscribe_system(
-                            out_sample_rate.0,
-                            Arc::clone(&shared_for_thread),
-                            i,
-                        )?;
-                        consumers.push((consumer, ch as usize));
-                        input_channels_meta.push(ch);
-                        subscriptions.push(sub);
-                        fill_snapshots.push(None);
-                    }
-
-                    InputSourceSpec::Process { pid, include_tree } => {
-                        let (consumer, ch, sub) = loopback::subscribe_process(
-                            *pid,
-                            *include_tree,
-                            out_sample_rate.0,
-                            Arc::clone(&shared_for_thread),
-                            i,
-                        )?;
-                        consumers.push((consumer, ch as usize));
-                        input_channels_meta.push(ch);
-                        subscriptions.push(sub);
-                        fill_snapshots.push(None);
-                    }
-
-                    // Stable app id: resolve the image name to a live PID now,
-                    // then subscribe exactly like the Process arm.
-                    InputSourceSpec::ProcessByName {
-                        image_name,
-                        include_tree,
-                    } => {
-                        let pid = crate::audio::session::resolve_pid_for_image(image_name)?
-                            .ok_or_else(|| EngineError {
-                                message: format!(
-                                    "App '{image_name}' is not currently playing audio. \
-                                     Start playback in the app, then enable this input."
-                                ),
-                            })?;
-                        let (consumer, ch, sub) = loopback::subscribe_process(
-                            pid,
-                            *include_tree,
-                            out_sample_rate.0,
-                            Arc::clone(&shared_for_thread),
-                            i,
-                        )?;
-                        consumers.push((consumer, ch as usize));
-                        input_channels_meta.push(ch);
-                        subscriptions.push(sub);
-                        fill_snapshots.push(None);
+                    // Loopback sources (system / per-app). A failure here — app
+                    // not playing, OS gate, transient WASAPI error — must NOT
+                    // abort the whole bus and drop healthy inputs (a paused app
+                    // must not kill the mic). Build a silent slot and record the
+                    // per-input error instead (#PR31-3).
+                    InputSourceSpec::SystemLoopback
+                    | InputSourceSpec::Process { .. }
+                    | InputSourceSpec::ProcessByName { .. } => {
+                        let result = match source {
+                            InputSourceSpec::SystemLoopback => loopback::subscribe_system(
+                                out_sample_rate.0,
+                                Arc::clone(&shared_for_thread),
+                                i,
+                            ),
+                            InputSourceSpec::Process { pid, include_tree } => {
+                                loopback::subscribe_process(
+                                    *pid,
+                                    *include_tree,
+                                    out_sample_rate.0,
+                                    Arc::clone(&shared_for_thread),
+                                    i,
+                                )
+                            }
+                            InputSourceSpec::ProcessByName { image_name, include_tree } => {
+                                match crate::audio::session::resolve_pid_for_image(image_name) {
+                                    Ok(Some(pid)) => loopback::subscribe_process(
+                                        pid,
+                                        *include_tree,
+                                        out_sample_rate.0,
+                                        Arc::clone(&shared_for_thread),
+                                        i,
+                                    ),
+                                    Ok(None) => Err(EngineError {
+                                        message: format!(
+                                            "App '{image_name}' is not currently playing \
+                                             audio. Start playback in the app, then enable \
+                                             this input."
+                                        ),
+                                    }),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            // The outer arm guarantees a loopback variant here;
+                            // Device and RemotePhone have their own arms.
+                            _ => unreachable!(),
+                        };
+                        match result {
+                            Ok((consumer, ch, sub)) => {
+                                consumers.push((consumer, ch as usize));
+                                input_channels_meta.push(ch);
+                                subscriptions.push(sub);
+                                input_errors.push(None);
+                                fill_snapshots.push(None);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[audio] input {i} ({}) unavailable: {}",
+                                    source.to_id(),
+                                    e.message
+                                );
+                                // Silent placeholder: an empty ring (producer
+                                // dropped) pops as 0.0, keeping slot indices
+                                // aligned with the meter slots and the output
+                                // callback's per-input loop. Report the source's
+                                // real channel count (loopback is stereo) so the
+                                // UI matches what the live input would show.
+                                let ch = loopback::LOOPBACK_CHANNELS;
+                                let ring = RingBuffer::<f32>::new(2);
+                                let (_silent_producer, consumer) = ring.split();
+                                consumers.push((consumer, ch as usize));
+                                input_channels_meta.push(ch);
+                                input_errors.push(Some(e.message));
+                                fill_snapshots.push(None);
+                            }
+                        }
                     }
 
                     // Phone over WebRTC: a push-fed ring at the bus rate. Subscribe
@@ -666,6 +747,11 @@ pub fn start(
                         consumers.push((consumer, ch as usize));
                         input_channels_meta.push(ch);
                         remote_subscriptions.push(sub);
+                        // Keep input_errors aligned with consumers/slots — the
+                        // final MixerInputInfo zip truncates to the shortest, so
+                        // a missing push here would silently drop this and every
+                        // later input from the engine's input list (#PR31-3 merge).
+                        input_errors.push(None);
                         fill_snapshots.push(None);
                     }
                 }
@@ -720,6 +806,12 @@ pub fn start(
             let out_rate_hz = out_sample_rate.0 as f32;
             let target_backlog_frames = (TARGET_LATENCY_MS / 1000.0 * out_rate_hz) as usize;
             let max_backlog_frames = (MAX_LATENCY_MS / 1000.0 * out_rate_hz) as usize;
+
+            // Error slots (a failed loopback/app input, #PR31-3) feed a
+            // dropped-producer ring that is permanently empty. Skip their xrun
+            // accounting so a deliberately-silent input doesn't flood the
+            // underrun counter and mask real dropouts on healthy inputs.
+            let silent_slots: Vec<bool> = input_errors.iter().map(|e| e.is_some()).collect();
 
             let output_stream = output_device
                 .build_output_stream(
@@ -808,6 +900,7 @@ pub fn start(
                                 need,
                                 target_backlog_frames * in_ch,
                                 max_backlog_frames * in_ch,
+                                in_ch,
                             );
                             if drop_n > 0 {
                                 let dropped = consumers[i].0.discard(drop_n);
@@ -820,7 +913,7 @@ pub fn start(
                             }
                             // Underrun: the ring ran dry, so `need - got` samples
                             // were zero-filled. Record it for dropout telemetry.
-                            if got < need {
+                            if got < need && !silent_slots[i] {
                                 slots[i]
                                     .underrun
                                     .fetch_add((need - got) as u32, Ordering::Relaxed);
@@ -995,6 +1088,7 @@ pub fn start(
                     out_channels: out_channels as u16,
                     sample_rate: out_sample_rate.0,
                     input_channels: input_channels_meta,
+                    input_errors,
                     dsp_shared: dsp_shared_arcs,
                     bus_dsp_shared: bus_dsp_shared_arc,
                 },
@@ -1028,9 +1122,11 @@ pub fn start(
             inputs: input_specs
                 .into_iter()
                 .zip(info.input_channels.iter().copied())
-                .map(|((source, _, _, _), channels)| MixerInputInfo {
+                .zip(info.input_errors.iter().cloned())
+                .map(|(((source, _, _, _), channels), error)| MixerInputInfo {
                     device_name: source.to_id(),
                     channels,
+                    error,
                 })
                 .collect(),
             shared,
@@ -1090,6 +1186,7 @@ mod tests {
                 .map(|(i, _)| MixerInputInfo {
                     device_name: format!("fake_device_{i}"),
                     channels: 2,
+                    error: None,
                 })
                 .collect(),
             shared: Arc::new(shared),
@@ -1175,6 +1272,57 @@ mod tests {
     }
 
     #[test]
+    fn push_frames_never_splits_a_frame_on_overrun() {
+        // Odd-capacity ring: a per-sample push could leave one sample of a
+        // stereo frame behind on overrun and swap L/R for the rest of the
+        // stream. push_frames must drop the WHOLE frame instead, so every
+        // popped pair stays aligned (#PR31-1).
+        let ring = RingBuffer::<f32>::new(5);
+        let (mut producer, mut consumer) = ring.split();
+        // 4 stereo frames, each (n, -n) — more than the ring can hold.
+        let data = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0];
+        push_frames(&mut producer, &data, 2);
+
+        let mut popped = Vec::new();
+        while let Some(s) = consumer.pop() {
+            popped.push(s);
+        }
+        assert!(!popped.is_empty(), "some frames should have been pushed");
+        assert_eq!(popped.len() % 2, 0, "no partial frame may be pushed");
+        for pair in popped.chunks_exact(2) {
+            assert_eq!(pair[0], -pair[1], "L/R parity preserved across overrun");
+        }
+    }
+
+    #[test]
+    fn push_frames_drops_whole_frame_when_one_slot_free() {
+        // Exactly one free slot: a per-sample push would write the L sample and
+        // drop the R, leaking a half-frame and swapping parity. push_frames must
+        // drop the whole frame, leaving the slot untouched (#PR31-1).
+        let ring = RingBuffer::<f32>::new(8);
+        let (mut producer, mut consumer) = ring.split();
+        for _ in 0..(producer.remaining() - 1) {
+            producer.push(0.0).unwrap();
+        }
+        assert_eq!(producer.remaining(), 1);
+        push_frames(&mut producer, &[9.0, -9.0], 2);
+        assert_eq!(producer.remaining(), 1, "no partial sample pushed");
+        let mut vals = Vec::new();
+        while let Some(s) = consumer.pop() {
+            vals.push(s);
+        }
+        assert!(vals.iter().all(|&v| v == 0.0), "no frame sample leaked in");
+    }
+
+    #[test]
+    fn push_frames_zero_channels_is_noop() {
+        let ring = RingBuffer::<f32>::new(4);
+        let (mut producer, mut consumer) = ring.split();
+        push_frames(&mut producer, &[1.0, 2.0], 0);
+        assert!(consumer.pop().is_none());
+    }
+
+    #[test]
     fn store_max_keeps_highest_value() {
         let peak = AtomicU32::new(0.0f32.to_bits());
         store_max(&peak, 0.25);
@@ -1203,7 +1351,7 @@ mod tests {
     #[test]
     fn resync_drop_zero_when_backlog_healthy() {
         // post_read = 1000 - 200 = 800, below max 2000 → no trim.
-        assert_eq!(resync_drop(1000, 200, 600, 2000), 0);
+        assert_eq!(resync_drop(1000, 200, 600, 2000, 2), 0);
     }
 
     #[test]
@@ -1242,7 +1390,7 @@ mod tests {
     #[test]
     fn resync_drop_at_exactly_max_does_not_trim() {
         // post_read == max is not "exceeds" → no trim (only > max fires).
-        assert_eq!(resync_drop(2200, 200, 600, 2000), 0);
+        assert_eq!(resync_drop(2200, 200, 600, 2000, 2), 0);
     }
 
     #[test]
@@ -1269,13 +1417,23 @@ mod tests {
     fn resync_drop_trims_to_target_when_above_max() {
         // post_read = 5000 - 200 = 4800 > max 2000 → trim toward target 600.
         // dropped = 4800 - 600 = 4200, leaving target backlog after the read.
-        assert_eq!(resync_drop(5000, 200, 600, 2000), 4200);
+        assert_eq!(resync_drop(5000, 200, 600, 2000, 2), 4200);
     }
 
     #[test]
     fn resync_drop_saturates_when_need_exceeds_fill() {
         // fill < need → post_read saturates to 0 → no trim, no underflow.
-        assert_eq!(resync_drop(100, 480, 600, 2000), 0);
+        assert_eq!(resync_drop(100, 480, 600, 2000, 2), 0);
+    }
+
+    #[test]
+    fn resync_drop_floors_to_whole_frames() {
+        // An odd ring fill yields an odd raw drop (post_read 4801 - target 600 =
+        // 4201); it MUST be floored to 4200 so the trim removes whole stereo
+        // frames and can't swap L/R on the pair-popping consumer (#PR31-1).
+        assert_eq!(resync_drop(5001, 200, 600, 2000, 2), 4200);
+        // Mono (frame == 1): no rounding, every sample is its own frame.
+        assert_eq!(resync_drop(5001, 200, 600, 2000, 1), 4201);
     }
 
     #[test]

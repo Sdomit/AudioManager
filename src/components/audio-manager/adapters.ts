@@ -103,9 +103,9 @@ function inputKindFor(deviceId: string): InputSourceKind {
 }
 
 /**
- * Display name derived purely from the id. The AppPicker may pass a friendlier
- * label (e.g. the resolved image name) at add time; this is the fallback when
- * only the id is known (e.g. after a preset load).
+ * Display name derived purely from the id — used everywhere an input is shown
+ * (e.g. after a preset load, when only the id is known). `app:<image>` ids
+ * already carry the human-readable name.
  */
 function inputNameFor(deviceId: string): string {
   if (deviceId === SYS_LOOPBACK_ID) return "System sound";
@@ -117,14 +117,10 @@ function inputNameFor(deviceId: string): string {
   return deviceId;
 }
 
-export function adaptInput(
-  ch: InputChannel,
-  peak: number,
-  label?: string,
-): AudioInput {
+export function adaptInput(ch: InputChannel, peak: number): AudioInput {
   return {
     id: ch.device_id,
-    name: label ?? inputNameFor(ch.device_id),
+    name: inputNameFor(ch.device_id),
     kind: inputKindFor(ch.device_id),
     device: ch.device_id,
     gain: backendVolumeToUi(ch.gain),

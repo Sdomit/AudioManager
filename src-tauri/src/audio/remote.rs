@@ -157,6 +157,11 @@ pub fn subscribe_phone(
 pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adaptive: bool) {
     let prefix = format!("phone:{session_id}@");
     let ch = PHONE_CHANNELS as usize;
+    // The decoder delivers interleaved frames (n * PHONE_CHANNELS); frame-atomic
+    // pushing relies on it. A misaligned buffer would silently drop the trailing
+    // partial frame, so catch a future producer/channel-count mismatch here in
+    // debug and test builds.
+    debug_assert_eq!(samples.len() % ch, 0, "phone audio must be frame-aligned");
     let mut map = manager().lock().unwrap();
     for (key, feed) in map.iter_mut() {
         if !key.starts_with(&prefix) {
@@ -188,9 +193,17 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adap
         }
         let mut overflow = 0u64;
         for (si, sub) in subs.iter_mut().enumerate() {
-            for &x in scratch.iter() {
-                if sub.producer.push(x).is_err() && si == 0 {
-                    overflow += 1;
+            // Push whole interleaved frames only. The decoder always delivers
+            // `n * PHONE_CHANNELS` interleaved samples (webrtc_peer), so a
+            // per-sample push only differs at an overrun — where dropping one of
+            // L/R shifts parity on the pair-popping consumer and swaps channels
+            // permanently. Drop the whole frame instead, counting its samples so
+            // ring_glitches keeps its units (#PR31-1).
+            for frame in scratch.chunks_exact(ch) {
+                if sub.producer.remaining() >= ch {
+                    sub.producer.push_slice(frame);
+                } else if si == 0 {
+                    overflow += ch as u64;
                 }
             }
             store_max(&sub.peak[sub.index].input_peak, block_peak);
@@ -259,10 +272,12 @@ mod tests {
         let peak = slots(1);
         let (mut consumer, ch, _sub) = subscribe_phone("sess-a", 48_000, peak, 0).unwrap();
         assert_eq!(ch, PHONE_CHANNELS);
-        push_decoded_48k("sess-a", &[0.25, -0.5, 0.75], 0.75, false);
+        // Interleaved stereo (the decoder always delivers n * PHONE_CHANNELS).
+        push_decoded_48k("sess-a", &[0.25, -0.5, 0.75, -0.75], 0.75, false);
         assert_eq!(consumer.pop(), Some(0.25));
         assert_eq!(consumer.pop(), Some(-0.5));
         assert_eq!(consumer.pop(), Some(0.75));
+        assert_eq!(consumer.pop(), Some(-0.75));
     }
 
     #[test]
@@ -308,8 +323,9 @@ mod tests {
     fn two_subscribers_same_rate_share_one_feed_and_both_receive() {
         let (mut c1, _, _s1) = subscribe_phone("sess-c", 48_000, slots(1), 0).unwrap();
         let (mut c2, _, _s2) = subscribe_phone("sess-c", 48_000, slots(1), 0).unwrap();
-        push_decoded_48k("sess-c", &[0.1], 0.1, false);
-        assert_eq!(c1.pop(), Some(0.1));
-        assert_eq!(c2.pop(), Some(0.1));
+        // Interleaved stereo: one L/R frame, fanned out to both subscribers.
+        push_decoded_48k("sess-c", &[0.1, 0.2], 0.1, false);
+        assert_eq!((c1.pop(), c1.pop()), (Some(0.1), Some(0.2)));
+        assert_eq!((c2.pop(), c2.pop()), (Some(0.1), Some(0.2)));
     }
 }

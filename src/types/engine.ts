@@ -12,7 +12,9 @@ export interface DeviceListError {
 
 /**
  * A capturable application, returned by `list_audio_sessions`. `source_id` is a
- * ready `proc:<pid>` id to pass to `addInput` for per-app loopback capture.
+ * ready id to pass to `addInput` for per-app loopback capture: `app:<image>` for
+ * a named app (stable across restarts), or `proc:<pid>` only when the image name
+ * couldn't be resolved. Pass it through opaquely — don't parse the prefix.
  */
 export interface AudioSessionInfo {
   pid: number;

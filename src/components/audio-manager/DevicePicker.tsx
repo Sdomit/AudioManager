@@ -29,8 +29,9 @@ interface DevicePickerProps {
   recommendedDeviceId?: string | null;
   /**
    * Input mode only: also offer loopback sources — "System sound"
-   * (`sys:default`) and each app currently playing audio (`proc:<pid>`).
-   * onPick receives the synthetic source id, which add_input accepts.
+   * (`sys:default`) and each app currently playing audio (`app:<image>`, or
+   * `proc:<pid>` when the image name is unknown). onPick receives the synthetic
+   * source id, which add_input accepts.
    */
   includeLoopbackSources?: boolean;
   /**
@@ -65,6 +66,7 @@ export function DevicePicker({
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [sessions, setSessions] = useState<AudioSessionInfo[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -100,9 +102,11 @@ export function DevicePicker({
   useEffect(() => {
     if (!open || !wantsLoopback) {
       setSessions([]);
+      setSessionsLoading(false);
       return;
     }
     let cancelled = false;
+    setSessionsLoading(true);
     const load = () => {
       ipc
         .listAudioSessions()
@@ -111,6 +115,9 @@ export function DevicePicker({
         })
         .catch(() => {
           if (!cancelled) setSessions([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSessionsLoading(false);
         });
     };
     load();
@@ -242,6 +249,10 @@ export function DevicePicker({
             </ul>
             <div className={styles.subtitle}>Input devices</div>
           </>
+        )}
+
+        {!error && wantsLoopback && sessionsLoading && (
+          <div className={styles.empty}>Looking for apps playing audio…</div>
         )}
 
         {!error && loading && (
