@@ -1611,11 +1611,12 @@ fn handle_device_diff(inner: &mut AppInner, diff: &DeviceDiff, available_inputs:
             .map(|(id, _)| *id)
             .collect();
         for bus_id in affected {
-            let _ = rebuild_bus_filtered(inner, bus_id, Some(available_inputs));
-            if let Some(bus) = inner.buses.get_mut(&bus_id) {
-                bus.last_error = Some(format!(
-                    "Input device disconnected: {removed}. Rejoins the mix automatically when it returns."
-                ));
+            if rebuild_bus_filtered(inner, bus_id, Some(available_inputs)).is_err() {
+                if let Some(bus) = inner.buses.get_mut(&bus_id) {
+                    bus.last_error = Some(format!(
+                        "Input device disconnected: {removed}. Rejoins the mix automatically when it returns."
+                    ));
+                }
             }
         }
     }
