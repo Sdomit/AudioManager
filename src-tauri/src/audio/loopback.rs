@@ -9,12 +9,13 @@
 //! for a (source, rate) key creates the capture; the last to leave stops it.
 //!
 //! Lock order is one-way: `subscribe`/`unsubscribe` take the manager map lock and
-//! then briefly the per-capture `subs` lock. The capture thread only takes `subs`
-//! while running, and takes the map lock ALONE (never while holding `subs`) when
-//! self-removing its entry after a capture error — so there is no inversion.
-//! Capture creation happens WITHOUT the map lock held, so a slow WASAPI init
-//! never blocks other subscribe/unsubscribe calls. With a single subscriber the
-//! fan-out is a one-element loop, i.e. behavior matches a single-client capture.
+//! then briefly the per-capture `subs` lock; the capture thread only ever takes
+//! `subs` (never the map). A capture that errors out flags itself `failed` and
+//! the next subscribe evicts and recreates it, so the main thread owns every map
+//! mutation — there is no inversion and no thread can delete another capture's
+//! entry. Capture creation happens WITHOUT the map lock held, so a slow WASAPI
+//! init never blocks other subscribe/unsubscribe calls. With a single subscriber
+//! the fan-out is a one-element loop, i.e. behavior matches a single-client capture.
 //!
 //! Platform: Windows only. `new_application_loopback_client` needs Win10 2004
 //! (build 19041); system loopback needs only Win10 1803. The `wasapi` dep is
@@ -77,6 +78,10 @@ mod imp {
     /// Manager-side record for one live shared capture.
     struct ManagedCapture {
         stop: Arc<AtomicBool>,
+        /// Set by the capture thread when it exits on an error (device lost /
+        /// read failure). A `failed` entry is evicted and recreated by the next
+        /// subscribe; the thread never mutates the map itself.
+        failed: Arc<AtomicBool>,
         subs: Arc<Mutex<Vec<Subscriber>>>,
         thread: Option<JoinHandle<()>>,
     }
@@ -112,13 +117,26 @@ mod imp {
         let (producer, consumer) = ring.split();
         let sub = Subscriber { id, producer, peak, index };
 
-        // Fast path: a capture for this (source, rate) already exists — attach,
-        // holding the map lock only for the O(1) push.
+        // Fast path: attach to a LIVE capture. A capture that hit a read error
+        // has flagged itself `failed` (it never touches the map); evict it here
+        // so we recreate below instead of attaching to a dead thread (#PR31-2).
         {
-            let map = manager().lock().unwrap();
-            if let Some(mc) = map.get(&key) {
-                mc.subs.lock().unwrap().push(sub);
-                return Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }));
+            let mut map = manager().lock().unwrap();
+            match map.get(&key).map(|mc| mc.failed.load(Ordering::Acquire)) {
+                Some(false) => {
+                    map.get(&key).expect("present").subs.lock().unwrap().push(sub);
+                    return Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }));
+                }
+                Some(true) => {
+                    let dead = map.remove(&key);
+                    drop(map);
+                    if let Some(mut d) = dead {
+                        if let Some(h) = d.thread.take() {
+                            let _ = h.join();
+                        }
+                    }
+                }
+                None => {}
             }
         }
 
@@ -126,11 +144,12 @@ mod imp {
         // lock, so a slow or hanging WASAPI init can't head-of-line-block other
         // loopback subscribe/unsubscribe calls (#PR31-5).
         let stop = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
         let subs = Arc::new(Mutex::new(vec![sub]));
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), EngineError>>();
         let thread_stop = Arc::clone(&stop);
+        let thread_failed = Arc::clone(&failed);
         let thread_subs = Arc::clone(&subs);
-        let thread_key = key.clone();
 
         let label = match mode {
             Mode::System => "loopback-system".to_string(),
@@ -149,11 +168,13 @@ mod imp {
                     }
                     run_capture_loop(session, &thread_subs, &thread_stop);
                     // Exited the loop without a stop request => a capture error
-                    // (device lost / read failure). Remove our manager entry so
-                    // the next subscribe recreates the capture instead of
-                    // attaching to this dead thread (#PR31-2).
+                    // (device lost / read failure). Flag ourselves failed so the
+                    // next subscribe evicts and recreates us. We never touch the
+                    // manager map — the main thread owns all map mutations, which
+                    // keeps the one-way lock order and stops a thread from ever
+                    // deleting another capture's entry (#PR31-2).
                     if !thread_stop.load(Ordering::Acquire) {
-                        manager().lock().unwrap().remove(&thread_key);
+                        thread_failed.store(true, Ordering::Release);
                     }
                 }
             })
@@ -163,19 +184,30 @@ mod imp {
 
         match ready_rx.recv() {
             Ok(Ok(())) => {
-                // Publish the capture. A concurrent first-subscriber for the
-                // same key may have created one while we initialized; if so,
-                // attach to the winner and retire our thread so there is exactly
-                // one capture per key.
+                // Publish the capture. A concurrent first-subscriber for the same
+                // key may have created a LIVE one while we initialized; if so,
+                // attach to it and retire our thread by its own handle (never by
+                // key, which could delete the winner's entry).
                 let mut map = manager().lock().unwrap();
-                if let Some(mc) = map.get(&key) {
+                let attach_to_winner =
+                    matches!(map.get(&key), Some(mc) if !mc.failed.load(Ordering::Acquire));
+                if attach_to_winner {
                     let our_sub = subs.lock().unwrap().pop().expect("our subscriber");
-                    mc.subs.lock().unwrap().push(our_sub);
+                    map.get(&key).expect("winner present").subs.lock().unwrap().push(our_sub);
                     drop(map);
                     stop.store(true, Ordering::Release);
                     let _ = handle.join();
                 } else {
-                    map.insert(key.clone(), ManagedCapture { stop, subs, thread: Some(handle) });
+                    // No entry, or a `failed` leftover: publish ours and reap any
+                    // dead thread we displace (already exited, so join is instant).
+                    let prev =
+                        map.insert(key.clone(), ManagedCapture { stop, failed, subs, thread: Some(handle) });
+                    drop(map);
+                    if let Some(mut d) = prev {
+                        if let Some(h) = d.thread.take() {
+                            let _ = h.join();
+                        }
+                    }
                 }
                 Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }))
             }

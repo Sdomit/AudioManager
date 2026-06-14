@@ -144,17 +144,33 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
 
     match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted) {
         Ok(engine) => {
-            // Inputs that came up silent (e.g. a paused app) surface as the bus's
-            // last_error while the bus keeps running its live inputs (#PR31-3).
             let input_errors: Vec<String> = engine
                 .inputs
                 .iter()
                 .filter_map(|i| i.error.as_ref().map(|e| format!("{}: {}", i.device_name, e)))
                 .collect();
+            let live_inputs = engine.inputs.iter().filter(|i| i.error.is_none()).count();
+            if live_inputs == 0 && !input_errors.is_empty() {
+                // Every input failed — nothing to run. Treat as a bus failure so
+                // the UI shows the error and Err-branching callers still see it.
+                // `engine` (all-silent) drops here, stopping its thread (#PR31-3).
+                let message = input_errors.join("; ");
+                let bus = inner.buses.get_mut(&bus_id).expect("bus exists");
+                bus.last_error = Some(message.clone());
+                return Err(EngineError { message });
+            }
             let bus = inner.buses.get_mut(&bus_id).expect("bus exists");
             bus.engine = Some(engine);
-            bus.last_error =
-                (!input_errors.is_empty()).then(|| input_errors.join("; "));
+            // Partial failure: the bus runs its live inputs. Don't set last_error
+            // — the frontend maps any last_error to a full "error" status, which
+            // would falsely flag a working bus. Log the silent inputs instead.
+            if !input_errors.is_empty() {
+                eprintln!(
+                    "[audio] bus {bus_id:?} started with silent inputs: {}",
+                    input_errors.join("; ")
+                );
+            }
+            bus.last_error = None;
             Ok(())
         }
         Err(err) => {

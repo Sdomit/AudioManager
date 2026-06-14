@@ -468,11 +468,14 @@ pub fn start(
                                 // Silent placeholder: an empty ring (producer
                                 // dropped) pops as 0.0, keeping slot indices
                                 // aligned with the meter slots and the output
-                                // callback's per-input loop.
+                                // callback's per-input loop. Report the source's
+                                // real channel count (loopback is stereo) so the
+                                // UI matches what the live input would show.
+                                let ch = loopback::LOOPBACK_CHANNELS;
                                 let ring = RingBuffer::<f32>::new(2);
                                 let (_silent_producer, consumer) = ring.split();
-                                consumers.push((consumer, 1));
-                                input_channels_meta.push(1);
+                                consumers.push((consumer, ch as usize));
+                                input_channels_meta.push(ch);
                                 input_errors.push(Some(e.message));
                             }
                         }

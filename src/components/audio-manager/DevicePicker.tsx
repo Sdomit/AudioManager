@@ -218,11 +218,12 @@ export function DevicePicker({
                 </li>
               ))}
             </ul>
-            {sessionsLoading && (
-              <div className={styles.empty}>Looking for apps playing audio…</div>
-            )}
             <div className={styles.subtitle}>Input devices</div>
           </>
+        )}
+
+        {!error && wantsLoopback && sessionsLoading && (
+          <div className={styles.empty}>Looking for apps playing audio…</div>
         )}
 
         {!error && loading && (
