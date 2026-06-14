@@ -1,28 +1,37 @@
 # Streaming DSP & Latency Implementation Plan
 
-> Planning document. No code is implemented as part of this commit.
-> Source of truth for execution order is GitHub issues **#32–#38** on branch
-> `codex/streaming-dsp-latency-roadmap`. This file is the human-readable index
-> and the deep-dive for the foundation issue **#32**.
+> **STATUS — 2026-06-14: IMPLEMENTED.** All of #32–#38, plus realtime-safety
+> hardening, are landed on `claude/unify-dsp` (tip `8663c41`) and pending the
+> `unify-dsp → main` merge. This file began as the planning doc + #32 deep-dive;
+> the architecture sections below are retained as the **as-built reference** (the
+> chosen seqlock / fixed-slot design shipped as described). Per-issue status is in
+> the roadmap index.
 >
-> Line refs captured against branch `codex/streaming-dsp-latency-roadmap` at
-> tip `98754ab` (per-input DSP infrastructure). Re-confirm at execution time.
+> **Verified on `unify-dsp@8663c41`:** backend **184** `cargo test --lib` +
+> frontend **143** tests green; `cargo build` 0 warnings.
+>
+> The work converged onto `unify-dsp` from several lines (foundation
+> `codex/streaming-dsp-latency-roadmap` + lanes A/C/D); original planning line refs
+> were captured against `codex/streaming-dsp-latency-roadmap` @ `98754ab` and may
+> have drifted — trust the source on `unify-dsp`.
 
 ## Roadmap index (#32 — #38)
 
-| # | Title | Depends on | Notes |
+| # | Title | Status | Notes |
 |---|---|---|---|
-| 32 | Expose realtime DSP chains in API and UI | — | **Foundation.** Config model + live-update path + IPC + UI + preset migration. Everything else reuses its seams. |
-| 33 | Stream Voice preset + protected B1 chain | #32 | One-click HPF→gate→EQ→comp→limiter on B1; final limiter at ~-1 dBFS. |
-| 34 | Stereo controls: pan, balance, mono, phase, center | #32 | Per-input/per-send pan, mono sum, L/R swap, phase invert, mid/side. Rides #32's config + IPC + atomic-update pattern. |
-| 35 | Latency modes, buffer controls, dropout telemetry | — | `Stable`/`Low`/`Ultra Low`; CPAL fixed buffer; ring-fill/underrun/overrun counters. Engine/buffer layer, independent of #32. |
-| 36 | Sample-rate conversion + clock-drift upgrade | — | Benchmark linear vs `rubato`; drift-aware ratio from ring-fill trend. Resampler layer, independent. |
-| 37 | Noise-suppression spike: gate / RNNoise / WebRTC APM | #32 (gate) | Research-first; prototype one path behind a feature flag; decide deps before shipping. |
-| 38 | Streaming meters: RMS, LUFS, true peak | — | Bus analysis + `too quiet`/`healthy`/`too hot` advice. Analysis off the RT path. |
+| 32 | Expose realtime DSP chains in API and UI | ✅ done | **Foundation.** Config model + seqlock live-update + IPC + UI + preset migration. Everything else reuses its seams. |
+| 33 | Stream Voice preset + protected B1 chain | ✅ done | One-click HPF→gate→EQ→comp→limiter on B1; final limiter ~-1 dBFS. Backend + preset on `unify-dsp`; UI finalize tracked on the `vigilant` line. |
+| 34 | Stereo controls: pan, balance, mono, phase, center | ✅ done | Per-input pan/balance, mono sum, L/R swap, phase invert, mid/side. Inserted post-EQ/pre-comp as planned. |
+| 35 | Latency modes, buffer controls, dropout telemetry | ✅ done | `Stable`/`Low`/`UltraLow`; derived `BusStatus.latency_mode`; ring-fill/underrun/overrun counters. (Lane A, PR #48.) |
+| 36 | Sample-rate conversion + clock-drift upgrade | ✅ done | Cubic SRC + drift-aware ratio shipped (linear superseded). (Lane C, PR #51.) |
+| 37 | Noise suppression | ✅ done | RNNoise active backend; DeepFilterNet wired but held out (un-buildable upstream) and `clamp()` normalizes the unavailable backend → RNNoise so no silent mismatch. (Lane A, PR #48.) |
+| 38 | Streaming meters: RMS, LUFS, true peak | ✅ done | Bus analysis off the RT path + `too quiet`/`healthy`/`too hot` verdicts; windowed true-peak race fixed. |
+| — | **Realtime-safety hardening** | ✅ done | FTZ/DAZ denormal flush, non-finite biquad-coeff guard, denoiser output-queue realloc bound, gate threshold hysteresis, compressor single-stage ballistics. (Lanes A + D, PRs #48/#50; warnings cleanup #52.) |
 
-Critical path: **#32 → #33**. #34/#35/#36/#38 parallelize after #32 lands the
-config + IPC + atomic-update pattern. #37 is a spike that gates a heavy
-dependency decision and should run before any RNNoise/WebRTC code is merged.
+All of #32–#38 landed; the original critical path (**#32 → #33**, others
+parallel) held. Convergence onto `unify-dsp` was done as file-disjoint lanes
+(A: latency/RT-safety/#35/#37; C: #36/config-version; D: gate/comp), each
+PR-reviewed and merged.
 
 Does not renumber the roadmap phases in `docs/ROADMAP.md` — slots alongside them.
 
@@ -253,8 +262,10 @@ Each step is one focused commit; run the validation suite before each.
 Steps 1–3 are the backend foundation #33/#34 build on; 4–6 complete the
 end-to-end criteria; 7 closes the issue.
 
-**Delivered (collision-free):** 1, 2a, 2b-core, 3-storage, 4-types, 6.
-**Gated on Codex committing `mixer.rs`:** 2b-wiring → 3-IPC → 4-wrappers → 5-UI → 7.
+**All sub-steps delivered.** The `mixer.rs` gate cleared; 2b-wiring → 3-IPC →
+4-wrappers → 5-UI → 7 all landed, and #33–#38 + RT-safety hardening built on
+these seams. Final state lives on `unify-dsp@8663c41` (184 backend + 143 frontend
+tests, 0 build warnings).
 
 ## Testing and validation commands
 
