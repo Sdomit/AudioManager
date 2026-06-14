@@ -948,9 +948,13 @@ export function useAudioManager(): UseAudioManager {
           ),
         );
         const targets: BusId[] = routed.length > 0 ? routed : ["A1"];
-        return Promise.all(
+        // Best-effort live publish to every routed bus's engine. A non-running
+        // bus can reject; allSettled so one failure can't abort the others or
+        // reject the scheduled write (graph persistence already happened via the
+        // dispatch above).
+        return Promise.allSettled(
           targets.map((busId) => ipc.updateInputDsp(busId, id, input.dsp)),
-        );
+        ).then(() => {});
       });
     },
     [getInput, scheduleWrite],

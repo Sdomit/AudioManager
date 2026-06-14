@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BusContextMenu } from "./BusContextMenu";
+import { EqSampleRateContext } from "./EqGraph";
+import { DEFAULT_EQ_SR } from "./eqResponse";
 import { BusRail } from "./BusRail";
 import { CableNotice } from "./CableNotice";
 import { busRoleFor } from "./adapters";
@@ -96,6 +98,16 @@ export function AudioManager() {
   const [cableNoticeDismissed, setCableNoticeDismissed] = useState(false);
   const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
   const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
+  // Engine sample rate for EQ response curves: DSP runs at the output device's
+  // rate, so use the default (else first) output device's rate; falls back to
+  // 48 kHz when no devices are cached yet.
+  const eqSampleRate = useMemo(
+    () =>
+      outputDevicesCache.find((d) => d.is_default)?.default_sample_rate ??
+      outputDevicesCache[0]?.default_sample_rate ??
+      DEFAULT_EQ_SR,
+    [outputDevicesCache],
+  );
   const [inputDevicesCache, setInputDevicesCache] = useState<DeviceInfo[]>([]);
 
   // Re-poll device lists and recompute AudioManager-cable presence. Runs at
@@ -412,6 +424,7 @@ export function AudioManager() {
             appears only when a bus/input is selected, so per-bus/per-input
             settings (DSP, buffer size, limiter) are reachable from every view. */}
         {(state.routingView !== "nodes" || state.selection.kind !== "none") && (
+          <EqSampleRateContext.Provider value={eqSampleRate}>
           <DetailPanel
             selection={state.selection}
             buses={state.buses}
@@ -453,6 +466,7 @@ export function AudioManager() {
             onStopRecording={(id: string) => void am.stopRecording(id)}
             inputOnly={state.routingView === "nodes"}
           />
+          </EqSampleRateContext.Provider>
         )}
       </main>
 
