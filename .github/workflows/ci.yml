@@ -37,13 +37,16 @@ jobs:
   rust:
     name: Rust (windows)
     runs-on: windows-latest
-    # Pin the CMake generator to Ninja. Without this, cmake-rs (audiopus ->
-    # libopus) auto-selects the newest Visual Studio generator on the runner
-    # (e.g. "Visual Studio 18 2026"), which the bundled CMake cannot create, so
-    # the libopus build script panics. Ninja + cl (from msvc-dev-cmd) is the same
-    # combination scripts/win-dev-shell.ps1 uses locally.
+    # Build libopus (audiopus -> cmake-rs) on the runner's modern toolchain:
+    #  - CMAKE_GENERATOR=Ninja: without it cmake-rs auto-selects the newest VS
+    #    generator (e.g. "Visual Studio 18 2026") that the runner's CMake cannot
+    #    create. Ninja + cl (from msvc-dev-cmd) matches scripts/win-dev-shell.ps1.
+    #  - CMAKE_POLICY_VERSION_MINIMUM=3.5: the runner ships CMake 4.x, which
+    #    removed compatibility with libopus's old `cmake_minimum_required(<3.5)`;
+    #    this opts back into the legacy policy so configure succeeds.
     env:
       CMAKE_GENERATOR: Ninja
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     defaults:
       run:
         working-directory: src-tauri
