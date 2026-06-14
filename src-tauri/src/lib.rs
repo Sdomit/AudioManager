@@ -1374,6 +1374,7 @@ mod tests {
             graph: AudioGraph::new(),
             recorders: BTreeMap::new(),
             last_error: Some("stale".to_string()),
+            monitors: Default::default(),
         };
 
         apply_preset_state(&mut inner, &preset).unwrap();
