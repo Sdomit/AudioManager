@@ -568,7 +568,6 @@ pub fn start(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
-                                    let mut over = 0u32;
                                     for &s in data {
                                         let abs = s.abs();
                                         if abs > block_peak {
@@ -578,7 +577,7 @@ pub fn start(
                                     // Frame-atomic push so an overrun never swaps
                                     // channels on the consumer; returns the dropped
                                     // sample count for overrun telemetry (#PR31-1).
-                                    over = push_frames(&mut producer, data, in_channels) as u32;
+                                    let over = push_frames(&mut producer, data, in_channels) as u32;
                                     store_max(&peak[i].input_peak, block_peak);
                                     if over > 0 {
                                         peak[i].overrun.fetch_add(over, Ordering::Relaxed);
@@ -808,6 +807,12 @@ pub fn start(
             let target_backlog_frames = (TARGET_LATENCY_MS / 1000.0 * out_rate_hz) as usize;
             let max_backlog_frames = (MAX_LATENCY_MS / 1000.0 * out_rate_hz) as usize;
 
+            // Error slots (a failed loopback/app input, #PR31-3) feed a
+            // dropped-producer ring that is permanently empty. Skip their xrun
+            // accounting so a deliberately-silent input doesn't flood the
+            // underrun counter and mask real dropouts on healthy inputs.
+            let silent_slots: Vec<bool> = input_errors.iter().map(|e| e.is_some()).collect();
+
             let output_stream = output_device
                 .build_output_stream(
                     &out_stream_cfg,
@@ -908,7 +913,7 @@ pub fn start(
                             }
                             // Underrun: the ring ran dry, so `need - got` samples
                             // were zero-filled. Record it for dropout telemetry.
-                            if got < need {
+                            if got < need && !silent_slots[i] {
                                 slots[i]
                                     .underrun
                                     .fetch_add((need - got) as u32, Ordering::Relaxed);
