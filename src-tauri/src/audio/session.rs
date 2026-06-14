@@ -26,7 +26,7 @@ pub struct AudioSessionInfo {
 /// Distinct (pid, image-name) pairs for processes holding a render session.
 /// Shared by the picker (#16) and the by-name PID resolver (#21).
 #[cfg(windows)]
-fn collect_render_sessions() -> Result<Vec<(u32, String)>, EngineError> {
+fn collect_render_sessions() -> Result<(Vec<(u32, String)>, sysinfo::System), EngineError> {
     use std::collections::BTreeSet;
 
     use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
@@ -64,7 +64,7 @@ fn collect_render_sessions() -> Result<Vec<(u32, String)>, EngineError> {
             .unwrap_or_else(|| format!("PID {pid}"));
         out.push((pid, name));
     }
-    Ok(out)
+    Ok((out, system))
 }
 
 #[cfg(windows)]
@@ -79,7 +79,7 @@ pub fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, EngineError> {
     // transient proc:<pid> id.
     let mut by_name: BTreeMap<String, (u32, String)> = BTreeMap::new();
     let mut unnamed: Vec<(u32, String)> = Vec::new();
-    for (pid, name) in collect_render_sessions()? {
+    for (pid, name) in collect_render_sessions()?.0 {
         if name.starts_with("PID ") {
             unnamed.push((pid, name));
             continue;
@@ -122,9 +122,14 @@ pub fn list_audio_sessions() -> Result<Vec<AudioSessionInfo>, EngineError> {
 /// covering all tabs.
 #[cfg(windows)]
 pub fn resolve_pid_for_image(image_name: &str) -> Result<Option<u32>, EngineError> {
-    use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+    use sysinfo::Pid;
 
-    let matches: Vec<u32> = collect_render_sessions()?
+    // One snapshot for both the match set and the parent walk: a PID can't be in
+    // `matches` yet be absent from a second snapshot, which would make
+    // walk_to_root return a dead PID instead of None and hand it to the loopback
+    // client as a raw WASAPI error instead of the friendly message (#PR31-4).
+    let (sessions, system) = collect_render_sessions()?;
+    let matches: Vec<u32> = sessions
         .into_iter()
         .filter(|(_, name)| name.eq_ignore_ascii_case(image_name))
         .map(|(pid, _)| pid)
@@ -133,9 +138,6 @@ pub fn resolve_pid_for_image(image_name: &str) -> Result<Option<u32>, EngineErro
         return Ok(None);
     }
 
-    let system = System::new_with_specifics(
-        RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
-    );
     let parent_of = |pid: u32| -> Option<(u32, String)> {
         let ppid = system.process(Pid::from_u32(pid))?.parent()?.as_u32();
         let pname = system

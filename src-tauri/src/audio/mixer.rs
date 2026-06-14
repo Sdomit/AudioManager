@@ -50,6 +50,10 @@ pub struct MixerInputInfo {
     pub device_name: String,
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
+    /// `Some(msg)` when this input could not be brought up (e.g. a loopback app
+    /// that isn't playing). The slot runs silent and the bus still starts; the
+    /// message is surfaced as the bus's `last_error` (#PR31-3).
+    pub error: Option<String>,
 }
 
 /// Descriptor passed to `mixer::start` for each input.
@@ -101,6 +105,8 @@ struct StartInfo {
     out_channels: u16,
     sample_rate: u32,
     input_channels: Vec<u16>,
+    /// Per-input error (aligned with `input_channels`); `None` = input is live.
+    input_errors: Vec<Option<String>>,
 }
 
 impl MixerEngine {
@@ -276,6 +282,9 @@ pub fn start(
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
+            // Per-input error (None = live). A failed loopback/app input becomes
+            // a silent slot instead of failing the whole bus (#PR31-3).
+            let mut input_errors: Vec<Option<String>> = Vec::new();
 
             for (i, (source, _, _)) in in_specs.iter().enumerate() {
                 match source {
@@ -309,6 +318,7 @@ pub fn start(
                         let (producer, consumer) = ring.split();
                         consumers.push((consumer, in_channels));
                         input_channels_meta.push(in_channels as u16);
+                        input_errors.push(None);
 
                         let in_stream_cfg: StreamConfig = in_cfg.into();
                         let err_cb = move |e| eprintln!("[audio] input stream {i} error: {e}");
@@ -320,12 +330,19 @@ pub fn start(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
-                                    for &s in data {
-                                        let abs = s.abs();
-                                        if abs > block_peak {
-                                            block_peak = abs;
+                                    // Push whole frames only so a ring overrun
+                                    // can't drop a partial frame and swap
+                                    // channels on the consumer (#PR31-1).
+                                    for frame in data.chunks_exact(in_channels) {
+                                        for &s in frame {
+                                            let abs = s.abs();
+                                            if abs > block_peak {
+                                                block_peak = abs;
+                                            }
                                         }
-                                        let _ = producer.push(s);
+                                        if producer.remaining() >= in_channels {
+                                            producer.push_slice(frame);
+                                        }
                                     }
                                     store_max(&peak[i].input_peak, block_peak);
                                 },
@@ -356,8 +373,10 @@ pub fn start(
                                             }
                                         }
                                         resampler.process_frame(frame, |out| {
-                                            for &s in &out[..in_channels] {
-                                                let _ = producer.push(s);
+                                            // Frame-atomic push: never split a
+                                            // resampled frame across an overrun (#PR31-1).
+                                            if producer.remaining() >= in_channels {
+                                                producer.push_slice(&out[..in_channels]);
                                             }
                                         });
                                     }
@@ -375,50 +394,75 @@ pub fn start(
                     // Loopback sources fill the same source-blind ring from a
                     // WASAPI capture thread. `autoconvert` delivers stereo f32 at
                     // the bus rate, so there is no rate gate and no channel check.
-                    InputSourceSpec::SystemLoopback => {
-                        let (consumer, ch, sub) = loopback::subscribe_system(
-                            out_sample_rate.0,
-                            Arc::clone(&shared_for_thread),
-                            i,
-                        )?;
-                        consumers.push((consumer, ch as usize));
-                        input_channels_meta.push(ch);
-                        subscriptions.push(sub);
-                    }
-
-                    InputSourceSpec::Process { pid, include_tree } => {
-                        let (consumer, ch, sub) = loopback::subscribe_process(
-                            *pid,
-                            *include_tree,
-                            out_sample_rate.0,
-                            Arc::clone(&shared_for_thread),
-                            i,
-                        )?;
-                        consumers.push((consumer, ch as usize));
-                        input_channels_meta.push(ch);
-                        subscriptions.push(sub);
-                    }
-
-                    // Stable app id: resolve the image name to a live PID now,
-                    // then subscribe exactly like the Process arm.
-                    InputSourceSpec::ProcessByName { image_name, include_tree } => {
-                        let pid = crate::audio::session::resolve_pid_for_image(image_name)?
-                            .ok_or_else(|| EngineError {
-                                message: format!(
-                                    "App '{image_name}' is not currently playing audio. \
-                                     Start playback in the app, then enable this input."
-                                ),
-                            })?;
-                        let (consumer, ch, sub) = loopback::subscribe_process(
-                            pid,
-                            *include_tree,
-                            out_sample_rate.0,
-                            Arc::clone(&shared_for_thread),
-                            i,
-                        )?;
-                        consumers.push((consumer, ch as usize));
-                        input_channels_meta.push(ch);
-                        subscriptions.push(sub);
+                    // Loopback sources (system / per-app). A failure here — app
+                    // not playing, OS gate, transient WASAPI error — must NOT
+                    // abort the whole bus and drop healthy inputs (a paused app
+                    // must not kill the mic). Build a silent slot and record the
+                    // per-input error instead (#PR31-3).
+                    InputSourceSpec::SystemLoopback
+                    | InputSourceSpec::Process { .. }
+                    | InputSourceSpec::ProcessByName { .. } => {
+                        let result = match source {
+                            InputSourceSpec::SystemLoopback => loopback::subscribe_system(
+                                out_sample_rate.0,
+                                Arc::clone(&shared_for_thread),
+                                i,
+                            ),
+                            InputSourceSpec::Process { pid, include_tree } => {
+                                loopback::subscribe_process(
+                                    *pid,
+                                    *include_tree,
+                                    out_sample_rate.0,
+                                    Arc::clone(&shared_for_thread),
+                                    i,
+                                )
+                            }
+                            InputSourceSpec::ProcessByName { image_name, include_tree } => {
+                                match crate::audio::session::resolve_pid_for_image(image_name) {
+                                    Ok(Some(pid)) => loopback::subscribe_process(
+                                        pid,
+                                        *include_tree,
+                                        out_sample_rate.0,
+                                        Arc::clone(&shared_for_thread),
+                                        i,
+                                    ),
+                                    Ok(None) => Err(EngineError {
+                                        message: format!(
+                                            "App '{image_name}' is not currently playing \
+                                             audio. Start playback in the app, then enable \
+                                             this input."
+                                        ),
+                                    }),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            // Device is handled by the arm above; unreachable here.
+                            InputSourceSpec::Device { .. } => unreachable!(),
+                        };
+                        match result {
+                            Ok((consumer, ch, sub)) => {
+                                consumers.push((consumer, ch as usize));
+                                input_channels_meta.push(ch);
+                                subscriptions.push(sub);
+                                input_errors.push(None);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[audio] input {i} ({}) unavailable: {}",
+                                    source.to_id(),
+                                    e.message
+                                );
+                                // Silent placeholder: an empty ring (producer
+                                // dropped) pops as 0.0, keeping slot indices
+                                // aligned with the meter slots and the output
+                                // callback's per-input loop.
+                                let ring = RingBuffer::<f32>::new(2);
+                                let (_silent_producer, consumer) = ring.split();
+                                consumers.push((consumer, 1));
+                                input_channels_meta.push(1);
+                                input_errors.push(Some(e.message));
+                            }
+                        }
                     }
                 }
             }
@@ -587,6 +631,7 @@ pub fn start(
                     out_channels: out_channels as u16,
                     sample_rate: out_sample_rate.0,
                     input_channels: input_channels_meta,
+                    input_errors,
                 },
             ))
         })();
@@ -616,9 +661,11 @@ pub fn start(
             inputs: input_specs
                 .into_iter()
                 .zip(info.input_channels.iter().copied())
-                .map(|((source, _, _), channels)| MixerInputInfo {
+                .zip(info.input_errors.iter().cloned())
+                .map(|(((source, _, _), channels), error)| MixerInputInfo {
                     device_name: source.to_id(),
                     channels,
+                    error,
                 })
                 .collect(),
             shared,
@@ -671,6 +718,7 @@ mod tests {
                 .map(|(i, _)| MixerInputInfo {
                     device_name: format!("fake_device_{i}"),
                     channels: 2,
+                    error: None,
                 })
                 .collect(),
             shared: Arc::new(shared),

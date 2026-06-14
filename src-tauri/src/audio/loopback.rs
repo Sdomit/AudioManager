@@ -9,10 +9,12 @@
 //! for a (source, rate) key creates the capture; the last to leave stops it.
 //!
 //! Lock order is one-way: `subscribe`/`unsubscribe` take the manager map lock and
-//! then briefly the per-capture `subs` lock; the capture thread only ever takes
-//! `subs` (never the map), and joins happen after both locks are released — so
-//! there is no inversion. With a single subscriber the fan-out is a one-element
-//! loop, i.e. behavior is identical to the original single-client capture.
+//! then briefly the per-capture `subs` lock. The capture thread only takes `subs`
+//! while running, and takes the map lock ALONE (never while holding `subs`) when
+//! self-removing its entry after a capture error — so there is no inversion.
+//! Capture creation happens WITHOUT the map lock held, so a slow WASAPI init
+//! never blocks other subscribe/unsubscribe calls. With a single subscriber the
+//! fan-out is a one-element loop, i.e. behavior matches a single-client capture.
 //!
 //! Platform: Windows only. `new_application_loopback_client` needs Win10 2004
 //! (build 19041); system loopback needs only Win10 1803. The `wasapi` dep is
@@ -110,20 +112,25 @@ mod imp {
         let (producer, consumer) = ring.split();
         let sub = Subscriber { id, producer, peak, index };
 
-        let mut map = manager().lock().unwrap();
-
-        if let Some(mc) = map.get(&key) {
-            // Existing capture for this (source, rate): just attach.
-            mc.subs.lock().unwrap().push(sub);
-            return Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }));
+        // Fast path: a capture for this (source, rate) already exists — attach,
+        // holding the map lock only for the O(1) push.
+        {
+            let map = manager().lock().unwrap();
+            if let Some(mc) = map.get(&key) {
+                mc.subs.lock().unwrap().push(sub);
+                return Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }));
+            }
         }
 
-        // First subscriber: create the capture thread.
+        // First subscriber: create the capture thread WITHOUT holding the map
+        // lock, so a slow or hanging WASAPI init can't head-of-line-block other
+        // loopback subscribe/unsubscribe calls (#PR31-5).
         let stop = Arc::new(AtomicBool::new(false));
         let subs = Arc::new(Mutex::new(vec![sub]));
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), EngineError>>();
         let thread_stop = Arc::clone(&stop);
         let thread_subs = Arc::clone(&subs);
+        let thread_key = key.clone();
 
         let label = match mode {
             Mode::System => "loopback-system".to_string(),
@@ -141,6 +148,13 @@ mod imp {
                         return;
                     }
                     run_capture_loop(session, &thread_subs, &thread_stop);
+                    // Exited the loop without a stop request => a capture error
+                    // (device lost / read failure). Remove our manager entry so
+                    // the next subscribe recreates the capture instead of
+                    // attaching to this dead thread (#PR31-2).
+                    if !thread_stop.load(Ordering::Acquire) {
+                        manager().lock().unwrap().remove(&thread_key);
+                    }
                 }
             })
             .map_err(|e| EngineError {
@@ -149,7 +163,20 @@ mod imp {
 
         match ready_rx.recv() {
             Ok(Ok(())) => {
-                map.insert(key.clone(), ManagedCapture { stop, subs, thread: Some(handle) });
+                // Publish the capture. A concurrent first-subscriber for the
+                // same key may have created one while we initialized; if so,
+                // attach to the winner and retire our thread so there is exactly
+                // one capture per key.
+                let mut map = manager().lock().unwrap();
+                if let Some(mc) = map.get(&key) {
+                    let our_sub = subs.lock().unwrap().pop().expect("our subscriber");
+                    mc.subs.lock().unwrap().push(our_sub);
+                    drop(map);
+                    stop.store(true, Ordering::Release);
+                    let _ = handle.join();
+                } else {
+                    map.insert(key.clone(), ManagedCapture { stop, subs, thread: Some(handle) });
+                }
                 Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }))
             }
             Ok(Err(e)) => {
@@ -225,8 +252,11 @@ mod imp {
                 let enumerator = wasapi::DeviceEnumerator::new()?;
                 let device = enumerator.get_default_device(&Direction::Render)?;
                 let client = device.get_iaudioclient()?;
-                let (_default_period, min_period) = client.get_device_period()?;
-                (client, min_period)
+                // Size the shared capture buffer to the endpoint DEFAULT period.
+                // The minimum period gives almost no headroom against scheduler
+                // jitter and causes loopback overruns/dropouts (#PR31-7).
+                let (default_period, _min_period) = client.get_device_period()?;
+                (client, default_period)
             }
             Mode::Process { pid, include_tree } => {
                 let client = AudioClient::new_application_loopback_client(pid, include_tree)?;
@@ -262,7 +292,10 @@ mod imp {
             }
             // Event timeout is NOT an error for loopback — when nothing plays no
             // event arrives; the rings drain to silence and we re-check stop.
-            if event.wait_for_event(100).is_err() {
+            // Kept short (20 ms) so teardown joins this thread promptly instead
+            // of blocking the caller for up to a full period per capture, which
+            // is additive across loopback inputs under the app lock (#PR31-6).
+            if event.wait_for_event(20).is_err() {
                 continue;
             }
 
@@ -304,8 +337,14 @@ mod imp {
             // realtime output path), so contention with (un)subscribe is brief.
             let mut guard = subs.lock().unwrap();
             for sub in guard.iter_mut() {
-                for &x in scratch.iter() {
-                    let _ = sub.producer.push(x);
+                // Push whole stereo frames only. Pushing samples singly lets a
+                // ring overrun drop one of L/R, shifting frame parity on the
+                // pair-popping consumer and swapping channels permanently. Drop
+                // the whole frame instead when the ring can't hold it (#PR31-1).
+                for frame in scratch.chunks_exact(LOOPBACK_CHANNELS as usize) {
+                    if sub.producer.remaining() >= frame.len() {
+                        sub.producer.push_slice(frame);
+                    }
                 }
                 store_max(&sub.peak[sub.index].input_peak, block_peak);
             }

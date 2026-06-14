@@ -144,9 +144,17 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
 
     match audio::mixer::start(&output_id, &mixer_inputs, bus_vol, bus_muted) {
         Ok(engine) => {
+            // Inputs that came up silent (e.g. a paused app) surface as the bus's
+            // last_error while the bus keeps running its live inputs (#PR31-3).
+            let input_errors: Vec<String> = engine
+                .inputs
+                .iter()
+                .filter_map(|i| i.error.as_ref().map(|e| format!("{}: {}", i.device_name, e)))
+                .collect();
             let bus = inner.buses.get_mut(&bus_id).expect("bus exists");
             bus.engine = Some(engine);
-            bus.last_error = None;
+            bus.last_error =
+                (!input_errors.is_empty()).then(|| input_errors.join("; "));
             Ok(())
         }
         Err(err) => {
