@@ -308,6 +308,26 @@ fn resync_drop(fill: usize, need: usize, target_backlog: usize, max_backlog: usi
     }
 }
 
+/// Read one interleaved frame from a pre-drained input scratch buffer, returning
+/// `(left, right)` (right mirrors left for mono). `avail_frames` is how many
+/// whole frames were actually drained into `scratch` this block; index `f` at or
+/// beyond it returns silence `(0.0, 0.0)` — the same degradation as a ring
+/// underrun. This bounds the read so an output block larger than the scratch /
+/// ring capacity (a driver-chosen period on the `None` buffer path can exceed
+/// `RING_SIZE`) can never index past `scratch` and panic the audio thread. Pure
+/// so the bound is unit-tested without running a stream.
+#[inline]
+fn read_scratch_frame(scratch: &[f32], f: usize, in_ch: usize, avail_frames: usize) -> (f32, f32) {
+    if f < avail_frames {
+        let base = f * in_ch;
+        let s0 = scratch[base];
+        let s1 = if in_ch == 2 { scratch[base + 1] } else { s0 };
+        (s0, s1)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
 /// Per-input ring capacity (in f32 samples) for the given output rate and
 /// callback buffer. Sized to hold the maximum backlog the resync trim allows
 /// (`MAX_LATENCY_MS`) plus a few callback blocks of jitter headroom, ×2 for
@@ -714,6 +734,10 @@ pub fn start(
                         let n = slots.len();
                         let mut gains = [0.0f32; MAX_INPUTS];
                         let mut muted = [false; MAX_INPUTS];
+                        // Whole frames actually drained per input this block; bounds
+                        // the per-frame scratch read so an oversized output block
+                        // can't index past the scratch (see read_scratch_frame).
+                        let mut avail_frames = [0usize; MAX_INPUTS];
                         for i in 0..n {
                             gains[i] = f32::from_bits(slots[i].gain.load(Ordering::Relaxed));
                             muted[i] = slots[i].muted.load(Ordering::Relaxed);
@@ -743,6 +767,10 @@ pub fn start(
                         for i in 0..n {
                             let in_ch = consumers[i].1;
                             let need = (frames * in_ch).min(input_scratch[i].len());
+                            // Whole frames available to the mix loop. When the
+                            // output block exceeds scratch capacity, this is < frames
+                            // and the tail mixes as silence rather than reading OOB.
+                            avail_frames[i] = need / in_ch;
 
                             // Publish current fill so the resampler's nudge_ratio can
                             // steer the ring toward target between output blocks (#36).
@@ -805,14 +833,11 @@ pub fn start(
                                 let g = if muted[i] { 0.0 } else { gains[i] };
                                 let in_ch = consumers[i].1; // 1 or 2 (validated)
 
-                                // Read one input frame from the pre-drained scratch.
-                                let base = f * in_ch;
-                                let s0 = input_scratch[i][base];
-                                let s1 = if in_ch == 2 {
-                                    input_scratch[i][base + 1]
-                                } else {
-                                    s0
-                                };
+                                // Read one input frame from the pre-drained scratch,
+                                // bounded by the frames actually drained so an
+                                // oversized output block can never index past it.
+                                let (s0, s1) =
+                                    read_scratch_frame(&input_scratch[i], f, in_ch, avail_frames[i]);
 
                                 // DSP already applied block-wide above (process_block).
                                 // s0/s1 read from the processed scratch buffer.
@@ -1195,6 +1220,26 @@ mod tests {
     fn resync_drop_at_exactly_max_does_not_trim() {
         // post_read == max is not "exceeds" → no trim (only > max fires).
         assert_eq!(resync_drop(2200, 200, 600, 2000), 0);
+    }
+
+    #[test]
+    fn read_scratch_frame_silences_beyond_available_no_oob() {
+        // Default `None` path: scratch is RING_SIZE, so a stereo block larger than
+        // RING_SIZE/2 frames drains only `avail` whole frames. The mix loop still
+        // iterates 0..frames; frames at/beyond `avail` must return silence and
+        // never index past the scratch (the pre-fix inline read panicked here).
+        let scratch = vec![0.5f32; RING_SIZE];
+        let in_ch = 2;
+        let avail = RING_SIZE / in_ch; // = need / in_ch when block exceeds scratch
+        assert_eq!(read_scratch_frame(&scratch, 0, in_ch, avail), (0.5, 0.5));
+        assert_eq!(read_scratch_frame(&scratch, avail - 1, in_ch, avail), (0.5, 0.5));
+        // f == avail and beyond: silence, no panic even far past the buffer.
+        assert_eq!(read_scratch_frame(&scratch, avail, in_ch, avail), (0.0, 0.0));
+        assert_eq!(read_scratch_frame(&scratch, avail + 5_000, in_ch, avail), (0.0, 0.0));
+        // Mono mirrors left into right.
+        let mono = vec![0.3f32; RING_SIZE];
+        assert_eq!(read_scratch_frame(&mono, 10, 1, RING_SIZE), (0.3, 0.3));
+        assert_eq!(read_scratch_frame(&mono, RING_SIZE, 1, RING_SIZE), (0.0, 0.0));
     }
 
     #[test]
