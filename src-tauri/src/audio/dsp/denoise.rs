@@ -24,8 +24,10 @@
 //! `use_dfn` simply falls back to RNNoise (see [`Denoiser::process`]).
 //!
 //! Allocation happens only in [`Denoiser::new`] (engine start, off the audio
-//! thread). `process`/`reset` touch pre-sized buffers — no realtime allocation
-//! as long as a block stays within [`OUT_CAPACITY`].
+//! thread). `process`/`reset` touch pre-sized buffers and never allocate on the
+//! audio thread: `process` interleaves frame production with draining, so the
+//! output queue holds at most ~2 frames for *any* block size (see
+//! [`OUT_CAPACITY`]).
 
 use std::collections::VecDeque;
 
@@ -37,9 +39,12 @@ const FRAME: usize = DenoiseState::FRAME_SIZE;
 /// `[-1, 1]` ↔ i16-scale conversion factor RNNoise expects.
 const SCALE: f32 = 32_768.0;
 
-/// Output-queue capacity per channel: one primed frame plus headroom for the
-/// largest realistic callback block, so steady-state pushes never reallocate.
-const OUT_CAPACITY: usize = FRAME * 2 + 16_384;
+/// Output-queue capacity per channel. `process` interleaves frame production
+/// with draining, so the queue never holds more than the primed frame plus one
+/// freshly produced frame (~2 frames) regardless of block size. Three frames
+/// leaves margin so neither priming, `extend`, nor `push` ever reallocates on
+/// the audio thread.
+const OUT_CAPACITY: usize = FRAME * 3;
 
 /// Per-input neural denoiser. RNNoise backend; `use_dfn` is plumbed for the
 /// future DeepFilterNet backend and currently falls back to RNNoise.
@@ -114,9 +119,18 @@ impl Denoiser {
         let ch_count = channels.min(self.states.len());
         let frames = interleaved.len() / channels;
         for ch in 0..ch_count {
-            // Pass A — consume this channel's samples into full RNNoise frames.
+            // Accumulate into full RNNoise frames and drain one output sample per
+            // input sample in the SAME pass. Interleaving — rather than pushing
+            // the whole block first, then draining — caps the output queue at the
+            // primed frame plus one freshly produced frame, so an oversized
+            // callback block can never grow it (no realloc on the audio thread).
+            // The queue is primed a frame ahead and each completed frame
+            // replenishes it before its samples are read, so `pop_front` always
+            // yields. Output is identical to the two-pass form (FIFO order and
+            // one-frame latency are unchanged).
             for f in 0..frames {
-                self.accum[ch].push(interleaved[f * channels + ch] * SCALE);
+                let idx = f * channels + ch;
+                self.accum[ch].push(interleaved[idx] * SCALE);
                 if self.accum[ch].len() == FRAME {
                     let mut fin = [0.0f32; FRAME];
                     fin.copy_from_slice(&self.accum[ch]);
@@ -125,13 +139,8 @@ impl Denoiser {
                     self.out[ch].extend(fout.iter().copied());
                     self.accum[ch].clear();
                 }
-            }
-            // Pass B — emit one denoised sample per input sample. The queue is
-            // primed a full frame ahead, and Pass A produced ≥ `frames` samples
-            // of headroom, so `pop_front` always yields a value here.
-            for f in 0..frames {
                 let s = self.out[ch].pop_front().unwrap_or(0.0);
-                interleaved[f * channels + ch] = s / SCALE;
+                interleaved[idx] = s / SCALE;
             }
         }
     }
@@ -179,6 +188,24 @@ mod tests {
             assert_eq!(buf.len(), 512 * 2);
             assert!(buf.iter().all(|s| s.is_finite()));
         }
+    }
+
+    #[test]
+    fn oversized_block_does_not_reallocate_output_queue() {
+        // A single block far larger than any realistic callback (and larger than
+        // the old hardcoded headroom) must not grow the output queue — the RT
+        // path allocates nowhere. The two-pass form pushed the whole block before
+        // draining and would realloc here; the interleaved form keeps the queue
+        // at ~2 frames, so capacity is unchanged.
+        let mut d = Denoiser::new(48_000.0);
+        let cap_l = d.out[0].capacity();
+        let cap_r = d.out[1].capacity();
+        let mut buf = vec![0.3f32; 50_000 * 2];
+        d.process(&mut buf, 2);
+        assert_eq!(buf.len(), 50_000 * 2);
+        assert!(buf.iter().all(|s| s.is_finite()));
+        assert_eq!(d.out[0].capacity(), cap_l, "RT path must not reallocate (L)");
+        assert_eq!(d.out[1].capacity(), cap_r, "RT path must not reallocate (R)");
     }
 
     #[test]

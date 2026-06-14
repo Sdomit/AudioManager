@@ -124,6 +124,15 @@ impl AtomicBiquad {
     }
     fn store(&self, enabled: bool, coeffs: [f32; 5]) {
         self.enabled.store(enabled, RELAXED);
+        // Finiteness guard (IPC side, off the RT path): a NaN/Inf coefficient
+        // published here would propagate through the biquad's `y1/y2` recursion
+        // and permanently wedge the channel. Sanitize a non-finite set to a
+        // passthrough biquad `[b0=1, b1=0, b2=0, a1=0, a2=0]` (y = x).
+        let coeffs = if coeffs.iter().all(|c| c.is_finite()) {
+            coeffs
+        } else {
+            [1.0, 0.0, 0.0, 0.0, 0.0]
+        };
         for (a, v) in self.coeffs.iter().zip(coeffs) {
             a.store(v);
         }
@@ -542,6 +551,42 @@ impl BusDspShared {
 
 // ── Concrete effect slots (audio-callback side) ────────────────────────────────
 
+/// Enable flush-to-zero (FTZ) + denormals-are-zero (DAZ) for SSE float math on
+/// the calling (realtime) thread.
+///
+/// Biquad `y1/y2` delay state and the one-pole gate/compressor/limiter envelope
+/// tails decay toward zero whenever the input goes near-silent. Once those
+/// values reach the subnormal range, every dependent FPU op can stall for
+/// hundreds of cycles on x86 — enough to blow the audio deadline and produce
+/// dropouts. Setting FTZ+DAZ makes the hardware treat subnormal inputs and
+/// results as zero, so the tails snap cleanly to 0 with no stall.
+///
+/// Called at the top of every realtime `process_block` rather than once at
+/// stream start: it costs ~3 instructions per block, is idempotent, and is
+/// robust to whatever thread the host actually runs the callback on without
+/// having to reach into the mixer/stream-setup code (which the DSP worktree
+/// keeps untouched to avoid merge collisions). Read-modify-write preserves the
+/// rounding mode and exception masks. x86_64 only; a documented no-op elsewhere
+/// (the app ships x86_64).
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn enable_flush_denormals() {
+    use core::arch::asm;
+    // FTZ = bit 15 (0x8000), DAZ = bit 6 (0x0040). Read-modify-write via
+    // `stmxcsr`/`ldmxcsr` so the rounding mode and exception masks are preserved.
+    // (The `_mm_getcsr`/`_mm_setcsr` intrinsics are deprecated in favor of asm.)
+    let mut mxcsr: u32 = 0;
+    unsafe {
+        asm!("stmxcsr [{0}]", in(reg) &mut mxcsr, options(nostack, preserves_flags));
+        mxcsr |= 0x8040;
+        asm!("ldmxcsr [{0}]", in(reg) &mxcsr, options(nostack, readonly, preserves_flags));
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn enable_flush_denormals() {}
+
 /// Re-enable helper: set enabled + coeffs, and `reset()` the effect when it just
 /// transitioned disabled→enabled so stale envelope/filter state cannot pop.
 #[inline]
@@ -710,14 +755,20 @@ impl InputDspSlots {
         }
     }
 
-    /// Block form of [`Self::process`]: same chain order (HPF → Gate → EQ →
-    /// Comp → Limiter) and identical output, but each enabled effect's
-    /// `is_enabled` check is hoisted out of the per-sample loop and its
-    /// `process` is monomorphized (no dispatch per sample). `channels` is
-    /// 1 (mono) or 2 (`[L, R, …]`). `interleaved.len()` must be a multiple of
-    /// `channels`.
+    /// Realtime path. Same chain stages as [`Self::process`] (HPF → Gate → EQ →
+    /// Comp → Limiter) with each enabled effect's `is_enabled` check hoisted out
+    /// of the per-sample loop and its `process` monomorphized (no per-sample
+    /// dispatch). `channels` is 1 (mono) or 2 (`[L, R, …]`); `interleaved.len()`
+    /// must be a multiple of `channels`.
+    ///
+    /// NOT bit-identical to the per-frame [`Self::process`]: this path walks the
+    /// wired `order` and runs the denoiser (the per-frame reference keeps the
+    /// canonical order and omits it), and on x86_64 it enables FTZ/DAZ (see
+    /// [`enable_flush_denormals`]) so a near-silent tail decaying into the
+    /// subnormal range snaps to zero here but lingers in the per-frame path.
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
+        enable_flush_denormals();
         // Walk the stages in the wired order. Each stage runs only if enabled;
         // disabled stages are cheap skips. Block-only path — the realtime mixer
         // always uses `process_block` (the per-frame `process` keeps the fixed
@@ -825,9 +876,13 @@ impl BusDspSlots {
         }
     }
 
-    /// Block form of [`Self::process`]: same chain order (EQ → Limiter).
+    /// Realtime path: same chain order as [`Self::process`] (EQ → Limiter). Not
+    /// bit-identical to the per-frame reference: on x86_64 this path enables
+    /// FTZ/DAZ (see [`enable_flush_denormals`]), so a near-silent subnormal tail
+    /// snaps to zero here but lingers in [`Self::process`].
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
+        enable_flush_denormals();
         for band in &mut self.eq {
             if band.is_enabled() {
                 process_block_effect(band, interleaved, channels);
@@ -846,6 +901,47 @@ mod tests {
     use super::*;
 
     const SR: f32 = 48_000.0;
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ftz_daz_flush_subnormals_to_zero() {
+        use std::hint::black_box;
+        enable_flush_denormals();
+        // FTZ (subnormal *result* → 0): MIN_POSITIVE is the smallest normal f32;
+        // *0.25 underflows into the subnormal range. `black_box` blocks
+        // const-folding so the multiply runs on the FPU with the flag live.
+        let ftz = black_box(black_box(f32::MIN_POSITIVE) * black_box(0.25_f32));
+        assert_eq!(ftz, 0.0, "FTZ should flush a subnormal product to zero");
+        // DAZ (subnormal *input* → 0): build the denormal via `from_bits` (no
+        // arithmetic, so FTZ can't pre-flush it), then multiply by 1e30. With DAZ
+        // the input is read as 0 → result 0; without DAZ it would be a normal
+        // ~1.4e-15, so a zero result isolates DAZ.
+        let daz = black_box(black_box(f32::from_bits(1)) * black_box(1.0e30_f32));
+        assert_eq!(daz, 0.0, "DAZ should treat a subnormal input as zero");
+    }
+
+    #[test]
+    fn nonfinite_biquad_coeffs_sanitized_to_passthrough() {
+        let passthrough = [1.0, 0.0, 0.0, 0.0, 0.0];
+        for bad in [
+            [f32::NAN, 1.0, 2.0, 3.0, 4.0],
+            [0.5, f32::INFINITY, 0.0, 0.0, 0.0],
+            [0.5, 0.0, f32::NEG_INFINITY, 0.0, 0.0],
+            [0.5, 0.0, 0.0, f32::NAN, 0.0],
+            [0.5, 0.0, 0.0, 0.0, f32::INFINITY],
+        ] {
+            let ab = AtomicBiquad::new();
+            ab.store(true, bad);
+            let (en, c) = ab.load();
+            assert!(en);
+            assert_eq!(c, passthrough, "non-finite coeffs must become passthrough");
+        }
+        // A finite set publishes unchanged.
+        let ab = AtomicBiquad::new();
+        let good = [0.5, -0.1, 0.2, -0.3, 0.4];
+        ab.store(true, good);
+        assert_eq!(ab.load().1, good);
+    }
 
     fn cfg_with(gate_db: f32, ratio: f32) -> DspConfig {
         let mut c = DspConfig::default();

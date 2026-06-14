@@ -25,6 +25,14 @@ import type {
 import { gainToDb, levelToDb, volumeToDb } from "./units";
 import styles from "./BusDetail.module.css";
 
+/** Named latency presets (#35), shown as a segmented picker. Maps to the
+ *  backend LatencyMode → buffer_size_frames. */
+const LATENCY_MODES: ReadonlyArray<{ mode: string; label: string }> = [
+  { mode: "stable", label: "Stable" },
+  { mode: "low", label: "Low" },
+  { mode: "ultra-low", label: "Ultra-low" },
+];
+
 interface BusDetailProps {
   bus: Bus;
   routedInputs: { input: AudioInput; send: Send }[];
@@ -35,6 +43,7 @@ interface BusDetailProps {
   onPickDevice: () => void;
   onSelectInput: (id: string) => void;
   onBufferSizeChange: (frames: number | null) => void;
+  onLatencyModeChange: (mode: string) => void;
   onEqChange: (eq: EqConfig) => void;
   onLimiterChange: (limiter: LimiterConfig) => void;
   onStartRecording: (spec: TapSpec) => void;
@@ -61,6 +70,7 @@ export function BusDetail({
   onPickDevice,
   onSelectInput,
   onBufferSizeChange,
+  onLatencyModeChange,
   onEqChange,
   onLimiterChange,
   onStartRecording,
@@ -193,6 +203,34 @@ export function BusDetail({
       {/* Processing — buffer size, dropout telemetry, final limiter */}
       <section className={styles.section}>
         <div className={styles.sectionTitle}>Processing</div>
+        <div className={styles.procRow}>
+          <span className={styles.procLabel}>Latency</span>
+          <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Latency mode">
+            {LATENCY_MODES.map((m) => {
+              const active = bus.latencyMode === m.mode;
+              return (
+                <button
+                  key={m.mode}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onLatencyModeChange(m.mode)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    border: "1px solid var(--am-border-default)",
+                    background: active ? "var(--am-accent, #2563eb)" : "transparent",
+                    color: active ? "#fff" : "var(--am-text-secondary)",
+                  }}
+                >
+                  {m.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className={styles.procRow}>
           <span className={styles.procLabel}>Buffer size</span>
           <select
