@@ -149,6 +149,7 @@ type Action =
   | { type: "set_bus_eq"; id: BusId; eq: EqConfig }
   | { type: "set_input_gain"; id: string; gain: number }
   | { type: "set_input_muted"; id: string; muted: boolean }
+  | { type: "set_input_monitor"; id: string; enabled: boolean }
   | { type: "set_input_dsp"; id: string; dsp: DspConfig }
   | { type: "remove_input"; id: string }
   | { type: "add_input" }
@@ -256,6 +257,9 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
 
     case "set_input_muted":
       return updateInput(state, action.id, (i) => ({ ...i, muted: action.muted }));
+
+    case "set_input_monitor":
+      return updateInput(state, action.id, (i) => ({ ...i, monitor: action.enabled }));
 
     case "set_input_dsp":
       return updateInput(state, action.id, (i) => ({ ...i, dsp: action.dsp }));
@@ -946,6 +950,21 @@ export function useAudioManager(): UseAudioManager {
     [getInput],
   );
 
+  const setInputMonitor = useCallback(
+    (id: string, enabled: boolean) => {
+      const input = getInput(id);
+      if (!input) return;
+      const prev = input.monitor ?? false;
+      recordHistory();
+      dispatch({ type: "set_input_monitor", id, enabled });
+      ipc.setInputMonitor(id, enabled).catch((e) => {
+        console.error("setInputMonitor failed:", e);
+        dispatch({ type: "set_input_monitor", id, enabled: prev });
+      });
+    },
+    [getInput],
+  );
+
   const setInputDsp = useCallback(
     (id: string, dsp: DspConfig) => {
       dispatch({ type: "set_input_dsp", id, dsp });
@@ -1405,6 +1424,7 @@ export function useAudioManager(): UseAudioManager {
     closeRecordingsPanel,
     setInputGain,
     setInputMuted,
+    setInputMonitor,
     setInputDsp,
     applyStreamVoice,
     removeInput,

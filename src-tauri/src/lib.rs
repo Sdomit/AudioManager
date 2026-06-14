@@ -770,6 +770,32 @@ fn set_input_gain(
     Ok(inner.graph.list_inputs())
 }
 
+/// Toggle monitor preview for an input (#feature1): force-route it to the
+/// monitor bus (A1) for headphone listening without touching its persisted
+/// sends. Idempotent and never duplicates an already-enabled A1 send.
+#[tauri::command]
+fn set_input_monitor(
+    state: tauri::State<AppState>,
+    device_id: String,
+    enabled: bool,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_monitor(&device_id, enabled) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+    // Monitor changes which inputs the A1 engine carries, so rebuild A1 to add
+    // or drop the preview tap. Persisted routing for every bus is left as-is.
+    if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
+        return Err(store_last_error(&mut inner, err));
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
 #[tauri::command]
 fn set_send(
     state: tauri::State<AppState>,
@@ -2007,6 +2033,7 @@ pub fn run() {
             add_input,
             remove_input,
             set_input_gain,
+            set_input_monitor,
             set_send,
             set_send_gain,
             list_buses,

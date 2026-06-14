@@ -247,6 +247,9 @@ export interface InputChannel {
   sends: InputSend[];
   /** Per-input DSP chain. Optional for back-compat with pre-#32 payloads. */
   dsp?: DspConfig;
+  /** Monitor preview (#feature1): force-routed to the monitor bus (A1) for
+   *  headphone listening. Optional for back-compat with pre-#feature1 payloads. */
+  monitor?: boolean;
 }
 
 export interface InputPeakStatus {

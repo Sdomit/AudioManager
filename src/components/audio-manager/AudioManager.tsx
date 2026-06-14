@@ -431,6 +431,11 @@ export function AudioManager() {
               if (!input) return;
               am.setInputMuted(id, !input.muted);
             }}
+            onMonitorInput={(id) => {
+              const input = state.inputs.find((i) => i.id === id);
+              if (!input) return;
+              am.setInputMonitor(id, !(input.monitor ?? false));
+            }}
             onInputGainChange={am.setInputGain}
             onAddInput={() => setInputPickerOpen(true)}
           />
@@ -476,6 +481,11 @@ export function AudioManager() {
               const input = state.inputs.find((i) => i.id === id);
               if (!input) return;
               am.setInputMuted(id, !input.muted);
+            }}
+            onInputMonitor={(id) => {
+              const input = state.inputs.find((i) => i.id === id);
+              if (!input) return;
+              am.setInputMonitor(id, !(input.monitor ?? false));
             }}
             onInputDsp={am.setInputDsp}
             onApplyStreamVoice={am.applyStreamVoice}

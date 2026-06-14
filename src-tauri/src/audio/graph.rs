@@ -43,6 +43,13 @@ pub struct InputChannel {
     /// and preset data saved before #32 deserialize as a bypassed chain.
     #[serde(default)]
     pub dsp: DspConfig,
+    /// Monitor preview (#feature1): when true, the input is force-routed to the
+    /// monitor bus (A1) for headphone listening, regardless of its persisted A1
+    /// send. This is a transient listen flag — it never mutates `sends`, and if
+    /// the A1 send is already enabled it adds no second contribution.
+    /// `serde(default)` so pre-#feature1 graphs/presets load as monitor-off.
+    #[serde(default)]
+    pub monitor: bool,
 }
 
 impl InputChannel {
@@ -53,6 +60,7 @@ impl InputChannel {
             muted: false,
             sends: BusId::ALL.into_iter().map(InputSend::default_for).collect(),
             dsp: DspConfig::default(),
+            monitor: false,
         }
     }
 
@@ -129,6 +137,20 @@ impl AudioGraph {
         true
     }
 
+    /// Toggle monitor preview for an input (#feature1). Does not touch `sends`,
+    /// so the persisted routing is unchanged. Returns false if no input matches.
+    pub fn set_monitor(&mut self, device_id: &str, enabled: bool) -> bool {
+        let Some(input) = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.device_id == device_id)
+        else {
+            return false;
+        };
+        input.monitor = enabled;
+        true
+    }
+
     pub fn set_send(&mut self, device_id: &str, bus_id: BusId, enabled: bool) -> bool {
         let Some(send) = self.find_send_mut(device_id, bus_id) else {
             return false;
@@ -174,30 +196,42 @@ impl AudioGraph {
     ) -> Option<(f32, bool, bool)> {
         let input = self.get_input(device_id)?;
         let send = input.sends.iter().find(|send| send.bus_id == bus_id)?;
-        let effective_gain = input.gain * send.volume;
+        // Monitor preview force-activates the input on the monitor bus (A1) at
+        // unity send, without an enabled send (#feature1).
+        let monitor_only = bus_id == BusId::A1 && input.monitor && !send.enabled;
+        let send_volume = if send.enabled { send.volume } else { 1.0 };
+        let effective_gain = input.gain * send_volume;
         let gain = if effective_gain.is_finite() {
             effective_gain.max(0.0)
         } else {
             1.0
         };
-        Some((gain, input.muted || send.muted, send.enabled))
+        let muted = input.muted || (send.enabled && send.muted);
+        Some((gain, muted, send.enabled || monitor_only))
     }
 
     pub fn effective_inputs_for_bus(&self, bus_id: BusId) -> Vec<(String, f32, bool, DspConfig)> {
+        let is_monitor_bus = bus_id == BusId::A1;
         self.inputs
             .iter()
             .filter_map(|input| {
                 let send = input.sends.iter().find(|send| send.bus_id == bus_id)?;
-                if !send.enabled {
+                // Monitor preview routes the input to the monitor bus (A1) even
+                // when its A1 send is disabled. An already-enabled send takes the
+                // normal path, so a monitored input is never counted twice.
+                let monitor_only = is_monitor_bus && input.monitor && !send.enabled;
+                if !send.enabled && !monitor_only {
                     return None;
                 }
-                let effective_gain = input.gain * send.volume;
+                // Monitor-only uses unity send (the input fader still applies).
+                let send_volume = if send.enabled { send.volume } else { 1.0 };
+                let effective_gain = input.gain * send_volume;
                 let gain = if effective_gain.is_finite() {
                     effective_gain.max(0.0)
                 } else {
                     1.0
                 };
-                let muted = input.muted || send.muted;
+                let muted = input.muted || (send.enabled && send.muted);
                 Some((input.device_id.clone(), gain, muted, input.dsp.clone()))
             })
             .collect()
@@ -332,5 +366,40 @@ mod tests {
         assert!(graph.remove_input("mic"));
         assert!(graph.effective_inputs_for_bus(BusId::A1).is_empty());
         assert!(graph.list_inputs().is_empty());
+    }
+
+    #[test]
+    fn monitor_routes_to_a1_without_enabling_send_and_leaves_routing_untouched() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("mic");
+        // No sends enabled: not in any bus yet.
+        assert!(graph.effective_inputs_for_bus(BusId::A1).is_empty());
+
+        // Monitor preview force-routes to A1 at unity, without touching sends.
+        assert!(graph.set_monitor("mic", true));
+        let a1 = graph.effective_inputs_for_bus(BusId::A1);
+        assert_eq!(a1.len(), 1);
+        assert_eq!(a1[0].0, "mic");
+        assert!((a1[0].1 - 1.0).abs() < f32::EPSILON); // unity
+        // Persisted A1 send is still disabled (no routing mutation).
+        assert!(!graph.get_send("mic", BusId::A1).unwrap().enabled);
+        // Monitor does not leak into other buses.
+        assert!(graph.effective_inputs_for_bus(BusId::A2).is_empty());
+
+        graph.set_monitor("mic", false);
+        assert!(graph.effective_inputs_for_bus(BusId::A1).is_empty());
+    }
+
+    #[test]
+    fn monitor_does_not_duplicate_an_enabled_a1_send() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("mic");
+        graph.set_send("mic", BusId::A1, true);
+        graph.set_send_gain("mic", BusId::A1, 0.5, false);
+        graph.set_monitor("mic", true);
+        let a1 = graph.effective_inputs_for_bus(BusId::A1);
+        // Exactly one contribution, using the configured send volume (not unity).
+        assert_eq!(a1.len(), 1);
+        assert!((a1[0].1 - 0.5).abs() < f32::EPSILON);
     }
 }

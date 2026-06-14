@@ -107,6 +107,14 @@ export const setInputGain = (
 ): Promise<InputChannel[]> =>
   invoke<InputChannel[]>("set_input_gain", { deviceId, gain, muted });
 
+/** Toggle monitor preview (#feature1): route the input to the monitor bus (A1)
+ *  for headphone listening without changing its persisted sends. */
+export const setInputMonitor = (
+  deviceId: string,
+  enabled: boolean,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("set_input_monitor", { deviceId, enabled });
+
 export const setSend = (
   deviceId: string,
   busId: BusId,

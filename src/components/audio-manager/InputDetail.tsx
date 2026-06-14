@@ -2,6 +2,7 @@ import {
   iconForKind,
   iconForBusRole,
   MuteIcon,
+  HeadphonesIcon,
   XIcon,
   PlusIcon,
 } from "./Icon";
@@ -34,6 +35,7 @@ interface InputDetailProps {
   activeRecordings: ActiveRecording[];
   onGainChange: (v: number) => void;
   onMuteToggle: () => void;
+  onMonitorToggle: () => void;
   onRemove: () => void;
   onToggleSend: (busId: BusId) => void;
   onSendGainChange: (busId: BusId, v: number) => void;
@@ -62,6 +64,7 @@ export function InputDetail({
   activeRecordings,
   onGainChange,
   onMuteToggle,
+  onMonitorToggle,
   onRemove,
   onToggleSend,
   onSendGainChange,
@@ -162,6 +165,15 @@ export function InputDetail({
           >
             <MuteIcon size={14} />
             <span>{input.muted ? "Muted" : "Mute"}</span>
+          </button>
+          <button
+            className={`${styles.muteBtn} ${input.monitor ? styles.muteBtnActive : ""}`}
+            onClick={onMonitorToggle}
+            aria-pressed={!!input.monitor}
+            title="Monitor: hear this input on the monitor bus (A1) without enabling the speaker send"
+          >
+            <HeadphonesIcon size={14} />
+            <span>{input.monitor ? "Monitoring" : "Monitor"}</span>
           </button>
           <RecordButton
             spec={preSpec}

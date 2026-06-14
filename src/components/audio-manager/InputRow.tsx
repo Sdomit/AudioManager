@@ -1,5 +1,5 @@
 import { StereoMeter } from "./StereoMeter";
-import { MuteIcon, iconForKind } from "./Icon";
+import { MuteIcon, HeadphonesIcon, iconForKind } from "./Icon";
 import type { AudioInput } from "./types";
 import styles from "./InputRow.module.css";
 
@@ -8,6 +8,7 @@ interface InputRowProps {
   selected: boolean;
   onSelect: () => void;
   onToggleMute: () => void;
+  onToggleMonitor: () => void;
   onGainChange: (v: number) => void;
 }
 
@@ -23,6 +24,7 @@ export function InputRow({
   selected,
   onSelect,
   onToggleMute,
+  onToggleMonitor,
   onGainChange,
 }: InputRowProps) {
   return (
@@ -83,6 +85,21 @@ export function InputRow({
           </div>
         </div>
       </div>
+
+      <button
+        className={`${styles.muteBtn} ${input.monitor ? styles.muteBtnActive : ""}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleMonitor();
+        }}
+        aria-pressed={!!input.monitor}
+        aria-label={
+          input.monitor ? `Stop monitoring ${input.name}` : `Monitor ${input.name}`
+        }
+        title={input.monitor ? "Monitoring (headphones)" : "Monitor in headphones"}
+      >
+        <HeadphonesIcon size={14} />
+      </button>
 
       <button
         className={`${styles.muteBtn} ${input.muted ? styles.muteBtnActive : ""}`}

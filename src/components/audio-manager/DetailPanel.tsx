@@ -23,6 +23,7 @@ interface DetailPanelProps {
   activeRecordings: ActiveRecording[];
   onInputGainChange: (id: string, v: number) => void;
   onInputMuted: (id: string) => void;
+  onInputMonitor: (id: string) => void;
   onInputDsp: (id: string, dsp: DspConfig) => void;
   onApplyStreamVoice: (id: string) => void;
   onRemoveInput: (id: string) => void;
@@ -72,6 +73,7 @@ export function DetailPanel(props: DetailPanelProps) {
           activeRecordings={props.activeRecordings}
           onGainChange={(v) => props.onInputGainChange(input.id, v)}
           onMuteToggle={() => props.onInputMuted(input.id)}
+          onMonitorToggle={() => props.onInputMonitor(input.id)}
           onRemove={() => props.onRemoveInput(input.id)}
           onToggleSend={(busId) => props.onToggleSend(input.id, busId)}
           onSendGainChange={(busId, v) => props.onSendGainChange(input.id, busId, v)}
