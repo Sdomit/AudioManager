@@ -157,6 +157,11 @@ pub fn subscribe_phone(
 pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adaptive: bool) {
     let prefix = format!("phone:{session_id}@");
     let ch = PHONE_CHANNELS as usize;
+    // The decoder delivers interleaved frames (n * PHONE_CHANNELS); frame-atomic
+    // pushing relies on it. A misaligned buffer would silently drop the trailing
+    // partial frame, so catch a future producer/channel-count mismatch here in
+    // debug and test builds.
+    debug_assert_eq!(samples.len() % ch, 0, "phone audio must be frame-aligned");
     let mut map = manager().lock().unwrap();
     for (key, feed) in map.iter_mut() {
         if !key.starts_with(&prefix) {

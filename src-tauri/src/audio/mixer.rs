@@ -52,8 +52,12 @@ pub struct MixerInputInfo {
     /// Channel count (1 or 2) as configured for the input stream.
     pub channels: u16,
     /// `Some(msg)` when this input could not be brought up (e.g. a loopback app
-    /// that isn't playing). The slot runs silent and the bus still starts; the
-    /// message is surfaced as the bus's `last_error` (#PR31-3).
+    /// that isn't playing). The slot runs silent and the bus still starts
+    /// (#PR31-3). On a TOTAL failure (no live inputs) `rebuild_bus` turns this
+    /// into the bus's `last_error`; on a PARTIAL failure it only logs the
+    /// message (setting `last_error` would make the frontend flag the whole,
+    /// otherwise-working bus as errored). Surfacing partial failures per-input
+    /// in the UI needs a dedicated status field — tracked as a follow-up.
     pub error: Option<String>,
 }
 
