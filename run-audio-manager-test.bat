@@ -79,6 +79,14 @@ rem generate, breaking audiopus_sys/aws-lc-rs outside a VS dev shell.
 set "CMAKE_GENERATOR=Visual Studio 17 2022"
 set "CMAKE_GENERATOR_PLATFORM=x64"
 
+echo Building the phone client bundle (dist-phone)...
+call pnpm run build:phone
+if errorlevel 1 (
+  echo ERROR: phone client build failed. Paired phones would load a blank page.
+  goto :fail
+)
+echo.
+
 echo Starting AudioManager in Tauri dev mode...
 echo Vite will use http://localhost:1420.
 echo Close the AudioManager window or press Ctrl+C in this terminal to stop.
