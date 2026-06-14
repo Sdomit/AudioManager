@@ -199,11 +199,21 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adap
             // L/R shifts parity on the pair-popping consumer and swaps channels
             // permanently. Drop the whole frame instead, counting its samples so
             // ring_glitches keeps its units (#PR31-1).
+            let mut dropped = 0u32;
             for frame in scratch.chunks_exact(ch) {
                 if sub.producer.remaining() >= ch {
                     sub.producer.push_slice(frame);
-                } else if si == 0 {
-                    overflow += ch as u64;
+                } else {
+                    dropped += ch as u32;
+                }
+            }
+            if dropped > 0 {
+                // Surface phone overruns in the per-input overrun telemetry every
+                // device/loopback input feeds (get_system_status), not only the
+                // feed-local ring_glitches counter.
+                sub.peak[sub.index].overrun.fetch_add(dropped, Ordering::Relaxed);
+                if si == 0 {
+                    overflow += dropped as u64;
                 }
             }
             store_max(&sub.peak[sub.index].input_peak, block_peak);
