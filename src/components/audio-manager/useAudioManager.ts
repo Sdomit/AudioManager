@@ -17,7 +17,13 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import * as ipc from "../../ipc/commands";
 import { busRoleFor, uiVolumeToBackend } from "./adapters";
-import { defaultDspConfig, defaultEq, defaultLimiter } from "./dspDefaults";
+import {
+  b1ProtectLimiter,
+  defaultDspConfig,
+  defaultEq,
+  defaultLimiter,
+  streamVoiceConfig,
+} from "./dspDefaults";
 import { mockStreamSetupSteps } from "./mockData";
 import {
   hydrate as fetchHydrate,
@@ -935,6 +941,19 @@ export function useAudioManager(): UseAudioManager {
     [getInput, scheduleWrite],
   );
 
+  // Apply the Stream Voice profile to an input AND arm B1 protection in one
+  // action (#33). Both writes go through the existing setInputDsp fan-out and
+  // setBusLimiter paths, so they clamp, publish live, and persist like any other
+  // edit. Config-only — never starts an engine.
+  const applyStreamVoice = useCallback(
+    (id: string) => {
+      recordHistory(`stream_voice:${id}`);
+      setInputDsp(id, streamVoiceConfig());
+      setBusLimiter("B1", b1ProtectLimiter());
+    },
+    [setInputDsp, setBusLimiter],
+  );
+
   const removeInput = useCallback(
     (id: string) => {
       recordHistory();
@@ -1347,6 +1366,7 @@ export function useAudioManager(): UseAudioManager {
     setInputGain,
     setInputMuted,
     setInputDsp,
+    applyStreamVoice,
     removeInput,
     addInput,
     toggleSend,

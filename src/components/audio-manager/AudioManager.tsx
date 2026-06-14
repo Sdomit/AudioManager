@@ -425,6 +425,7 @@ export function AudioManager() {
               am.setInputMuted(id, !input.muted);
             }}
             onInputDsp={am.setInputDsp}
+            onApplyStreamVoice={am.applyStreamVoice}
             onRemoveInput={am.removeInput}
             onToggleSend={am.toggleSend}
             onSendGainChange={am.setSendGain}

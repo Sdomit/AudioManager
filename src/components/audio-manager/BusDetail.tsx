@@ -7,7 +7,7 @@ import {
   ChevronRightIcon,
 } from "./Icon";
 import { BusEqControls, BusLimiterControls } from "./DspControls";
-import { BUFFER_SIZE_OPTIONS } from "./dspDefaults";
+import { b1ProtectLimiter, BUFFER_SIZE_OPTIONS } from "./dspDefaults";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
 import { RecordButton } from "./RecordButton";
@@ -70,6 +70,14 @@ export function BusDetail({
   const accentMuted = `var(--am-bus-${bus.id.toLowerCase()}-muted)`;
   const busOutSpec: TapSpec = { kind: "bus_out", bus_id: bus.id };
   const engineRunning = bus.state === "running" || bus.state === "clipping";
+  // B1 is the stream bus (#33). "Protection" == its final limiter armed at
+  // -1 dBFS — derived straight from the limiter state, no separate flag.
+  const isStreamBus = bus.id === "B1";
+  const protectionArmed = bus.limiter.enabled;
+  const toggleProtection = () =>
+    onLimiterChange(
+      protectionArmed ? { ...bus.limiter, enabled: false } : b1ProtectLimiter(),
+    );
 
   return (
     <div
@@ -90,7 +98,15 @@ export function BusDetail({
             <h3 className={styles.title}>{bus.label}</h3>
           </div>
         </div>
-        <StatePill state={bus.state} />
+        <div className={styles.headerPills}>
+          {isStreamBus &&
+            (protectionArmed ? (
+              <Pill tone="success">Protected</Pill>
+            ) : (
+              <Pill tone="warning">Unprotected</Pill>
+            ))}
+          <StatePill state={bus.state} />
+        </div>
       </header>
 
       {/* Device */}
@@ -205,6 +221,19 @@ export function BusDetail({
             {bus.underruns} under · {bus.overruns} over
           </span>
         </div>
+        {isStreamBus && (
+          <div className={styles.procRow}>
+            <span className={styles.procLabel}>Protection</span>
+            <button
+              className={`${styles.actionBtn} ${protectionArmed ? styles.actionActive : ""}`}
+              onClick={toggleProtection}
+              aria-pressed={protectionArmed}
+              title="Final limiter at -1 dBFS — guarantees the stream feed never clips"
+            >
+              {protectionArmed ? "Protected (-1 dB)" : "Protect"}
+            </button>
+          </div>
+        )}
         <BusEqControls eq={bus.eq} onChange={onEqChange} />
         <BusLimiterControls limiter={bus.limiter} onChange={onLimiterChange} />
       </section>

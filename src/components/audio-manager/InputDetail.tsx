@@ -32,6 +32,7 @@ interface InputDetailProps {
   onSendGainChange: (busId: BusId, v: number) => void;
   onSendMuted: (busId: BusId, muted: boolean) => void;
   onDspChange: (dsp: DspConfig) => void;
+  onApplyStreamVoice: () => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
   /** When true, hide the in-panel DSP chain — node view edits fx via canvas. */
@@ -59,6 +60,7 @@ export function InputDetail({
   onSendGainChange,
   onSendMuted,
   onDspChange,
+  onApplyStreamVoice,
   onStartRecording,
   onStopRecording,
   inputOnly,
@@ -157,6 +159,7 @@ export function InputDetail({
           <InputDspControls
             dsp={input.dsp}
             onChange={onDspChange}
+            onStreamVoice={onApplyStreamVoice}
           />
         </section>
       )}

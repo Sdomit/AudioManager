@@ -180,6 +180,11 @@ export interface AudioManagerActions {
   setInputMuted: (id: string, muted: boolean) => void;
   /** Update the per-input DSP chain (#32). Live, no restart. */
   setInputDsp: (id: string, dsp: DspConfig) => void;
+  /**
+   * Apply the Stream Voice profile to an input and arm B1 protection (final
+   * -1 dBFS limiter on the B1 bus). Config-only — never starts audio (#33).
+   */
+  applyStreamVoice: (id: string) => void;
   removeInput: (id: string) => void;
   /**
    * Add an input. AudioManager opens the input device picker and calls

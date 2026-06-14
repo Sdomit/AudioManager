@@ -28,6 +28,7 @@ import {
   BAND_KINDS,
   bandUsesGain,
   bandUsesQ,
+  defaultDspConfig,
   defaultStereo,
   DSP_RANGE,
   isStereoActive,
@@ -394,9 +395,12 @@ export function BusLimiterControls({
 export function InputDspControls({
   dsp,
   onChange,
+  onStreamVoice,
 }: {
   dsp: DspConfig;
   onChange: (next: DspConfig) => void;
+  /** When provided, render a "Stream Voice" preset button (#33) + Reset. */
+  onStreamVoice?: () => void;
 }) {
   const setDenoise = (patch: Partial<DenoiseConfig>) =>
     onChange({ ...dsp, denoise: { ...dsp.denoise, ...patch } });
@@ -413,6 +417,27 @@ export function InputDspControls({
 
   return (
     <div className={styles.chain}>
+      {onStreamVoice && (
+        <div className={styles.presetRow}>
+          <button
+            type="button"
+            className={styles.presetBtn}
+            onClick={onStreamVoice}
+            title="Apply the Stream Voice chain (HP → gate → EQ → comp) and arm B1 protection"
+          >
+            Stream Voice
+          </button>
+          <button
+            type="button"
+            className={styles.stereoReset}
+            onClick={() => onChange(defaultDspConfig())}
+            title="Reset all stages to defaults (bypassed)"
+          >
+            Reset
+          </button>
+        </div>
+      )}
+
       <EffectSection
         title="Noise suppression (AI)"
         enabled={dsp.denoise.enabled}

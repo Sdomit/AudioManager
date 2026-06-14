@@ -145,6 +145,53 @@ export function defaultDspConfig(): DspConfig {
   };
 }
 
+/** Broadcast-ready voice profile (#33): HP → gate → EQ → comp, with the limiter
+ *  left off (the bus-side B1 limiter owns final protection). Pre-clamped to legal
+ *  ranges, so the backend clamp is a no-op. */
+export function streamVoiceConfig(): DspConfig {
+  return {
+    denoise: defaultDenoise(),
+    hpf: { enabled: true, freq_hz: 80 },
+    gate: {
+      enabled: true,
+      threshold_db: -45,
+      attack_ms: 2,
+      release_ms: 150,
+      hold_ms: 80,
+    },
+    eq: {
+      enabled: true,
+      bands: [
+        // Low shelf: tame proximity boom.
+        { enabled: true, kind: "low_shelf", freq_hz: 120, q: 0.7, gain_db: -1.5 },
+        // Bell: presence lift for intelligibility.
+        { enabled: true, kind: "peaking", freq_hz: 3000, q: 1.0, gain_db: 2.0 },
+        // High shelf: air.
+        { enabled: true, kind: "high_shelf", freq_hz: 10000, q: 0.7, gain_db: 1.5 },
+        // 4th band unused by the profile.
+        { enabled: false, kind: "high_shelf", freq_hz: 8000, q: 0.9, gain_db: 0 },
+      ],
+    },
+    compressor: {
+      enabled: true,
+      threshold_db: -18,
+      ratio: 3,
+      attack_ms: 5,
+      release_ms: 120,
+      makeup_db: 4,
+    },
+    limiter: defaultLimiter(),
+    order: [...DEFAULT_DSP_ORDER],
+    stereo: defaultStereo(),
+  };
+}
+
+/** B1 "protection" limiter (#33): a final brick-wall at -1 dBFS so the stream
+ *  feed never clips. "Protected" == this limiter being enabled on the B1 bus. */
+export function b1ProtectLimiter(): LimiterConfig {
+  return { ...defaultLimiter(), enabled: true, threshold_db: -1, release_ms: 60 };
+}
+
 /** Slider bounds: [min, max, step]. UI travel only; backend re-clamps. */
 export const DSP_RANGE = {
   hpfFreq: [20, 1000, 1] as const,

@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { BusLimiterControls, InputDspControls } from "./DspControls";
-import { defaultDspConfig, defaultLimiter } from "./dspDefaults";
+import {
+  b1ProtectLimiter,
+  defaultDspConfig,
+  defaultLimiter,
+  streamVoiceConfig,
+} from "./dspDefaults";
 
 afterEach(cleanup);
 
@@ -95,7 +100,8 @@ describe("InputDspControls", () => {
 
     fireEvent.change(screen.getByLabelText("Pan"), { target: { value: "1" } });
 
-    const next = onChange.mock.calls.at(-1)![0];
+    const calls = onChange.mock.calls;
+    const next = calls[calls.length - 1][0];
     expect(next.stereo.pan).toBe(1);
     expect(next.limiter.threshold_db).toBe(-1);
   });
@@ -108,6 +114,64 @@ describe("InputDspControls", () => {
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].stereo.mono).toBe(true);
+  });
+
+  it("shows the Stream Voice + Reset preset row only when onStreamVoice is given", () => {
+    const { rerender } = render(
+      <InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />,
+    );
+    expect(screen.queryByText("Stream Voice")).toBeNull();
+
+    rerender(
+      <InputDspControls
+        dsp={defaultDspConfig()}
+        onChange={() => {}}
+        onStreamVoice={() => {}}
+      />,
+    );
+    expect(screen.getByText("Stream Voice")).toBeTruthy();
+    expect(
+      screen.getByTitle("Reset all stages to defaults (bypassed)"),
+    ).toBeTruthy();
+  });
+
+  it("Stream Voice button calls onStreamVoice; Reset emits the default config", () => {
+    const onStreamVoice = vi.fn();
+    const onChange = vi.fn();
+    render(
+      <InputDspControls
+        dsp={streamVoiceConfig()}
+        onChange={onChange}
+        onStreamVoice={onStreamVoice}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Stream Voice"));
+    expect(onStreamVoice).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTitle("Reset all stages to defaults (bypassed)"));
+    expect(onChange).toHaveBeenCalledWith(defaultDspConfig());
+  });
+});
+
+describe("streamVoiceConfig / b1ProtectLimiter (#33 locked spec)", () => {
+  it("Stream Voice enables HP→gate→EQ→comp, leaves the input limiter off", () => {
+    const c = streamVoiceConfig();
+    expect(c.hpf.enabled).toBe(true);
+    expect(c.hpf.freq_hz).toBe(80);
+    expect(c.gate.enabled).toBe(true);
+    expect(c.eq.enabled).toBe(true);
+    expect(c.eq.bands.filter((b) => b.enabled).length).toBe(3);
+    expect(c.compressor.enabled).toBe(true);
+    expect(c.compressor.makeup_db).toBe(4);
+    // The per-input limiter stays off — final protection lives on the B1 bus.
+    expect(c.limiter.enabled).toBe(false);
+  });
+
+  it("B1 protection limiter is a -1 dBFS brick wall", () => {
+    const lim = b1ProtectLimiter();
+    expect(lim.enabled).toBe(true);
+    expect(lim.threshold_db).toBe(-1);
   });
 });
 
