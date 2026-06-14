@@ -300,10 +300,22 @@ fn take_peak(target: &AtomicU32) -> f32 {
 /// exceed `max_backlog`, in which case it trims toward `target_backlog` (both in
 /// samples). Pure so the resync policy is unit-tested without running streams.
 #[inline]
-fn resync_drop(fill: usize, need: usize, target_backlog: usize, max_backlog: usize) -> usize {
+fn resync_drop(
+    fill: usize,
+    need: usize,
+    target_backlog: usize,
+    max_backlog: usize,
+    frame: usize,
+) -> usize {
     let post_read = fill.saturating_sub(need);
     if post_read > max_backlog {
-        post_read - target_backlog
+        let drop = post_read - target_backlog;
+        // Discard whole frames only. The ring fill can be odd (a producer that
+        // pushed a partial frame on overrun), so trimming an unrounded count
+        // could remove an odd number of samples and shift L/R parity on the
+        // pair-popping consumer — swapping channels permanently (#PR31-1).
+        let frame = frame.max(1);
+        drop - (drop % frame)
     } else {
         0
     }
@@ -808,6 +820,7 @@ pub fn start(
                                 need,
                                 target_backlog_frames * in_ch,
                                 max_backlog_frames * in_ch,
+                                in_ch,
                             );
                             if drop_n > 0 {
                                 let dropped = consumers[i].0.discard(drop_n);
@@ -1203,7 +1216,7 @@ mod tests {
     #[test]
     fn resync_drop_zero_when_backlog_healthy() {
         // post_read = 1000 - 200 = 800, below max 2000 → no trim.
-        assert_eq!(resync_drop(1000, 200, 600, 2000), 0);
+        assert_eq!(resync_drop(1000, 200, 600, 2000, 2), 0);
     }
 
     #[test]
@@ -1242,7 +1255,7 @@ mod tests {
     #[test]
     fn resync_drop_at_exactly_max_does_not_trim() {
         // post_read == max is not "exceeds" → no trim (only > max fires).
-        assert_eq!(resync_drop(2200, 200, 600, 2000), 0);
+        assert_eq!(resync_drop(2200, 200, 600, 2000, 2), 0);
     }
 
     #[test]
@@ -1269,13 +1282,23 @@ mod tests {
     fn resync_drop_trims_to_target_when_above_max() {
         // post_read = 5000 - 200 = 4800 > max 2000 → trim toward target 600.
         // dropped = 4800 - 600 = 4200, leaving target backlog after the read.
-        assert_eq!(resync_drop(5000, 200, 600, 2000), 4200);
+        assert_eq!(resync_drop(5000, 200, 600, 2000, 2), 4200);
     }
 
     #[test]
     fn resync_drop_saturates_when_need_exceeds_fill() {
         // fill < need → post_read saturates to 0 → no trim, no underflow.
-        assert_eq!(resync_drop(100, 480, 600, 2000), 0);
+        assert_eq!(resync_drop(100, 480, 600, 2000, 2), 0);
+    }
+
+    #[test]
+    fn resync_drop_floors_to_whole_frames() {
+        // An odd ring fill yields an odd raw drop (post_read 4801 - target 600 =
+        // 4201); it MUST be floored to 4200 so the trim removes whole stereo
+        // frames and can't swap L/R on the pair-popping consumer (#PR31-1).
+        assert_eq!(resync_drop(5001, 200, 600, 2000, 2), 4200);
+        // Mono (frame == 1): no rounding, every sample is its own frame.
+        assert_eq!(resync_drop(5001, 200, 600, 2000, 1), 4201);
     }
 
     #[test]
