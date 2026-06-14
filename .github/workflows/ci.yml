@@ -37,6 +37,13 @@ jobs:
   rust:
     name: Rust (windows)
     runs-on: windows-latest
+    # Pin the CMake generator to Ninja. Without this, cmake-rs (audiopus ->
+    # libopus) auto-selects the newest Visual Studio generator on the runner
+    # (e.g. "Visual Studio 18 2026"), which the bundled CMake cannot create, so
+    # the libopus build script panics. Ninja + cl (from msvc-dev-cmd) is the same
+    # combination scripts/win-dev-shell.ps1 uses locally.
+    env:
+      CMAKE_GENERATOR: Ninja
     defaults:
       run:
         working-directory: src-tauri
@@ -49,9 +56,9 @@ jobs:
         with:
           workspaces: src-tauri
       # audiopus (Phase 2 phone-audio receiver) builds libopus from C via CMake,
-      # which needs cl + cmake + ninja on PATH. This sets up the MSVC dev env so
-      # the libopus build script can configure. See scripts/win-dev-shell.ps1 for
-      # the local equivalent.
+      # which needs cl + cmake + ninja on PATH. msvc-dev-cmd sets up cl; cmake and
+      # ninja are preinstalled on windows-latest. See scripts/win-dev-shell.ps1
+      # for the local equivalent.
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Build
         run: cargo check --all-targets
