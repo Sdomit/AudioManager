@@ -85,6 +85,7 @@ impl Denoiser {
     }
 
     /// True when the engine rate lets the denoiser run (48 kHz).
+    #[cfg(test)]
     pub fn is_supported(&self) -> bool {
         self.sr_ok
     }

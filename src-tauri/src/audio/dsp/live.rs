@@ -450,6 +450,7 @@ impl InputDspShared {
 
     /// Seqlock read. Returns `None` if a write is in flight or raced (caller keeps
     /// the previous state). Does not consult `last_gen` — see [`Self::reload_if_changed`].
+    #[cfg(test)]
     pub fn try_snapshot(&self) -> Option<InputDspSnapshot> {
         let s1 = self.generation.load(RELAXED);
         if s1 & 1 != 0 {
@@ -729,6 +730,8 @@ impl InputDspSlots {
 
     /// Process one stereo frame through the enabled effects in chain order.
     /// `channels` is 1 or 2. Empty/bypassed when nothing is enabled.
+    /// Per-frame reference path; the realtime engine uses `process_block`.
+    #[cfg(test)]
     #[inline]
     pub fn process(&mut self, buf: &mut [f32; 2], channels: usize) {
         if self.hpf.is_enabled() {
@@ -880,6 +883,12 @@ impl BusDspSlots {
     /// bit-identical to the per-frame reference: on x86_64 this path enables
     /// FTZ/DAZ (see [`enable_flush_denormals`]), so a near-silent subnormal tail
     /// snaps to zero here but lingers in [`Self::process`].
+    ///
+    /// The mixer currently applies bus DSP via the per-frame [`Self::process`]
+    /// (which inherits FTZ/DAZ from the input block path run earlier in the same
+    /// callback), so this block variant is a retained-but-unwired parallel of
+    /// [`InputDspSlots::process_block`].
+    #[allow(dead_code)]
     #[inline]
     pub fn process_block(&mut self, interleaved: &mut [f32], channels: usize) {
         enable_flush_denormals();

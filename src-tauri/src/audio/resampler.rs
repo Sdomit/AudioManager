@@ -41,7 +41,9 @@ const DRIFT_RATIO_CLAMP: f64 = 0.01;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResampleQuality {
     /// Linear interpolation between the two most recent input frames.
-    /// 1-frame priming latency, cheapest.
+    /// 1-frame priming latency, cheapest. Reserved for a future UltraLow path;
+    /// the mixer currently always uses `Quality`, so this is exercised in tests.
+    #[allow(dead_code)]
     Fast,
     /// 4-point Catmull-Rom cubic. ~Halves linear's RMS error; 3-frame priming.
     Quality,

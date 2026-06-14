@@ -59,6 +59,7 @@ pub enum LatencyMode {
 }
 
 impl LatencyMode {
+    #[cfg(test)]
     pub const ALL: [LatencyMode; 3] =
         [LatencyMode::Stable, LatencyMode::Low, LatencyMode::UltraLow];
 
@@ -79,14 +80,6 @@ impl LatencyMode {
             Some(256) => Some(LatencyMode::Low),
             Some(128) => Some(LatencyMode::UltraLow),
             Some(_) => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LatencyMode::Stable => "stable",
-            LatencyMode::Low => "low",
-            LatencyMode::UltraLow => "ultra-low",
         }
     }
 

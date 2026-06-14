@@ -161,6 +161,7 @@ impl BiquadFilter {
     }
 
     /// 2nd-order Butterworth low-pass.
+    #[cfg(test)]
     pub fn low_pass(freq_hz: f32, sample_rate: f32) -> Self {
         Self::from_coeffs(Coeffs::low_pass(freq_hz, BUTTERWORTH_Q, sample_rate))
     }
@@ -171,16 +172,19 @@ impl BiquadFilter {
     }
 
     /// Low shelving filter. gain_db: boost/cut below freq_hz.
+    #[cfg(test)]
     pub fn low_shelf(freq_hz: f32, gain_db: f32, sample_rate: f32) -> Self {
         Self::from_coeffs(Coeffs::low_shelf(freq_hz, gain_db, sample_rate))
     }
 
     /// High shelving filter. gain_db: boost/cut above freq_hz.
+    #[cfg(test)]
     pub fn high_shelf(freq_hz: f32, gain_db: f32, sample_rate: f32) -> Self {
         Self::from_coeffs(Coeffs::high_shelf(freq_hz, gain_db, sample_rate))
     }
 
     /// Notch (band-reject) filter. q sets the notch width.
+    #[cfg(test)]
     pub fn notch(freq_hz: f32, q: f32, sample_rate: f32) -> Self {
         Self::from_coeffs(Coeffs::notch(freq_hz, q, sample_rate))
     }

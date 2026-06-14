@@ -53,6 +53,7 @@ pub enum TapSpec {
 
 impl TapSpec {
     /// Bus this tap lives inside (for `start_recording` engine lookup).
+    #[allow(dead_code)] // tap→bus lookup helper, retained for engine routing
     pub fn bus(&self) -> Option<BusId> {
         match self {
             TapSpec::InputPre { .. } => None,
@@ -73,6 +74,7 @@ impl TapSpec {
     }
 
     /// Human description (used for ARIA / errors).
+    #[allow(dead_code)] // human-readable tap label for ARIA/error surfaces
     pub fn label(&self) -> String {
         match self {
             TapSpec::InputPre { device_id } => format!("Input '{device_id}' (pre)"),
