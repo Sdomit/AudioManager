@@ -112,13 +112,14 @@ export function AudioManager() {
     if (sel.kind === "bus") {
       busDevice = state.buses.find((b) => b.id === sel.busId)?.device;
     } else if (sel.kind === "input") {
-      // Prefer a routed bus that is actually running — a disabled/unconfigured
-      // routed bus has no live engine — then any configured routed bus.
+      // A routed bus has a live engine when it is enabled + configured (covers
+      // running / clipping / silent); prefer those — a disabled or unconfigured
+      // routed bus has no engine — then any configured routed bus.
       const routedBuses = state.sends
         .filter((s) => s.inputId === sel.inputId)
         .map((s) => state.buses.find((b) => b.id === s.busId));
       const chosen =
-        routedBuses.find((b) => b?.state === "running") ??
+        routedBuses.find((b) => b?.enabled && b?.device) ??
         routedBuses.find((b) => b?.device);
       busDevice = chosen?.device;
     }
