@@ -228,12 +228,25 @@ impl DspEffect for Limiter {
         };
         self.envelope = self.envelope * coeff + peak * (1.0 - coeff);
 
-        if self.envelope > self.threshold_lin {
-            let gain = self.threshold_lin / self.envelope;
-            buf[0] *= gain;
-            if channels == 2 {
-                buf[1] *= gain;
-            }
+        // Smoothed gain reduction for clean ballistics.
+        let mut gain = if self.envelope > self.threshold_lin {
+            self.threshold_lin / self.envelope
+        } else {
+            1.0
+        };
+        // Brick-wall guarantee. The smoothed envelope lags a fast transient — and
+        // during attack it can still sit below the threshold, so the smoothed gain
+        // alone applies no reduction and a full-scale sample punches straight
+        // through the ceiling. Clamp the gain to the instantaneous peak so THIS
+        // sample cannot exceed the threshold — the actual brick wall. Only bites on
+        // transients the envelope hasn't caught; a no-op in steady state (where
+        // `peak * gain` already ≈ threshold) and on signal below the ceiling.
+        if peak * gain > self.threshold_lin {
+            gain = self.threshold_lin / peak;
+        }
+        buf[0] *= gain;
+        if channels == 2 {
+            buf[1] *= gain;
         }
     }
 
@@ -311,5 +324,51 @@ mod tests {
         lim.set_coeffs(lc);
         assert_eq!(lim.envelope, env);
         assert!((lim.threshold_lin - db_to_lin(-1.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn limiter_never_overshoots_on_a_transient() {
+        // After silence the smoothed envelope sits near zero; a sudden full-scale
+        // sample must still be held at/under the ceiling by the brick-wall clamp.
+        // The pre-fix limiter applied NO gain here (envelope < threshold) and let
+        // the sample through at full scale.
+        let mut lim = Limiter::output(48_000.0);
+        let ceiling = db_to_lin(-0.3);
+        for _ in 0..16 {
+            lim.process(&mut [0.0, 0.0], 2);
+        }
+        let mut buf = [1.0, -1.0];
+        lim.process(&mut buf, 2);
+        assert!(
+            buf[0].abs() <= ceiling + 1e-6 && buf[1].abs() <= ceiling + 1e-6,
+            "limiter overshot the ceiling on a transient: {buf:?} (ceiling {ceiling})"
+        );
+    }
+
+    #[test]
+    fn limiter_holds_ceiling_through_sustained_overload() {
+        // Every sample of a sustained over-ceiling signal must stay <= ceiling.
+        let mut lim = Limiter::output(48_000.0);
+        let ceiling = db_to_lin(-0.3);
+        for i in 0..256 {
+            let mut buf = [1.2, -1.2];
+            lim.process(&mut buf, 2);
+            assert!(
+                buf[0].abs() <= ceiling + 1e-6,
+                "sample {i} overshot: {} > {ceiling}",
+                buf[0]
+            );
+        }
+    }
+
+    #[test]
+    fn limiter_leaves_signal_below_ceiling_untouched() {
+        // Below the threshold the clamp is a no-op: gain stays 1.0, signal passes.
+        let mut lim = Limiter::output(48_000.0);
+        for _ in 0..64 {
+            let mut buf = [0.5, -0.4];
+            lim.process(&mut buf, 2);
+            assert_eq!(buf, [0.5, -0.4], "sub-ceiling signal must pass unchanged");
+        }
     }
 }
