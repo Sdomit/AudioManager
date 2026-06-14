@@ -277,10 +277,13 @@ pub struct StreamAnalyzer {
     lufs_momentary: f32,
     lufs_short: f32,
     true_peak_lin: f32,
+    /// True when the output device is mono; the mixer feeds (ch0, ch0), so
+    /// K-energy must count one channel (summing both reads ~+3 LU hot).
+    mono: bool,
 }
 
 impl StreamAnalyzer {
-    pub fn new(sample_rate: u32) -> Self {
+    pub fn new(sample_rate: u32, channels: usize) -> Self {
         let sample_rate = sample_rate.max(1);
         let fs = sample_rate as f32;
         let mut k_shelf = KBiquad::default();
@@ -306,6 +309,7 @@ impl StreamAnalyzer {
             lufs_momentary: SILENCE_FLOOR_DB,
             lufs_short: SILENCE_FLOOR_DB,
             true_peak_lin: 0.0,
+            mono: channels <= 1,
         }
     }
 
@@ -316,7 +320,13 @@ impl StreamAnalyzer {
         // K-weighted mean square (sum of both channel energies, BS.1770).
         let kl = self.k_hp.process(0, self.k_shelf.process(0, l));
         let kr = self.k_hp.process(1, self.k_shelf.process(1, r));
-        self.k_acc += (kl * kl + kr * kr) as f64;
+        // BS.1770 sums channel energies; a mono output is fed as (ch0, ch0),
+        // so count one channel to avoid a ~+3 LU over-read.
+        self.k_acc += if self.mono {
+            (kl * kl) as f64
+        } else {
+            (kl * kl + kr * kr) as f64
+        };
 
         // Un-weighted mean square averaged across channels.
         self.rms_acc += ((l * l + r * r) * 0.5) as f64;
@@ -410,7 +420,7 @@ mod tests {
 
     #[test]
     fn rms_of_full_scale_sine_is_minus_3db() {
-        let mut an = StreamAnalyzer::new(FS);
+        let mut an = StreamAnalyzer::new(FS, 2);
         feed_sine(&mut an, 1.0, 997.0, 4.0);
         assert!(
             (an.rms_db() - (-3.01)).abs() < 0.2,
@@ -425,7 +435,7 @@ mod tests {
         // (-3.01 per channel + 3.01 channel sum - 0.69 offset ≈ -0.7,
         // plus ~+0.6 dB of K-shelf gain at 997 Hz ≈ -0.1). Allow slack for
         // the RBJ-approximated filters.
-        let mut an = StreamAnalyzer::new(FS);
+        let mut an = StreamAnalyzer::new(FS, 2);
         feed_sine(&mut an, 1.0, 997.0, 4.0);
         assert!(
             an.lufs_short() > -2.0 && an.lufs_short() < 1.5,
@@ -437,9 +447,9 @@ mod tests {
     #[test]
     fn lufs_tracks_level_changes_linearly() {
         // -20 dB amplitude drop must read ~20 LU lower.
-        let mut loud = StreamAnalyzer::new(FS);
+        let mut loud = StreamAnalyzer::new(FS, 2);
         feed_sine(&mut loud, 1.0, 997.0, 4.0);
-        let mut quiet = StreamAnalyzer::new(FS);
+        let mut quiet = StreamAnalyzer::new(FS, 2);
         feed_sine(&mut quiet, 0.1, 997.0, 4.0);
         let diff = loud.lufs_short() - quiet.lufs_short();
         assert!(
@@ -450,7 +460,7 @@ mod tests {
 
     #[test]
     fn silence_reports_floor_and_no_signal() {
-        let mut an = StreamAnalyzer::new(FS);
+        let mut an = StreamAnalyzer::new(FS, 2);
         for _ in 0..FS {
             an.process_frame(0.0, 0.0);
         }
@@ -498,7 +508,7 @@ mod tests {
     #[test]
     fn analyzer_true_peak_is_windowed_not_drained() {
         // fs/4 sine sampled between extrema: inter-sample peak ≈ 1.0.
-        let mut an = StreamAnalyzer::new(FS);
+        let mut an = StreamAnalyzer::new(FS, 2);
         for i in 0..(FS / 2) {
             let x = (2.0 * std::f32::consts::PI * (i as f32 + 0.5) / 4.0).sin();
             an.process_frame(x, x);
