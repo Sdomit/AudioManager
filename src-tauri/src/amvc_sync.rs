@@ -327,6 +327,7 @@ fn com_apply_targets(plan: &SyncPlan) -> Result<u32, String> {
 
 /// Read every render endpoint's live composed friendly name (COM). Diagnostic.
 #[cfg(windows)]
+#[allow(dead_code)] // diagnostic; called only by ignored live-COM tests
 pub fn com_read_friendly_names() -> Result<Vec<(String, String)>, String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -355,6 +356,7 @@ pub fn com_read_friendly_names() -> Result<Vec<(String, String)>, String> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)] // diagnostic helper for com_read_friendly_names (ignored tests)
 fn read_friendly_name(store: &IPropertyStore) -> Option<String> {
     unsafe {
         let pv = store.GetValue(&PKEY_Device_FriendlyName).ok()?;

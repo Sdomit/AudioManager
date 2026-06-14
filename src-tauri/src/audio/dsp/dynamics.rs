@@ -195,6 +195,7 @@ impl Limiter {
     }
 
     /// Typical output limiter at −0.3 dBFS.
+    #[cfg(test)]
     pub fn output(sample_rate: f32) -> Self {
         Self::new(-0.3, 0.5, 100.0, sample_rate)
     }
