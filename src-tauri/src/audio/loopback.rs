@@ -63,7 +63,7 @@ mod imp {
 
     use ringbuf::{Producer, RingBuffer};
 
-    use crate::audio::mixer::store_max;
+    use crate::audio::mixer::{push_frames, store_max};
 
     /// One bus attached to a shared capture: its ring producer and the input-
     /// meter slot to update.
@@ -339,13 +339,8 @@ mod imp {
             for sub in guard.iter_mut() {
                 // Push whole stereo frames only. Pushing samples singly lets a
                 // ring overrun drop one of L/R, shifting frame parity on the
-                // pair-popping consumer and swapping channels permanently. Drop
-                // the whole frame instead when the ring can't hold it (#PR31-1).
-                for frame in scratch.chunks_exact(LOOPBACK_CHANNELS as usize) {
-                    if sub.producer.remaining() >= frame.len() {
-                        sub.producer.push_slice(frame);
-                    }
-                }
+                // pair-popping consumer and swapping channels permanently (#PR31-1).
+                push_frames(&mut sub.producer, &scratch, LOOPBACK_CHANNELS as usize);
                 store_max(&sub.peak[sub.index].input_peak, block_peak);
             }
         }

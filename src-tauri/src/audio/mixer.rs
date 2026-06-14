@@ -189,6 +189,26 @@ pub(crate) fn store_max(target: &AtomicU32, value: f32) {
     }
 }
 
+/// Push interleaved samples to `producer` one whole frame at a time, dropping
+/// any frame that does not fully fit. A per-sample push lets a ring overrun
+/// split a frame (drop one of L/R), which shifts parity on the pair-popping
+/// consumer and swaps channels permanently — pushing whole frames only keeps
+/// the stream frame-aligned no matter when the ring fills (#PR31-1).
+pub(crate) fn push_frames(
+    producer: &mut ringbuf::Producer<f32>,
+    interleaved: &[f32],
+    channels: usize,
+) {
+    if channels == 0 {
+        return;
+    }
+    for frame in interleaved.chunks_exact(channels) {
+        if producer.remaining() >= channels {
+            producer.push_slice(frame);
+        }
+    }
+}
+
 fn take_peak(target: &AtomicU32) -> f32 {
     f32::from_bits(target.swap(0.0f32.to_bits(), Ordering::Relaxed))
 }
@@ -330,20 +350,15 @@ pub fn start(
                                 &in_stream_cfg,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let mut block_peak = 0.0f32;
-                                    // Push whole frames only so a ring overrun
-                                    // can't drop a partial frame and swap
-                                    // channels on the consumer (#PR31-1).
-                                    for frame in data.chunks_exact(in_channels) {
-                                        for &s in frame {
-                                            let abs = s.abs();
-                                            if abs > block_peak {
-                                                block_peak = abs;
-                                            }
-                                        }
-                                        if producer.remaining() >= in_channels {
-                                            producer.push_slice(frame);
+                                    for &s in data {
+                                        let abs = s.abs();
+                                        if abs > block_peak {
+                                            block_peak = abs;
                                         }
                                     }
+                                    // Frame-atomic push so an overrun never swaps
+                                    // channels on the consumer (#PR31-1).
+                                    push_frames(&mut producer, data, in_channels);
                                     store_max(&peak[i].input_peak, block_peak);
                                 },
                                 err_cb,
@@ -375,9 +390,7 @@ pub fn start(
                                         resampler.process_frame(frame, |out| {
                                             // Frame-atomic push: never split a
                                             // resampled frame across an overrun (#PR31-1).
-                                            if producer.remaining() >= in_channels {
-                                                producer.push_slice(&out[..in_channels]);
-                                            }
+                                            push_frames(&mut producer, &out[..in_channels], in_channels);
                                         });
                                     }
                                     store_max(&peak[i].input_peak, block_peak);
@@ -796,6 +809,57 @@ mod tests {
         assert_eq!(idx, 1);
         assert_eq!(channels, 2);
         assert!(engine.input_index("missing").is_none());
+    }
+
+    #[test]
+    fn push_frames_never_splits_a_frame_on_overrun() {
+        // Odd-capacity ring: a per-sample push could leave one sample of a
+        // stereo frame behind on overrun and swap L/R for the rest of the
+        // stream. push_frames must drop the WHOLE frame instead, so every
+        // popped pair stays aligned (#PR31-1).
+        let ring = RingBuffer::<f32>::new(5);
+        let (mut producer, mut consumer) = ring.split();
+        // 4 stereo frames, each (n, -n) — more than the ring can hold.
+        let data = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0];
+        push_frames(&mut producer, &data, 2);
+
+        let mut popped = Vec::new();
+        while let Some(s) = consumer.pop() {
+            popped.push(s);
+        }
+        assert!(!popped.is_empty(), "some frames should have been pushed");
+        assert_eq!(popped.len() % 2, 0, "no partial frame may be pushed");
+        for pair in popped.chunks_exact(2) {
+            assert_eq!(pair[0], -pair[1], "L/R parity preserved across overrun");
+        }
+    }
+
+    #[test]
+    fn push_frames_drops_whole_frame_when_one_slot_free() {
+        // Exactly one free slot: a per-sample push would write the L sample and
+        // drop the R, leaking a half-frame and swapping parity. push_frames must
+        // drop the whole frame, leaving the slot untouched (#PR31-1).
+        let ring = RingBuffer::<f32>::new(8);
+        let (mut producer, mut consumer) = ring.split();
+        for _ in 0..(producer.remaining() - 1) {
+            producer.push(0.0).unwrap();
+        }
+        assert_eq!(producer.remaining(), 1);
+        push_frames(&mut producer, &[9.0, -9.0], 2);
+        assert_eq!(producer.remaining(), 1, "no partial sample pushed");
+        let mut vals = Vec::new();
+        while let Some(s) = consumer.pop() {
+            vals.push(s);
+        }
+        assert!(vals.iter().all(|&v| v == 0.0), "no frame sample leaked in");
+    }
+
+    #[test]
+    fn push_frames_zero_channels_is_noop() {
+        let ring = RingBuffer::<f32>::new(4);
+        let (mut producer, mut consumer) = ring.split();
+        push_frames(&mut producer, &[1.0, 2.0], 0);
+        assert!(consumer.pop().is_none());
     }
 
     #[test]
