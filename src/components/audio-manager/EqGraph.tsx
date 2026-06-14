@@ -9,12 +9,20 @@
  * inside sensible UI travel.
  */
 
-import { useCallback, useMemo, useRef } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef } from "react";
 
 import type { EqBand } from "../../types/engine";
 import { bandUsesGain, bandUsesQ, DSP_RANGE } from "./dspDefaults";
 import styles from "./EqGraph.module.css";
 import { DEFAULT_EQ_SR, logFreqPoints, sumResponseDb } from "./eqResponse";
+
+/**
+ * Engine sample rate for the EQ response curve, provided near the app root from
+ * the active output device. EqGraph reads it when given no explicit `sampleRate`
+ * prop, so the drawn curve matches the backend biquads at 44.1/96 kHz instead of
+ * always assuming 48 kHz. Defaults to 48 kHz when no provider is mounted.
+ */
+export const EqSampleRateContext = createContext<number>(DEFAULT_EQ_SR);
 
 const VIEW_W = 600;
 const VIEW_H = 220;
@@ -54,7 +62,7 @@ function yToGain(y: number): number {
 
 export function EqGraph({
   bands,
-  sampleRate = DEFAULT_EQ_SR,
+  sampleRate,
   selected = null,
   onSelect,
   onChange,
@@ -67,14 +75,18 @@ export function EqGraph({
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragIdx = useRef<number | null>(null);
+  // Explicit prop wins; otherwise use the engine rate from context (default 48k)
+  // so the curve tracks the real device rate rather than always 48 kHz.
+  const ctxSampleRate = useContext(EqSampleRateContext);
+  const effectiveSampleRate = sampleRate ?? ctxSampleRate;
 
   const curve = useMemo(() => {
     const pts = logFreqPoints(CURVE_POINTS, F_MIN, F_MAX);
-    const db = sumResponseDb(bands, pts, sampleRate);
+    const db = sumResponseDb(bands, pts, effectiveSampleRate);
     return pts
       .map((f, i) => `${freqToX(f).toFixed(1)},${gainToY(db[i]).toFixed(1)}`)
       .join(" ");
-  }, [bands, sampleRate]);
+  }, [bands, effectiveSampleRate]);
 
   const patchBand = useCallback(
     (i: number, patch: Partial<EqBand>) => {

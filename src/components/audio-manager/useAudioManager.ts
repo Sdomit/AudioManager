@@ -948,9 +948,17 @@ export function useAudioManager(): UseAudioManager {
           ),
         );
         const targets: BusId[] = routed.length > 0 ? routed : ["A1"];
-        return Promise.all(
+        // Live publish to every routed bus's engine. A single non-running bus
+        // can reject without aborting the others (graph persistence already
+        // happened via the dispatch above), but a publish that failed on EVERY
+        // target is a real error — surface it so scheduleWrite's error path runs.
+        return Promise.allSettled(
           targets.map((busId) => ipc.updateInputDsp(busId, id, input.dsp)),
-        );
+        ).then((results) => {
+          if (results.every((r) => r.status === "rejected")) {
+            throw (results[0] as PromiseRejectedResult).reason;
+          }
+        });
       });
     },
     [getInput, scheduleWrite],

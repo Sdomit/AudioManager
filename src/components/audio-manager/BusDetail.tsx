@@ -247,6 +247,14 @@ export function BusDetail({
                 {opt.value !== null ? " frames" : ""}
               </option>
             ))}
+            {bus.bufferSizeFrames != null &&
+              !BUFFER_SIZE_OPTIONS.some(
+                (o) => o.value === bus.bufferSizeFrames,
+              ) && (
+                <option value={bus.bufferSizeFrames}>
+                  {bus.bufferSizeFrames} frames (current)
+                </option>
+              )}
           </select>
         </div>
         <div className={styles.procRow}>
