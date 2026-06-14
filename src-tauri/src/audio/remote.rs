@@ -188,9 +188,16 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adap
         }
         let mut overflow = 0u64;
         for (si, sub) in subs.iter_mut().enumerate() {
+            let mut dropped = 0u32;
             for &x in scratch.iter() {
-                if sub.producer.push(x).is_err() && si == 0 {
-                    overflow += 1;
+                if sub.producer.push(x).is_err() {
+                    dropped += 1;
+                }
+            }
+            if dropped > 0 {
+                sub.peak[sub.index].overrun.fetch_add(dropped, Ordering::Relaxed);
+                if si == 0 {
+                    overflow += dropped as u64;
                 }
             }
             store_max(&sub.peak[sub.index].input_peak, block_peak);

@@ -7,7 +7,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 
 use crate::audio::dsp::{
-    live::{BusDspShared, BusDspSlots, InputDspShared, InputDspSlots},
+    live::{enable_flush_denormals, BusDspShared, BusDspSlots, InputDspShared, InputDspSlots},
     BusDspConfig, DspConfig,
 };
 use crate::audio::loopback::{self, Subscription};
@@ -705,7 +705,7 @@ pub fn start(
             // Streaming loudness analyzer (#38). Owned by the output callback,
             // fed the final post-clamp frame; publishes to shared atomics once
             // per output block. Constructed at the output stream's rate.
-            let mut analyzer = StreamAnalyzer::new(out_sample_rate.0);
+            let mut analyzer = StreamAnalyzer::new(out_sample_rate.0, out_channels);
 
             // Per-input scratch for bulk ring reads: one `pop_slice` per input per
             // block instead of one atomic `pop()` per sample. Sized to the ring
@@ -725,6 +725,10 @@ pub fn start(
                 .build_output_stream(
                     &out_stream_cfg,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        // Flush denormals (FTZ/DAZ) once up front so the bus limiter
+                        // and the loudness analyzer never FPU-stall on a near-silent
+                        // block, independent of whether any input ran per-block DSP.
+                        enable_flush_denormals();
                         // Drain at most MAX_CMDS_PER_BLOCK tap commands per block so
                         // a burst of Add/Remove can never blow the realtime budget.
                         // Leftovers stay queued for the next callback.
@@ -803,12 +807,15 @@ pub fn start(
                             // toward target before reading. Fires only on sustained
                             // drift — steady state never trims. Discarded samples are
                             // counted as overruns (lost audio, same as a full ring).
-                            let drop_n = resync_drop(
+                            let mut drop_n = resync_drop(
                                 consumers[i].0.len(),
                                 need,
                                 target_backlog_frames * in_ch,
                                 max_backlog_frames * in_ch,
                             );
+                            // Round down to a whole frame so an odd discard from a
+                            // stereo interleaved ring can't swap L/R until next resync.
+                            drop_n -= drop_n % in_ch;
                             if drop_n > 0 {
                                 let dropped = consumers[i].0.discard(drop_n);
                                 slots[i].overrun.fetch_add(dropped as u32, Ordering::Relaxed);

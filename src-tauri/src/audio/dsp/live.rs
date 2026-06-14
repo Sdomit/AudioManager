@@ -571,7 +571,7 @@ impl BusDspShared {
 /// (the app ships x86_64).
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn enable_flush_denormals() {
+pub(crate) fn enable_flush_denormals() {
     use core::arch::asm;
     // FTZ = bit 15 (0x8000), DAZ = bit 6 (0x0040). Read-modify-write via
     // `stmxcsr`/`ldmxcsr` so the rounding mode and exception masks are preserved.
@@ -586,7 +586,7 @@ fn enable_flush_denormals() {
 
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-fn enable_flush_denormals() {}
+pub(crate) fn enable_flush_denormals() {}
 
 /// Re-enable helper: set enabled + coeffs, and `reset()` the effect when it just
 /// transitioned disabled→enabled so stale envelope/filter state cannot pop.
