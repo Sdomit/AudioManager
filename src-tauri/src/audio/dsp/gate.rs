@@ -46,7 +46,17 @@ impl GateCoeffs {
 }
 
 /// Noise gate: silences signal below `threshold_db` after `hold` expires.
-/// Uses a one-pole envelope follower + hold counter + gain ramp.
+///
+/// Detection compares the **instantaneous per-sample peak** (`|L|.max(|R|)`) to
+/// the threshold with hysteresis — opening needs the higher open threshold;
+/// closing needs the level to fall below the lower close threshold *and* the
+/// hold counter to expire. The applied gain is then smoothed by a one-pole ramp
+/// (attack while open, release while closed) — the one-pole is on the *gain*,
+/// not the level detector. Because detection is the raw peak (not an
+/// averaged/RMS envelope), a lone above-threshold sample opens the gate for the
+/// full hold window; an averaging detector that rides over single-sample
+/// transients is a deferred tuning change, weighed against the #33 Stream Voice
+/// preset that is tuned to the current behavior.
 ///
 /// Typical voice settings: threshold −40 dB, attack 10 ms, hold 80 ms, release 150 ms.
 pub struct NoiseGate {
