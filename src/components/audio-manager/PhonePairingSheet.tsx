@@ -82,12 +82,15 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
     return () => {
       const c = createdRef.current;
       if (!c) return;
-      void ipc.phoneListSessions().then((list) => {
-        const mine = list.find((s) => s.id === c.id);
-        if (mine && mine.state === "created") {
-          void ipc.phoneRemoveSession(c.id).catch(() => {});
-        }
-      });
+      void ipc
+        .phoneListSessions()
+        .then((list) => {
+          const mine = list.find((s) => s.id === c.id);
+          if (mine && mine.state === "created") {
+            void ipc.phoneRemoveSession(c.id).catch(() => {});
+          }
+        })
+        .catch(() => {});
       setCreated(null);
       setSessions([]);
     };
@@ -346,7 +349,9 @@ function SessionRow({
             </button>
             <button
               className={styles.rejectBtn}
-              onClick={() => void ipc.phoneRejectClient(session.id)}
+              onClick={() =>
+                void ipc.phoneRejectClient(session.id).catch((e) => onError(extractMessage(e)))
+              }
             >
               Reject
             </button>
@@ -356,7 +361,7 @@ function SessionRow({
           <button
             className={styles.removeBtn}
             aria-label={`Remove ${session.label}`}
-            onClick={() => void ipc.phoneRemoveSession(session.id)}
+            onClick={() => void ipc.phoneRemoveSession(session.id).catch(() => {})}
           >
             <XIcon size={12} />
           </button>
@@ -421,7 +426,7 @@ function LatencyControl({ session }: { session: PhoneSessionStatus }) {
               session.latencyMode === mode ? styles.latencyBtnActive : ""
             }`}
             aria-pressed={session.latencyMode === mode}
-            onClick={() => void ipc.phoneSetLatencyMode(session.id, mode)}
+            onClick={() => void ipc.phoneSetLatencyMode(session.id, mode).catch(() => {})}
           >
             {LATENCY_LABELS[mode]}
           </button>

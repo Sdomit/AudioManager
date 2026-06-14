@@ -319,8 +319,9 @@ if (!pairing) {
     rerender();
     const previous = captureOpts;
     captureOpts = { ...captureOpts, ...partial };
+    let next: MicCapture | undefined;
     try {
-      const next = await startMic(captureOpts);
+      next = await startMic(captureOpts);
       next.track.enabled = !muted;
       await transport.replaceTrack(next.track);
       mic?.stop();
@@ -330,6 +331,7 @@ if (!pairing) {
         rerender();
       });
     } catch (e: unknown) {
+      next?.stop(); // release the orphaned mic if the hot-swap never committed
       captureOpts = previous; // revert on failure
       micError = `Could not switch microphone: ${(e as { message?: string })?.message ?? String(e)}`;
     } finally {

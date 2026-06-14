@@ -31,6 +31,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Unit tests
         run: npm test
+      - name: Build phone bundle
+        run: npm run build:phone
 
   rust:
     name: Rust (windows)
