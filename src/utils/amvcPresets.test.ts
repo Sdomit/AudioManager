@@ -5,9 +5,12 @@ import {
   AMVC_CAPTURE_DEVICE_NAMES,
   AMVC_STREAM_OUTPUT,
   AMVC_VOICE_OUTPUT,
+  canonicalAmvcEndpoint,
   compareDevicesForPicker,
   findAmvcCaptureDevices,
+  findAmvcConflicts,
   hasAnyAmvcDevice,
+  mapAmvcEndpointAssignments,
   suggestAmvcBusDevice,
   suggestAppCaptureInput,
 } from "./amvcPresets";
@@ -198,5 +201,55 @@ describe("compareDevicesForPicker", () => {
     const once = [...list].sort(compareDevicesForPicker);
     const twice = [...once].sort(compareDevicesForPicker);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("canonicalAmvcEndpoint", () => {
+  it("maps exact and case-drifted names to canonical form", () => {
+    expect(canonicalAmvcEndpoint(AMVC_STREAM_OUTPUT)).toBe(AMVC_STREAM_OUTPUT);
+    expect(canonicalAmvcEndpoint("audiomanager stream output")).toBe(
+      AMVC_STREAM_OUTPUT,
+    );
+  });
+
+  it("returns null for non-AMVC devices and null input", () => {
+    expect(canonicalAmvcEndpoint("Speakers (Realtek)")).toBeNull();
+    expect(canonicalAmvcEndpoint(null)).toBeNull();
+  });
+});
+
+describe("mapAmvcEndpointAssignments", () => {
+  it("groups buses by canonical endpoint, skipping non-AMVC devices", () => {
+    const map = mapAmvcEndpointAssignments([
+      { busId: "B1", deviceId: AMVC_STREAM_OUTPUT },
+      { busId: "B2", deviceId: "audiomanager voice output" },
+      { busId: "A1", deviceId: "Speakers (Realtek)" },
+      { busId: "A2", deviceId: null },
+    ]);
+    expect(map.get(AMVC_STREAM_OUTPUT)).toEqual(["B1"]);
+    expect(map.get(AMVC_VOICE_OUTPUT)).toEqual(["B2"]);
+    expect(map.size).toBe(2);
+  });
+});
+
+describe("findAmvcConflicts", () => {
+  it("returns empty when every endpoint has at most one bus", () => {
+    expect(
+      findAmvcConflicts([
+        { busId: "B1", deviceId: AMVC_STREAM_OUTPUT },
+        { busId: "B2", deviceId: AMVC_VOICE_OUTPUT },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("flags endpoints shared by two or more buses", () => {
+    const conflicts = findAmvcConflicts([
+      { busId: "B1", deviceId: AMVC_STREAM_OUTPUT },
+      { busId: "B2", deviceId: AMVC_STREAM_OUTPUT },
+      { busId: "A1", deviceId: AMVC_VOICE_OUTPUT },
+    ]);
+    expect(conflicts).toEqual([
+      { endpoint: AMVC_STREAM_OUTPUT, buses: ["B1", "B2"] },
+    ]);
   });
 });

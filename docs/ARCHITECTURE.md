@@ -131,7 +131,14 @@ AudioManager DOES:
 **Device Selection**:
 - User selects output device for each bus
 - User selects input devices to add to matrix
-- No hotplug reconnection (user must refresh device list)
+
+**Hotplug (Phase 11)**:
+- Background watcher thread polls device lists every 2 s and diffs snapshots (`audio/device_watch.rs`)
+- On change, emits a `devices-changed` Tauri event; frontend refreshes device caches and any open picker
+- Output unplugged: bound bus engines tear down cleanly, config kept, reconnect-pending error shown
+- Output replugged: enabled buses bound to it restart automatically
+- Input unplugged: affected buses rebuild with the remaining inputs (filtered rebuild)
+- Input replugged: buses with an enabled send from it rebuild to include it again
 
 ## Error Handling
 
@@ -178,7 +185,6 @@ Frontend Update (meters, state, errors)
 - Per-bus DSP (compressor, noise gate, limiter, high-pass)
 - Sample-rate conversion
 - Recording bus output to disk
-- Hotplug device reconnection
 - Custom keyboard shortcuts
 - Improved metering (RMS, LUFS)
 - Session recording (routing history)

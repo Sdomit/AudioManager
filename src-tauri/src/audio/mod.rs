@@ -1,4 +1,5 @@
 pub mod bus;
+pub mod device_watch;
 pub mod devices;
 pub mod dsp;
 pub mod graph;

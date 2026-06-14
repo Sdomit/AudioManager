@@ -169,11 +169,16 @@ It's a full-duplex bridge. The naming is from the perspective of the original ap
 
 **Symptom**: USB audio device unplugged, then reconnected, but AudioManager doesn't see it.
 
-**Solution**:
-1. Click **Refresh** button in AudioManager
-2. If still not detected, restart AudioManager
+Since Phase 11, AudioManager detects unplug/replug automatically within a few
+seconds: device lists refresh on their own, and any bus bound to the device
+reconnects when it returns (a "disconnected — reconnects automatically" note
+shows on the bus in the meantime).
 
-Current limitation: Hotplug reconnection not automatic; user must refresh.
+**If a device still doesn't appear**:
+1. Wait a few seconds (the watcher polls every 2 s)
+2. Close and reopen the device picker
+3. If still not detected, restart AudioManager (Windows occasionally
+   re-registers USB endpoints under a new name — re-assign the bus if so)
 
 ### "Unknown Device" or Strange Device Names
 

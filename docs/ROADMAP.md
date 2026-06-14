@@ -27,10 +27,10 @@ AudioManager is an early-stage project with a clear path toward professional aud
 ## Phase 11: Virtual Cable Improvements
 
 **Deliverables**:
-- Hotplug device detection (auto-refresh when device connected/disconnected)
-- Virtual cable creation wizard (detect and suggest installation)
-- Multi-cable routing (assign different buses to different cables)
-- Cable reconnection recovery (auto-reconnect on unplug/replug)
+- ✅ Hotplug device detection (auto-refresh when device connected/disconnected)
+- ✅ Virtual cable creation wizard (detect and suggest installation — CableNotice + CablePanel install/repair flow)
+- ✅ Multi-cable routing (per-endpoint bus assignment map, shared-endpoint warnings, auto-route preset)
+- ✅ Cable reconnection recovery (auto-reconnect on unplug/replug)
 
 **Constraints**:
 - Still rely on external drivers (VB-Cable, Virtual Audio Cable)

@@ -5,13 +5,14 @@ mod net;
 mod presets;
 mod state;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use audio::bus::{BusConfig, BusId, BusStatus};
+use audio::device_watch::{self, DeviceDiff, DeviceSnapshot};
 use audio::devices::{DeviceInfo, DeviceListError};
 use audio::dsp::{BusDspConfig, DspConfig};
 use audio::graph::InputChannel;
@@ -109,6 +110,20 @@ fn app_local_dir(app: &tauri::AppHandle) -> Result<PathBuf, EngineError> {
 ///   * `config.output_device_id` is `Some(_)`
 ///   * The graph has at least one enabled send to `bus_id`
 fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
+    rebuild_bus_filtered(inner, bus_id, None)
+}
+
+/// Like `rebuild_bus`, but when `available_inputs` is given, inputs absent
+/// from the set are silently skipped instead of failing the whole engine
+/// start. Used by the hotplug watcher: when an input device unplugs, the
+/// bus restarts with the remaining inputs rather than going fully silent.
+/// User-driven paths keep `rebuild_bus` (no filter) so a misconfigured
+/// input still surfaces "Input device not found" as a hard error.
+fn rebuild_bus_filtered(
+    inner: &mut AppInner,
+    bus_id: BusId,
+    available_inputs: Option<&BTreeSet<String>>,
+) -> Result<(), EngineError> {
     // Centralized teardown: stops recorders first, then drops the engine
     // so WASAPI handles are released before the restart attempt.
     tear_down_engine(inner, bus_id);
@@ -133,7 +148,12 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
         return Ok(());
     };
 
-    let active_inputs = inner.graph.effective_inputs_for_bus(bus_id);
+    let active_inputs: Vec<(String, f32, bool, DspConfig)> = inner
+        .graph
+        .effective_inputs_for_bus(bus_id)
+        .into_iter()
+        .filter(|(name, _, _, _)| available_inputs.map_or(true, |set| set.contains(name)))
+        .collect();
     if active_inputs.is_empty() {
         return Ok(());
     }
@@ -1407,6 +1427,281 @@ mod tests {
         assert!(legacy_routes(&inner).iter().all(|route| !route.active));
         assert!(inner.last_error.is_none());
     }
+
+    // ── Phase 11: hotplug diff handling ──────────────────────────────────────
+    //
+    // Engines can't be constructed in tests (they need live WASAPI devices),
+    // so these cover the no-engine and early-return paths: the predicates
+    // that decide WHICH buses react, and the filtered rebuild's skip logic.
+
+    fn empty_inner() -> AppInner {
+        AppInner {
+            buses: BusRuntime::default_set(),
+            graph: AudioGraph::new(),
+            recorders: BTreeMap::new(),
+            last_error: None,
+        }
+    }
+
+    fn diff_with(
+        added_inputs: &[&str],
+        removed_inputs: &[&str],
+        added_outputs: &[&str],
+        removed_outputs: &[&str],
+    ) -> DeviceDiff {
+        let v = |items: &[&str]| items.iter().map(|s| s.to_string()).collect();
+        DeviceDiff {
+            added_inputs: v(added_inputs),
+            removed_inputs: v(removed_inputs),
+            added_outputs: v(added_outputs),
+            removed_outputs: v(removed_outputs),
+        }
+    }
+
+    #[test]
+    fn removed_output_on_stopped_bus_is_noop() {
+        let mut inner = empty_inner();
+        {
+            let bus = inner.buses.get_mut(&BusId::B1).unwrap();
+            bus.config.output_device_id = Some("cable".to_string());
+            bus.config.enabled = true;
+        }
+        handle_device_diff(
+            &mut inner,
+            &diff_with(&[], &[], &[], &["cable"]),
+            &BTreeSet::new(),
+        );
+        // No engine was running — removal must not invent an error.
+        assert!(inner.buses[&BusId::B1].last_error.is_none());
+        assert!(inner.buses[&BusId::B1].engine.is_none());
+    }
+
+    #[test]
+    fn removed_input_with_no_running_engines_is_noop() {
+        let mut inner = empty_inner();
+        inner.graph.add_input("mic");
+        inner.graph.set_send("mic", BusId::A1, true);
+        handle_device_diff(
+            &mut inner,
+            &diff_with(&[], &["mic"], &[], &[]),
+            &BTreeSet::new(),
+        );
+        assert!(inner.buses.values().all(|b| b.last_error.is_none()));
+    }
+
+    #[test]
+    fn added_output_for_disabled_bus_does_not_start_it() {
+        let mut inner = empty_inner();
+        {
+            let bus = inner.buses.get_mut(&BusId::B1).unwrap();
+            bus.config.output_device_id = Some("cable".to_string());
+            bus.config.enabled = false;
+        }
+        handle_device_diff(
+            &mut inner,
+            &diff_with(&[], &[], &["cable"], &[]),
+            &BTreeSet::new(),
+        );
+        assert!(inner.buses[&BusId::B1].engine.is_none());
+        assert!(inner.buses[&BusId::B1].last_error.is_none());
+    }
+
+    #[test]
+    fn added_output_clears_stale_error_when_rebuild_has_no_inputs() {
+        // Enabled bus bound to the returning device, but no routed inputs:
+        // the rebuild is a clean no-op (engine stays off) and the stale
+        // disconnect error must be cleared.
+        let mut inner = empty_inner();
+        {
+            let bus = inner.buses.get_mut(&BusId::B1).unwrap();
+            bus.config.output_device_id = Some("cable".to_string());
+            bus.config.enabled = true;
+            bus.last_error = Some("Output device disconnected: cable.".to_string());
+        }
+        handle_device_diff(
+            &mut inner,
+            &diff_with(&[], &[], &["cable"], &[]),
+            &BTreeSet::new(),
+        );
+        assert!(inner.buses[&BusId::B1].engine.is_none());
+        assert!(inner.buses[&BusId::B1].last_error.is_none());
+    }
+
+    #[test]
+    fn added_input_without_enabled_send_is_noop() {
+        let mut inner = empty_inner();
+        inner.graph.add_input("mic");
+        // Send exists but disabled.
+        inner.graph.set_send("mic", BusId::A1, false);
+        {
+            let bus = inner.buses.get_mut(&BusId::A1).unwrap();
+            bus.config.output_device_id = Some("speakers".to_string());
+            bus.config.enabled = true;
+        }
+        let available: BTreeSet<String> = ["mic".to_string()].into_iter().collect();
+        handle_device_diff(&mut inner, &diff_with(&["mic"], &[], &[], &[]), &available);
+        assert!(inner.buses[&BusId::A1].engine.is_none());
+        assert!(inner.buses[&BusId::A1].last_error.is_none());
+    }
+
+    #[test]
+    fn filtered_rebuild_skips_unavailable_inputs_without_error() {
+        // Send enabled from an input that is NOT in the available set: the
+        // filtered rebuild must succeed as a no-op instead of failing the
+        // engine start with "Input device not found".
+        let mut inner = empty_inner();
+        inner.graph.add_input("usb-mic");
+        inner.graph.set_send("usb-mic", BusId::B1, true);
+        {
+            let bus = inner.buses.get_mut(&BusId::B1).unwrap();
+            bus.config.output_device_id = Some("cable".to_string());
+            bus.config.enabled = true;
+        }
+        let result = rebuild_bus_filtered(&mut inner, BusId::B1, Some(&BTreeSet::new()));
+        assert!(result.is_ok());
+        assert!(inner.buses[&BusId::B1].engine.is_none());
+        assert!(inner.buses[&BusId::B1].last_error.is_none());
+    }
+}
+
+// ── Phase 11: hotplug watcher ─────────────────────────────────────────────────
+
+/// React to a device hotplug diff. Engine repair only — the
+/// `devices-changed` event emit happens in the watcher loop.
+///
+/// * Output removed → tear down any bus engine bound to it and record a
+///   reconnect-pending error. Bus config is untouched so the bus resumes
+///   automatically when the device returns.
+/// * Output added → restart any enabled, currently-stopped bus bound to it.
+/// * Input removed → rebuild affected running buses without the lost input
+///   (filtered rebuild keeps the rest of the mix alive).
+/// * Input added → rebuild enabled buses that have an enabled send from it
+///   but whose engine is not currently carrying it.
+fn handle_device_diff(inner: &mut AppInner, diff: &DeviceDiff, available_inputs: &BTreeSet<String>) {
+    for removed in &diff.removed_outputs {
+        let affected: Vec<BusId> = inner
+            .buses
+            .iter()
+            .filter(|(_, b)| {
+                b.engine.is_some()
+                    && b.config.output_device_id.as_deref() == Some(removed.as_str())
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for bus_id in affected {
+            tear_down_engine(inner, bus_id);
+            if let Some(bus) = inner.buses.get_mut(&bus_id) {
+                bus.last_error = Some(format!(
+                    "Output device disconnected: {removed}. Reconnects automatically when it returns."
+                ));
+            }
+        }
+    }
+
+    for removed in &diff.removed_inputs {
+        let affected: Vec<BusId> = inner
+            .buses
+            .iter()
+            .filter(|(_, b)| {
+                b.engine
+                    .as_ref()
+                    .map(|e| e.input_index(removed).is_some())
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for bus_id in affected {
+            if rebuild_bus_filtered(inner, bus_id, Some(available_inputs)).is_err() {
+                if let Some(bus) = inner.buses.get_mut(&bus_id) {
+                    bus.last_error = Some(format!(
+                        "Input device disconnected: {removed}. Rejoins the mix automatically when it returns."
+                    ));
+                }
+            }
+        }
+    }
+
+    for added in &diff.added_outputs {
+        let affected: Vec<BusId> = inner
+            .buses
+            .iter()
+            .filter(|(_, b)| {
+                b.engine.is_none()
+                    && b.config.enabled
+                    && b.config.output_device_id.as_deref() == Some(added.as_str())
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for bus_id in affected {
+            if rebuild_bus_filtered(inner, bus_id, Some(available_inputs)).is_ok() {
+                if let Some(bus) = inner.buses.get_mut(&bus_id) {
+                    bus.last_error = None;
+                }
+            }
+        }
+    }
+
+    for added in &diff.added_inputs {
+        let affected: Vec<BusId> = BusId::ALL
+            .into_iter()
+            .filter(|bus_id| {
+                inner
+                    .graph
+                    .get_send(added, *bus_id)
+                    .map(|send| send.enabled)
+                    .unwrap_or(false)
+            })
+            .filter(|bus_id| {
+                inner
+                    .buses
+                    .get(bus_id)
+                    .map(|b| {
+                        b.config.enabled
+                            && b.config.output_device_id.is_some()
+                            && b.engine
+                                .as_ref()
+                                .map(|e| e.input_index(added).is_none())
+                                .unwrap_or(true)
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+        for bus_id in affected {
+            if rebuild_bus_filtered(inner, bus_id, Some(available_inputs)).is_ok() {
+                if let Some(bus) = inner.buses.get_mut(&bus_id) {
+                    bus.last_error = None;
+                }
+            }
+        }
+    }
+}
+
+/// Background polling loop. Diffs device snapshots every
+/// `device_watch::POLL_INTERVAL`; on change, repairs affected buses and
+/// emits `devices-changed` to the frontend. A failed enumeration skips the
+/// cycle so a transient WASAPI error never reads as mass device removal.
+fn device_watch_loop(app: tauri::AppHandle) {
+    let mut prev: Option<DeviceSnapshot> = None;
+    loop {
+        std::thread::sleep(device_watch::POLL_INTERVAL);
+        let Ok(next) = device_watch::take_snapshot() else {
+            continue;
+        };
+        let Some(prev_snap) = prev.as_ref() else {
+            prev = Some(next);
+            continue;
+        };
+        let diff = device_watch::diff_snapshots(prev_snap, &next);
+        if !diff.is_empty() {
+            {
+                let state = app.state::<AppState>();
+                let mut inner = state.inner.lock().unwrap();
+                handle_device_diff(&mut inner, &diff, &next.inputs);
+            }
+            let _ = app.emit("devices-changed", &diff);
+        }
+        prev = Some(next);
+    }
 }
 
 // ── Phone Wireless Audio (#39-#45) ────────────────────────────────────────────
@@ -1666,6 +1961,9 @@ pub fn run() {
                     }
                 }
             }
+
+            let handle = app.handle().clone();
+            std::thread::spawn(move || device_watch_loop(handle));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

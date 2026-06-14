@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { launchAmvcInstaller, queryAmvcHelper, setAmvcDeviceEnabled } from "../../utils/amvc";
+import {
+  applyAmvcRoutingPreset,
+  launchAmvcInstaller,
+  queryAmvcHelper,
+  setAmvcDeviceEnabled,
+} from "../../utils/amvc";
 import type { AmvcQueryResult } from "../../types/engine";
-import { AMVC_ALL_DEVICE_NAMES } from "../../utils/amvcPresets";
+import { listBuses } from "../../ipc/commands";
+import { onDevicesChanged } from "../../ipc/events";
+import {
+  AMVC_ALL_DEVICE_NAMES,
+  findAmvcConflicts,
+  mapAmvcEndpointAssignments,
+  type BusDeviceAssignment,
+} from "../../utils/amvcPresets";
 import styles from "./CablePanel.module.css";
 
 interface CablePanelProps {
@@ -16,7 +28,22 @@ export function CablePanel({ open }: CablePanelProps) {
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [togglingDevice, setTogglingDevice] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [assignments, setAssignments] = useState<BusDeviceAssignment[]>([]);
   const busyRef = useRef(false);
+
+  // Which bus is on which AMVC endpoint. Failure (e.g. outside a Tauri
+  // webview) degrades to "no tags" instead of breaking the panel.
+  async function refreshAssignments() {
+    try {
+      const buses = await listBuses();
+      setAssignments(
+        buses.map((b) => ({ busId: b.id, deviceId: b.output_device })),
+      );
+    } catch {
+      setAssignments([]);
+    }
+  }
 
   async function recheck() {
     if (busyRef.current) return;
@@ -27,6 +54,7 @@ export function CablePanel({ open }: CablePanelProps) {
         (): AmvcQueryResult => ({ kind: "unavailable", reason: "query failed" }),
       );
       setResult(r);
+      await refreshAssignments();
     } finally {
       setChecking(false);
       busyRef.current = false;
@@ -61,9 +89,41 @@ export function CablePanel({ open }: CablePanelProps) {
     }
   }
 
+  async function applyPreset() {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setApplying(true);
+    try {
+      await applyAmvcRoutingPreset();
+      await refreshAssignments();
+    } catch {
+      // Bus state is re-pulled on the next re-check / hotplug event.
+    } finally {
+      setApplying(false);
+      busyRef.current = false;
+    }
+  }
+
   // Query once each time the sheet transitions to open.
   useEffect(() => {
     if (open) void recheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Hotplug: cable endpoints arriving or leaving change both the health
+  // readout and the assignment tags — re-check automatically while open.
+  useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onDevicesChanged(() => void recheck()).then((un) => {
+      if (disposed) un();
+      else unlisten = un;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -73,6 +133,8 @@ export function CablePanel({ open }: CablePanelProps) {
 
   const deviceEnabled: boolean | undefined =
     result?.kind === "ok" ? result.device_enabled : undefined;
+  const endpointBuses = mapAmvcEndpointAssignments(assignments);
+  const conflicts = findAmvcConflicts(assignments);
 
   let tone: Tone = "neutral";
   let headline = "Checking…";
@@ -132,6 +194,8 @@ export function CablePanel({ open }: CablePanelProps) {
     }
   }
 
+  const healthy = result?.kind === "ok" && result.status === "installed-healthy";
+
   return (
     <section className={`${styles.panel} ${styles[`tone_${tone}`]}`} aria-label="Virtual cable status">
       <div className={styles.head}>
@@ -145,14 +209,31 @@ export function CablePanel({ open }: CablePanelProps) {
       <ul className={styles.endpoints}>
         {AMVC_ALL_DEVICE_NAMES.map((name) => {
           const live = detected.has(name.toLowerCase());
+          const buses = endpointBuses.get(name) ?? [];
           return (
             <li key={name} className={live ? styles.epLive : styles.epMissing}>
               <span className={styles.epDot} aria-hidden />
               {name.replace(/^AudioManager /, "")}
+              {buses.length > 0 && (
+                <span
+                  className={`${styles.epTag} ${buses.length > 1 ? styles.epTagConflict : ""}`}
+                >
+                  {buses.join(" + ")}
+                </span>
+              )}
             </li>
           );
         })}
       </ul>
+
+      {conflicts.length > 0 && (
+        <div className={styles.conflictNote} role="note">
+          {conflicts
+            .map((c) => `${c.buses.join(" and ")} share ${c.endpoint.replace(/^AudioManager /, "")}`)
+            .join("; ")}
+          {" — apps on that cable hear both mixes."}
+        </div>
+      )}
 
       <div className={styles.actions}>
         {showInstall && (
@@ -182,6 +263,15 @@ export function CablePanel({ open }: CablePanelProps) {
             title="Show AMVC endpoints in Windows Sound settings"
           >
             {togglingDevice ? "Enabling…" : "Enable in Windows"}
+          </button>
+        )}
+        {healthy && (
+          <button
+            className={styles.primaryBtn}
+            onClick={() => void applyPreset()}
+            disabled={applying || checking}
+          >
+            {applying ? "Routing…" : "Auto-route buses"}
           </button>
         )}
         <button

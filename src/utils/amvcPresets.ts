@@ -83,6 +83,61 @@ export function hasAnyAmvcDevice(
   );
 }
 
+// ── Multi-cable assignment map (Phase 11C) ───────────────────────────────────
+
+/** Minimal bus → output-device pairing used for cable assignment maps. */
+export interface BusDeviceAssignment {
+  busId: BusId;
+  deviceId: string | null;
+}
+
+/**
+ * Canonical AMVC endpoint name for a device id, or null when the device is
+ * not an AudioManager endpoint. Case-insensitive — WASAPI name casing can
+ * drift between driver versions.
+ */
+export function canonicalAmvcEndpoint(deviceId: string | null): string | null {
+  if (!deviceId) return null;
+  const lower = deviceId.toLowerCase();
+  return AMVC_ALL_DEVICE_NAMES.find((n) => n.toLowerCase() === lower) ?? null;
+}
+
+/**
+ * Which buses are bound to each AMVC endpoint. Keys are canonical endpoint
+ * names; only endpoints with at least one assigned bus appear. Pure.
+ */
+export function mapAmvcEndpointAssignments(
+  assignments: BusDeviceAssignment[],
+): Map<string, BusId[]> {
+  const map = new Map<string, BusId[]>();
+  for (const { busId, deviceId } of assignments) {
+    const endpoint = canonicalAmvcEndpoint(deviceId);
+    if (!endpoint) continue;
+    const list = map.get(endpoint) ?? [];
+    list.push(busId);
+    map.set(endpoint, list);
+  }
+  return map;
+}
+
+export interface AmvcConflict {
+  endpoint: string;
+  buses: BusId[];
+}
+
+/**
+ * Endpoints with two or more buses bound to them. Two buses on one cable
+ * means the receiving app hears a sum of both mixes — almost always a
+ * routing mistake worth flagging. Advisory only; the engine allows it.
+ */
+export function findAmvcConflicts(
+  assignments: BusDeviceAssignment[],
+): AmvcConflict[] {
+  return [...mapAmvcEndpointAssignments(assignments)]
+    .filter(([, buses]) => buses.length > 1)
+    .map(([endpoint, buses]) => ({ endpoint, buses }));
+}
+
 /**
  * Ordering comparator for the DevicePicker list. AudioManager-branded
  * endpoints sort first; within each tier the system default sorts before
