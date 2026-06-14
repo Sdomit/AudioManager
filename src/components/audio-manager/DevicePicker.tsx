@@ -34,6 +34,12 @@ interface DevicePickerProps {
    * source id, which add_input accepts.
    */
   includeLoopbackSources?: boolean;
+  /**
+   * Input mode only: offer "Phone microphone" (wireless pairing, #40).
+   * Selecting it closes the picker and opens the pairing sheet instead of
+   * calling onPick — the input id only exists once a phone pairs.
+   */
+  onAddPhone?: () => void;
 }
 
 const SYS_LOOPBACK_ID = "sys:default";
@@ -56,6 +62,7 @@ export function DevicePicker({
   excludeIds,
   recommendedDeviceId = null,
   includeLoopbackSources = false,
+  onAddPhone,
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [sessions, setSessions] = useState<AudioSessionInfo[]>([]);
@@ -199,6 +206,21 @@ export function DevicePicker({
         </div>
 
         {error && <div className={styles.errorMsg}>Error: {error}</div>}
+
+        {!error && kind === "input" && onAddPhone && (
+          <ul className={styles.list} aria-label="Wireless sources">
+            <li>
+              <button className={styles.item} onClick={onAddPhone}>
+                <div className={styles.itemMain}>
+                  <div className={styles.itemName}>Phone microphone</div>
+                  <div className={styles.itemMeta}>
+                    Wireless · pair by QR code on the same WiFi
+                  </div>
+                </div>
+              </button>
+            </li>
+          </ul>
+        )}
 
         {!error && loopbackItems.length > 0 && (
           <>

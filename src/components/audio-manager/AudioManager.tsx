@@ -13,6 +13,7 @@ import { PresetSaveDialog } from "./PresetSaveDialog";
 import { RecordingsPanel } from "./RecordingsPanel";
 import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
+import { PhonePairingSheet } from "./PhonePairingSheet";
 import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
@@ -83,6 +84,7 @@ export function AudioManager() {
     : null;
 
   const [inputPickerOpen, setInputPickerOpen] = useState(false);
+  const [phonePairingOpen, setPhonePairingOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
   // Preset dialog: "save" mode collects a new name; "rename" mode
@@ -494,6 +496,10 @@ export function AudioManager() {
           highlightVirtual
           includeLoopbackSources
           recommendedDeviceId={recommendedInputDevice}
+          onAddPhone={() => {
+            setInputPickerOpen(false);
+            setPhonePairingOpen(true);
+          }}
           onPick={(deviceId) => {
             if (deviceId) am.addInput(deviceId);
             setInputPickerOpen(false);
@@ -501,6 +507,11 @@ export function AudioManager() {
           onClose={() => setInputPickerOpen(false)}
         />
       )}
+
+      <PhonePairingSheet
+        open={phonePairingOpen}
+        onClose={() => setPhonePairingOpen(false)}
+      />
 
       <PresetSaveDialog
         open={presetDialog.kind === "save"}

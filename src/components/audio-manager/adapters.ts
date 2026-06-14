@@ -83,9 +83,11 @@ export function adaptBus(b: BusStatus, hasSends: boolean): Bus {
 const SYS_LOOPBACK_ID = "sys:default";
 const PROC_PREFIX = "proc:";
 const APP_PREFIX = "app:";
+const PHONE_PREFIX = "phone:";
 
 function inputKindFor(deviceId: string): InputSourceKind {
   if (deviceId === SYS_LOOPBACK_ID) return "system";
+  if (deviceId.startsWith(PHONE_PREFIX)) return "phone";
   if (deviceId.startsWith(PROC_PREFIX) || deviceId.startsWith(APP_PREFIX)) {
     return "app";
   }
@@ -99,6 +101,7 @@ function inputKindFor(deviceId: string): InputSourceKind {
  */
 function inputNameFor(deviceId: string): string {
   if (deviceId === SYS_LOOPBACK_ID) return "System sound";
+  if (deviceId.startsWith(PHONE_PREFIX)) return "Phone microphone";
   if (deviceId.startsWith(APP_PREFIX)) return deviceId.slice(APP_PREFIX.length);
   if (deviceId.startsWith(PROC_PREFIX)) {
     return `App (PID ${deviceId.slice(PROC_PREFIX.length)})`;

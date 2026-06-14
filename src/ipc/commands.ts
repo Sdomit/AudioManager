@@ -7,6 +7,10 @@ import type {
   DeviceInfo,
   EngineStatus,
   InputChannel,
+  PhonePairedDevice,
+  PhoneServerStatus,
+  PhoneSessionCreated,
+  PhoneSessionStatus,
   PresetLoadResult,
   PresetSummary,
   PassthroughStatus,
@@ -204,3 +208,53 @@ export const queryAmvcHelper = (): Promise<AmvcQueryResult> =>
 /** Spawn the amvc-helper installer in the background. */
 export const launchAmvcInstaller = (): Promise<void> =>
   invoke<void>("launch_amvc_installer");
+
+// ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
+
+/** Server status (running/port/LAN IPs) without side effects. */
+export const phoneServerStatus = (): Promise<PhoneServerStatus> =>
+  invoke<PhoneServerStatus>("phone_server_status");
+
+/**
+ * Start the phone server if needed and create a pairing session.
+ * The returned URLs embed the pairing token — render as QR, never log.
+ */
+export const phoneCreateSession = (
+  label?: string,
+): Promise<PhoneSessionCreated> =>
+  invoke<PhoneSessionCreated>("phone_create_session", { label: label ?? null });
+
+export const phoneListSessions = (): Promise<PhoneSessionStatus[]> =>
+  invoke<PhoneSessionStatus[]>("phone_list_sessions");
+
+export const phoneAcceptClient = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_accept_client", { sessionId });
+
+export const phoneRejectClient = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_reject_client", { sessionId });
+
+export const phoneRemoveSession = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_remove_session", { sessionId });
+
+export type PhoneLatencyMode = "fastest" | "balanced" | "stable" | "adaptive";
+
+export const phoneSetLatencyMode = (
+  sessionId: string,
+  mode: PhoneLatencyMode,
+): Promise<void> =>
+  invoke<void>("phone_set_latency_mode", { sessionId, mode });
+
+/** Persisted trusted devices for the "Paired devices" management list. */
+export const phoneListPaired = (): Promise<PhonePairedDevice[]> =>
+  invoke<PhonePairedDevice[]>("phone_list_paired");
+
+/** Revoke a paired device: deletes persisted trust so it cannot auto-reconnect. */
+export const phoneForget = (sessionId: string): Promise<void> =>
+  invoke<void>("phone_forget", { sessionId });
+
+/** Whether the phone server auto-starts at app launch (opt-in, default false). */
+export const phoneGetAutostart = (): Promise<boolean> =>
+  invoke<boolean>("phone_get_autostart");
+
+export const phoneSetAutostart = (enabled: boolean): Promise<void> =>
+  invoke<void>("phone_set_autostart", { enabled });
