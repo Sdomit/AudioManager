@@ -148,11 +148,11 @@ fn rebuild_bus_filtered(
         return Ok(());
     };
 
-    let active_inputs: Vec<(String, f32, bool)> = inner
+    let active_inputs: Vec<(String, f32, bool, DspConfig)> = inner
         .graph
         .effective_inputs_for_bus(bus_id)
         .into_iter()
-        .filter(|(name, _, _)| available_inputs.map_or(true, |set| set.contains(name)))
+        .filter(|(name, _, _, _)| available_inputs.map_or(true, |set| set.contains(name)))
         .collect();
     if active_inputs.is_empty() {
         return Ok(());
