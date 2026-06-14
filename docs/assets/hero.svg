@@ -1,0 +1,118 @@
+<svg width="1280" height="340" viewBox="0 0 1280 340" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E1116"/>
+      <stop offset="0.55" stop-color="#13182160"/>
+      <stop offset="1" stop-color="#1C212C"/>
+    </linearGradient>
+    <linearGradient id="accentLine" x1="0" y1="0" x2="1280" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EF4444" stop-opacity="0"/>
+      <stop offset="0.18" stop-color="#FBBF24"/>
+      <stop offset="0.42" stop-color="#F59E0B"/>
+      <stop offset="0.68" stop-color="#A855F7"/>
+      <stop offset="0.9" stop-color="#EF4444"/>
+      <stop offset="1" stop-color="#EF4444" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="meterFade" x1="0" y1="0" x2="0" y2="1" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22C55E"/>
+      <stop offset="0.6" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#EF4444"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#EF4444" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#EF4444" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="340" rx="0" fill="url(#bg)"/>
+  <rect width="1280" height="340" fill="#0E1116" opacity="0.35"/>
+  <ellipse cx="980" cy="150" rx="360" ry="220" fill="url(#glow)"/>
+
+  <!-- top spectrum hairline -->
+  <rect x="0" y="0" width="1280" height="3" fill="url(#accentLine)"/>
+
+  <!-- ── Left: wordmark ─────────────────────────────────────────── -->
+  <g transform="translate(80,96)">
+    <!-- mark: stacked level bars -->
+    <g transform="translate(0,-6)">
+      <rect x="0"  y="14" width="9" height="34" rx="3" fill="#FBBF24"/>
+      <rect x="14" y="2"  width="9" height="58" rx="3" fill="#F59E0B"/>
+      <rect x="28" y="20" width="9" height="28" rx="3" fill="#A855F7"/>
+      <rect x="42" y="8"  width="9" height="48" rx="3" fill="#EF4444"/>
+    </g>
+
+    <text x="74" y="44" font-size="58" font-weight="700" letter-spacing="-1.5" fill="#E6E9EF">Audio<tspan fill="#EF4444">Manager</tspan></text>
+    <text x="76" y="92" font-size="22" font-weight="500" letter-spacing="0.2" fill="#9AA3B2">Windows audio mixer &amp; router for creators and streamers</text>
+
+    <!-- bus chips -->
+    <g transform="translate(76,124)" font-size="14" font-weight="600">
+      <g>
+        <rect x="0" y="0" width="118" height="34" rx="9" fill="#1C212C" stroke="#FBBF24" stroke-opacity="0.45"/>
+        <circle cx="18" cy="17" r="5" fill="#FBBF24"/>
+        <text x="32" y="22" fill="#E6E9EF">A1 · Monitor</text>
+      </g>
+      <g transform="translate(130,0)">
+        <rect x="0" y="0" width="120" height="34" rx="9" fill="#1C212C" stroke="#F59E0B" stroke-opacity="0.45"/>
+        <circle cx="18" cy="17" r="5" fill="#F59E0B"/>
+        <text x="32" y="22" fill="#E6E9EF">A2 · Speakers</text>
+      </g>
+      <g transform="translate(262,0)">
+        <rect x="0" y="0" width="112" height="34" rx="9" fill="#1C212C" stroke="#A855F7" stroke-opacity="0.5"/>
+        <circle cx="18" cy="17" r="5" fill="#A855F7"/>
+        <text x="32" y="22" fill="#E6E9EF">B1 · Stream</text>
+      </g>
+      <g transform="translate(386,0)">
+        <rect x="0" y="0" width="110" height="34" rx="9" fill="#1C212C" stroke="#EF4444" stroke-opacity="0.5"/>
+        <circle cx="18" cy="17" r="5" fill="#EF4444"/>
+        <text x="32" y="22" fill="#E6E9EF">B2 · Record</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ── Right: mixer meter bridge ──────────────────────────────── -->
+  <g transform="translate(852,70)">
+    <rect x="-24" y="-18" width="392" height="236" rx="16" fill="#151922" stroke="#FFFFFF" stroke-opacity="0.07"/>
+    <text x="0" y="6" font-size="12" font-weight="600" letter-spacing="2" fill="#6B7280">METER BRIDGE</text>
+
+    <!-- channel meters: pairs of bars at decreasing levels -->
+    <g transform="translate(0,24)">
+      <!-- track helper -->
+      <g fill="#242A37">
+        <rect x="0"   y="0" width="20" height="168" rx="5"/>
+        <rect x="30"  y="0" width="20" height="168" rx="5"/>
+        <rect x="74"  y="0" width="20" height="168" rx="5"/>
+        <rect x="104" y="0" width="20" height="168" rx="5"/>
+        <rect x="148" y="0" width="20" height="168" rx="5"/>
+        <rect x="178" y="0" width="20" height="168" rx="5"/>
+        <rect x="222" y="0" width="20" height="168" rx="5"/>
+        <rect x="252" y="0" width="20" height="168" rx="5"/>
+        <rect x="300" y="0" width="20" height="168" rx="5"/>
+        <rect x="330" y="0" width="20" height="168" rx="5"/>
+      </g>
+      <!-- live fills (top = high level) -->
+      <g>
+        <rect x="0"   y="58"  width="20" height="110" rx="5" fill="url(#meterFade)"/>
+        <rect x="30"  y="40"  width="20" height="128" rx="5" fill="url(#meterFade)"/>
+        <rect x="74"  y="86"  width="20" height="82"  rx="5" fill="url(#meterFade)"/>
+        <rect x="104" y="70"  width="20" height="98"  rx="5" fill="url(#meterFade)"/>
+        <rect x="148" y="30"  width="20" height="138" rx="5" fill="url(#meterFade)"/>
+        <rect x="178" y="96"  width="20" height="72"  rx="5" fill="url(#meterFade)"/>
+        <rect x="222" y="112" width="20" height="56"  rx="5" fill="url(#meterFade)"/>
+        <rect x="252" y="64"  width="20" height="104" rx="5" fill="url(#meterFade)"/>
+        <rect x="300" y="48"  width="20" height="120" rx="5" fill="url(#meterFade)"/>
+        <rect x="330" y="78"  width="20" height="90"  rx="5" fill="url(#meterFade)"/>
+      </g>
+      <!-- channel labels -->
+      <g font-size="11" font-weight="600" fill="#6B7280" text-anchor="middle">
+        <text x="25"  y="186">IN</text>
+        <text x="99"  y="186">MIX</text>
+        <text x="173" y="186">A</text>
+        <text x="247" y="186">B</text>
+        <text x="335" y="186">OUT</text>
+      </g>
+    </g>
+  </g>
+</svg>
