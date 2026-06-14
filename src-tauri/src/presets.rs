@@ -696,6 +696,14 @@ fn build_load_warnings(preset: &PresetFileV2) -> Result<Vec<PresetLoadWarning>, 
     }
 
     for input in &preset.inputs {
+        // Synthetic sources (system / process / app loopback, and phone over
+        // WebRTC) are not cpal input devices — their availability is decided at
+        // capture time, not against the device list — so checking them here
+        // produced a bogus "unavailable" warning. Skip them. A phone whose
+        // session is gone simply loads silent and shows a Disconnected badge.
+        if crate::audio::source::is_reserved_id(&input.device.id) {
+            continue;
+        }
         let maybe_input = input_map.get(&input.device.id);
         if maybe_input.is_none() {
             warnings.push(PresetLoadWarning {

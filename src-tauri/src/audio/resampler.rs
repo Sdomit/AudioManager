@@ -1,5 +1,6 @@
 //! Streaming resampler for cpal device inputs whose sample rate differs from
-//! the bus rate (#20, #36).
+//! the bus rate (#20, #36), plus a lightweight linear resampler for remote
+//! phone audio (#39-#45).
 //!
 //! Loopback sources don't need this — WASAPI shared-mode `autoconvert` already
 //! delivers the bus rate. It exists only so a microphone/line-in locked to a
@@ -29,6 +30,15 @@
 //! the pitch shift is inaudible (~1.7 cents) and drift converges in seconds rather
 //! than popping. The coarser `resync_drop` backstop in the mixer fires only when
 //! drift reaches 80 ms — these two mechanisms cover complementary regimes.
+//!
+//! ## Remote phone resampler (#39-#45)
+//!
+//! [`LinearResampler`] is a separate, simpler linear-interpolation resampler used
+//! by the remote phone feed. It converts the phone decode rate to the bus rate
+//! and exposes a ppm-trim API (`set_trim_ppm`) so the jitter feeder can correct
+//! sender/receiver clock drift. It is kept distinct from `Resampler` because the
+//! phone path needs the cheap ppm-trim knob rather than the mixer's fill-target
+//! P-controller.
 
 /// Max step delta per `nudge_ratio` call — ±0.1 % of nominal.
 const DRIFT_MAX_STEP_DELTA: f64 = 0.001;
@@ -169,11 +179,106 @@ impl Resampler {
     }
 }
 
+// ── Remote phone linear resampler (#39-#45) ───────────────────────────────────
+
+/// Largest playout-rate trim the drift compensator may apply, in ppm. ±300 ppm
+/// is ±0.03 % pitch — well under audibility, and only reached under sustained drift.
+pub const MAX_TRIM_PPM: i32 = 300;
+
+/// Linear-interpolation resampler for the remote phone feed. Drive it with
+/// `process_frame` for each input frame; it emits zero or more output frames at
+/// the target rate. Linear interpolation is modest quality (some high-frequency
+/// aliasing) but correct and cheap.
+pub struct LinearResampler {
+    /// Input frames advanced per output frame = (in_rate / out_rate) * trim.
+    step: f64,
+    /// Untrimmed ratio; `step` is derived from this and the current trim.
+    base_step: f64,
+    /// Current playout-rate trim in ppm (drift compensation; 0 = identity).
+    trim_ppm: i32,
+    /// Time of the next output frame within the current input interval, in
+    /// [0, 1) once normalized — may exceed 1 transiently when downsampling.
+    t: f64,
+    /// Previous input frame (left/right); right is unused for mono.
+    prev: [f32; 2],
+    channels: usize,
+    started: bool,
+}
+
+impl LinearResampler {
+    /// `channels` is clamped to 2 (the mixer only supports mono/stereo inputs).
+    pub fn new(in_rate: u32, out_rate: u32, channels: usize) -> Self {
+        let in_rate = in_rate.max(1);
+        let out_rate = out_rate.max(1);
+        let base_step = in_rate as f64 / out_rate as f64;
+        Self {
+            step: base_step,
+            base_step,
+            trim_ppm: 0,
+            t: 0.0,
+            prev: [0.0; 2],
+            channels: channels.clamp(1, 2),
+            started: false,
+        }
+    }
+
+    /// Nudge the effective resampling ratio by `ppm` (clamped to ±[`MAX_TRIM_PPM`])
+    /// to compensate sender/receiver clock drift. `0` restores the exact base
+    /// ratio (bit-identical to an untrimmed resampler).
+    pub fn set_trim_ppm(&mut self, ppm: i32) {
+        self.trim_ppm = ppm.clamp(-MAX_TRIM_PPM, MAX_TRIM_PPM);
+        self.step = self.base_step * (1.0 + self.trim_ppm as f64 / 1_000_000.0);
+    }
+
+    /// Current applied trim in ppm (observability).
+    #[allow(dead_code)] // surfaced in Phase 3
+    pub fn trim_ppm(&self) -> i32 {
+        self.trim_ppm
+    }
+
+    /// Feed one input frame (`frame.len() == channels`). Calls `emit` once per
+    /// produced output frame with a `[L, R]` array (R == 0.0 for mono).
+    ///
+    /// The first frame only primes `prev` (no output): output frames are
+    /// interpolated across the interval between the previous and current input
+    /// frame, so one frame of priming latency is unavoidable.
+    pub fn process_frame<E: FnMut([f32; 2])>(&mut self, frame: &[f32], mut emit: E) {
+        let ch = self.channels;
+        let cur = [frame[0], if ch == 2 { frame[1] } else { 0.0 }];
+
+        if !self.started {
+            self.started = true;
+            self.prev = cur;
+            return;
+        }
+
+        while self.t < 1.0 {
+            let f = self.t as f32;
+            let mut out = [0.0f32; 2];
+            for c in 0..ch {
+                out[c] = self.prev[c] + (cur[c] - self.prev[c]) * f;
+            }
+            emit(out);
+            self.t += self.step;
+        }
+        self.t -= 1.0;
+        self.prev = cur;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn collect_mono(rs: &mut Resampler, inputs: &[f32]) -> Vec<f32> {
+        let mut out = Vec::new();
+        for &x in inputs {
+            rs.process_frame(&[x], |y| out.push(y[0]));
+        }
+        out
+    }
+
+    fn collect_mono_linear(rs: &mut LinearResampler, inputs: &[f32]) -> Vec<f32> {
         let mut out = Vec::new();
         for &x in inputs {
             rs.process_frame(&[x], |y| out.push(y[0]));
@@ -384,5 +489,43 @@ mod tests {
             fill <= target + 100,
             "fill {fill} did not converge to target {target} within 200 nudges"
         );
+    }
+
+    // ── LinearResampler (remote phone) ────────────────────────────────────────
+
+    #[test]
+    fn trim_zero_is_identity() {
+        let inputs: Vec<f32> = (0..300).map(|i| i as f32 * 0.01).collect();
+        let mut base = LinearResampler::new(48_000, 44_100, 1);
+        let mut trimmed = LinearResampler::new(48_000, 44_100, 1);
+        trimmed.set_trim_ppm(0);
+        assert_eq!(
+            collect_mono_linear(&mut base, &inputs),
+            collect_mono_linear(&mut trimmed, &inputs)
+        );
+    }
+
+    #[test]
+    fn trim_sign_changes_output_rate_monotonically() {
+        // Long input so ±300 ppm yields a clear (>1 frame) output-count delta.
+        let inputs: Vec<f32> = (0..20_000).map(|i| i as f32).collect();
+        let mut faster = LinearResampler::new(48_000, 48_000, 1);
+        faster.set_trim_ppm(-300); // smaller step → MORE outputs (catch up / fill)
+        let mut base = LinearResampler::new(48_000, 48_000, 1);
+        let mut slower = LinearResampler::new(48_000, 48_000, 1);
+        slower.set_trim_ppm(300); // larger step → FEWER outputs (bleed off / drain)
+        let nf = collect_mono_linear(&mut faster, &inputs).len();
+        let nb = collect_mono_linear(&mut base, &inputs).len();
+        let ns = collect_mono_linear(&mut slower, &inputs).len();
+        assert!(nf > nb && nb > ns, "−ppm→more, +ppm→fewer outputs: {nf} {nb} {ns}");
+    }
+
+    #[test]
+    fn trim_is_clamped() {
+        let mut r = LinearResampler::new(48_000, 48_000, 1);
+        r.set_trim_ppm(100_000);
+        assert_eq!(r.trim_ppm(), MAX_TRIM_PPM);
+        r.set_trim_ppm(-100_000);
+        assert_eq!(r.trim_ppm(), -MAX_TRIM_PPM);
     }
 }

@@ -13,6 +13,7 @@ use crate::audio::dsp::{
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::meters::{verdict_for, LoudnessSnapshot, StreamAnalyzer, SILENCE_FLOOR_DB};
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
+use crate::audio::remote::{self, RemoteSubscription};
 use crate::audio::source::InputSourceSpec;
 
 // ~85 ms at 48 kHz stereo.
@@ -451,6 +452,9 @@ pub fn start(
             // thread; dropping them on teardown detaches from the shared capture
             // and stops it when this was the last subscriber.
             let mut subscriptions: Vec<Subscription> = Vec::new();
+            // Phone (WebRTC) feed subscriptions; same RAII contract as loopback —
+            // dropped on teardown, which frees the feed when this was the last bus.
+            let mut remote_subscriptions: Vec<RemoteSubscription> = Vec::new();
             // (Consumer<f32>, in_channels) — at most MAX_INPUTS entries (enforced above).
             let mut consumers: Vec<(ringbuf::Consumer<f32>, usize)> = Vec::new();
             let mut input_channels_meta: Vec<u16> = Vec::new();
@@ -646,6 +650,22 @@ pub fn start(
                         consumers.push((consumer, ch as usize));
                         input_channels_meta.push(ch);
                         subscriptions.push(sub);
+                        fill_snapshots.push(None);
+                    }
+
+                    // Phone over WebRTC: a push-fed ring at the bus rate. Subscribe
+                    // never fails — an unconnected phone is silent until audio
+                    // arrives (net::webrtc_peer -> remote::push_decoded_48k).
+                    InputSourceSpec::RemotePhone { session_id } => {
+                        let (consumer, ch, sub) = remote::subscribe_phone(
+                            session_id,
+                            out_sample_rate.0,
+                            Arc::clone(&shared_for_thread),
+                            i,
+                        )?;
+                        consumers.push((consumer, ch as usize));
+                        input_channels_meta.push(ch);
+                        remote_subscriptions.push(sub);
                         fill_snapshots.push(None);
                     }
                 }
@@ -969,6 +989,7 @@ pub fn start(
             Ok((
                 input_streams,
                 subscriptions,
+                remote_subscriptions,
                 output_stream,
                 StartInfo {
                     out_channels: out_channels as u16,
@@ -981,17 +1002,19 @@ pub fn start(
         })();
 
         match outcome {
-            Ok((input_streams, subscriptions, output_stream, info)) => {
+            Ok((input_streams, subscriptions, remote_subscriptions, output_stream, info)) => {
                 let _ = result_tx.send(Ok(info));
                 drop(result_tx);
                 let _ = stop_rx.recv();
                 // Stop the realtime callback first, then drop the producers:
                 // cpal streams release their WASAPI handles here; dropping each
                 // loopback Subscription detaches it and stops the shared capture
-                // when it was the last subscriber.
+                // when it was the last subscriber; dropping each phone
+                // RemoteSubscription frees its mixer feed.
                 drop(output_stream);
                 drop(input_streams);
                 drop(subscriptions);
+                drop(remote_subscriptions);
             }
             Err(e) => {
                 let _ = result_tx.send(Err(e));

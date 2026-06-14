@@ -61,6 +61,13 @@ export const MicIcon = (p: IconProps) => (
   </Base>
 );
 
+export const PhoneIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="7" y="2" width="10" height="20" rx="2.5" />
+    <path d="M11 18h2" />
+  </Base>
+);
+
 export const SpeakerIcon = (p: IconProps) => (
   <Base {...p}>
     <rect x="5" y="3" width="14" height="18" rx="2" />
@@ -218,6 +225,7 @@ export function iconForKind(kind: string) {
     case "app":        return <AppIcon />;
     case "loopback":   return <ChainIcon />;
     case "virtual":    return <RadioIcon />;
+    case "phone":      return <PhoneIcon />;
     default:           return <AppIcon />;
   }
 }
