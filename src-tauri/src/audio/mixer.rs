@@ -453,8 +453,9 @@ pub fn start(
                                     Err(e) => Err(e),
                                 }
                             }
-                            // Device is handled by the arm above; unreachable here.
-                            InputSourceSpec::Device { .. } => unreachable!(),
+                            // The outer arm guarantees a loopback variant here;
+                            // Device and RemotePhone have their own arms.
+                            _ => unreachable!(),
                         };
                         match result {
                             Ok((consumer, ch, sub)) => {
@@ -498,6 +499,11 @@ pub fn start(
                         consumers.push((consumer, ch as usize));
                         input_channels_meta.push(ch);
                         remote_subscriptions.push(sub);
+                        // Keep input_errors aligned with consumers/slots — the
+                        // final MixerInputInfo zip truncates to the shortest, so
+                        // a missing push here would silently drop this and every
+                        // later input from the engine's input list (#PR31-3 merge).
+                        input_errors.push(None);
                     }
                 }
             }
