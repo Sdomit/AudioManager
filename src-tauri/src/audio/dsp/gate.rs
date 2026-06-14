@@ -92,6 +92,9 @@ impl NoiseGate {
     /// open flag, and hold counter so a live parameter change does not pop.
     pub fn set_coeffs(&mut self, c: GateCoeffs) {
         self.threshold_lin = c.threshold_lin;
+        // GateCoeffs carries only the linear threshold, so derive the close
+        // threshold in the linear domain: ×db_to_lin(−HYSTERESIS_DB) is exactly
+        // −HYSTERESIS_DB, matching `new()`'s db_to_lin(threshold_db − HYSTERESIS_DB).
         self.close_threshold_lin = c.threshold_lin * db_to_lin(-HYSTERESIS_DB);
         self.attack_coeff = c.attack_coeff;
         self.release_coeff = c.release_coeff;
