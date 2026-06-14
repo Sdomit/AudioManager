@@ -40,6 +40,7 @@ const noopHandlers = {
   onPickDevice: () => {},
   onSelectInput: () => {},
   onBufferSizeChange: () => {},
+  onLatencyModeChange: () => {},
   onEqChange: () => {},
   onStartRecording: () => {},
   onStopRecording: () => {},
