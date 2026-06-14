@@ -1,3 +1,9 @@
+// @vitest-environment jsdom
+//
+// This suite touches the `navigator` global. vitest's default `node`
+// environment only exposes `navigator` on Node 21+, so on the CI-pinned Node 20
+// these tests threw `ReferenceError: navigator is not defined`. jsdom provides a
+// `navigator` regardless of Node version, making the suite node-version-stable.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { onDeviceChange } from "./capture";
