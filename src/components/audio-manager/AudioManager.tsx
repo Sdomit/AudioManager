@@ -99,15 +99,30 @@ export function AudioManager() {
   const [hasCableDevices, setHasCableDevices] = useState<boolean | null>(null);
   const [outputDevicesCache, setOutputDevicesCache] = useState<DeviceInfo[]>([]);
   // Engine sample rate for EQ response curves: DSP runs at the output device's
-  // rate, so use the default (else first) output device's rate; falls back to
-  // 48 kHz when no devices are cached yet.
-  const eqSampleRate = useMemo(
-    () =>
+  // rate, so use the SELECTED bus's device rate (for input EQ, the first bus the
+  // input feeds — that engine processes its DSP). Falls back to the default
+  // output device, then 48 kHz.
+  const eqSampleRate = useMemo(() => {
+    const rateOf = (deviceId: string | null | undefined) =>
+      deviceId
+        ? outputDevicesCache.find((d) => d.id === deviceId)?.default_sample_rate
+        : undefined;
+    const sel = state.selection;
+    let busDevice: string | null | undefined;
+    if (sel.kind === "bus") {
+      busDevice = state.buses.find((b) => b.id === sel.busId)?.device;
+    } else if (sel.kind === "input") {
+      const busId = state.sends.find((s) => s.inputId === sel.inputId)?.busId;
+      busDevice = busId
+        ? state.buses.find((b) => b.id === busId)?.device
+        : undefined;
+    }
+    return (
+      rateOf(busDevice) ??
       outputDevicesCache.find((d) => d.is_default)?.default_sample_rate ??
-      outputDevicesCache[0]?.default_sample_rate ??
-      DEFAULT_EQ_SR,
-    [outputDevicesCache],
-  );
+      DEFAULT_EQ_SR
+    );
+  }, [state.selection, state.buses, state.sends, outputDevicesCache]);
   const [inputDevicesCache, setInputDevicesCache] = useState<DeviceInfo[]>([]);
 
   // Re-poll device lists and recompute AudioManager-cable presence. Runs at
