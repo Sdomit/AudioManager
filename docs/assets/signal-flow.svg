@@ -1,0 +1,183 @@
+<svg width="1200" height="560" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bgf" x1="0" y1="0" x2="1200" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E1116"/>
+      <stop offset="1" stop-color="#141821"/>
+    </linearGradient>
+    <style>
+      .card { fill:#1C212C; stroke:#FFFFFF; stroke-opacity:0.08; }
+      .lbl  { fill:#E6E9EF; font-size:14px; font-weight:600; }
+      .sub  { fill:#6B7280; font-size:11px; font-weight:500; }
+      .hdr  { fill:#6B7280; font-size:12px; font-weight:700; letter-spacing:2px; }
+      .wire { stroke-width:2.5; fill:none; opacity:0.85; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="560" fill="url(#bgf)"/>
+
+  <!-- column headers -->
+  <text x="40"  y="44" class="hdr">INPUTS</text>
+  <text x="338" y="44" class="hdr">ROUTING MATRIX</text>
+  <text x="648" y="44" class="hdr">BUSES</text>
+  <text x="1000" y="44" class="hdr">OUTPUTS</text>
+
+  <!-- ── wires: inputs → matrix ─────────────────────────────────── -->
+  <g stroke="#3a414e" stroke-width="2" opacity="0.7">
+    <path d="M232 110 H318"/>
+    <path d="M232 190 H318"/>
+    <path d="M232 270 H318"/>
+    <path d="M232 350 H318"/>
+  </g>
+
+  <!-- ── wires: matrix → buses (per-bus color) ──────────────────── -->
+  <path class="wire" stroke="#FBBF24" d="M566 110 C 605 110, 605 110, 638 110"/>
+  <path class="wire" stroke="#F59E0B" d="M566 190 C 605 190, 605 190, 638 190"/>
+  <path class="wire" stroke="#A855F7" d="M566 270 C 605 270, 605 270, 638 270"/>
+  <path class="wire" stroke="#EF4444" d="M566 350 C 605 350, 605 350, 638 350"/>
+
+  <!-- ── wires: buses → outputs (per-bus color) ─────────────────── -->
+  <path class="wire" stroke="#FBBF24" d="M828 110 C 905 110, 905 110, 996 110"/>
+  <path class="wire" stroke="#F59E0B" d="M828 190 C 905 190, 905 190, 996 190"/>
+  <path class="wire" stroke="#A855F7" d="M828 270 C 905 270, 905 270, 996 270"/>
+  <path class="wire" stroke="#EF4444" d="M828 350 C 905 350, 905 350, 996 350"/>
+
+  <!-- ── INPUTS ─────────────────────────────────────────────────── -->
+  <g>
+    <g transform="translate(40,82)">
+      <rect class="card" width="192" height="56" rx="11"/>
+      <rect x="16" y="18" width="20" height="20" rx="5" fill="#EF4444" opacity="0.85"/>
+      <text x="48" y="27" class="lbl">Microphone</text>
+      <text x="48" y="44" class="sub">capture device</text>
+    </g>
+    <g transform="translate(40,162)">
+      <rect class="card" width="192" height="56" rx="11"/>
+      <rect x="16" y="18" width="20" height="20" rx="5" fill="#3B82F6" opacity="0.85"/>
+      <text x="48" y="27" class="lbl">System Audio</text>
+      <text x="48" y="44" class="sub">process loopback</text>
+    </g>
+    <g transform="translate(40,242)">
+      <rect class="card" width="192" height="56" rx="11"/>
+      <rect x="16" y="18" width="20" height="20" rx="5" fill="#22C55E" opacity="0.85"/>
+      <text x="48" y="27" class="lbl">Phone</text>
+      <text x="48" y="44" class="sub">wireless, paired</text>
+    </g>
+    <g transform="translate(40,322)">
+      <rect class="card" width="192" height="56" rx="11"/>
+      <rect x="16" y="18" width="20" height="20" rx="5" fill="#A855F7" opacity="0.85"/>
+      <text x="48" y="27" class="lbl">App / Media</text>
+      <text x="48" y="44" class="sub">per-app capture</text>
+    </g>
+  </g>
+
+  <!-- ── ROUTING MATRIX ─────────────────────────────────────────── -->
+  <g transform="translate(318,72)">
+    <rect class="card" width="248" height="316" rx="14"/>
+    <!-- column header chips -->
+    <g font-size="11" font-weight="700" text-anchor="middle">
+      <circle cx="47"  cy="28" r="9" fill="#FBBF24"/><text x="47"  y="32" fill="#0E1116">A1</text>
+      <circle cx="107" cy="28" r="9" fill="#F59E0B"/><text x="107" y="32" fill="#0E1116">A2</text>
+      <circle cx="167" cy="28" r="9" fill="#A855F7"/><text x="167" y="32" fill="#0E1116">B1</text>
+      <circle cx="227" cy="28" r="9" fill="#EF4444"/><text x="227" y="32" fill="#0E1116">B2</text>
+    </g>
+    <line x1="14" y1="48" x2="234" y2="48" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+    <!-- rows: y-centers relative = 38,118,198,278 (maps to abs 110,190,270,350) -->
+    <!-- on = filled colored, off = hollow gray -->
+    <g>
+      <!-- Mic row (y=38): A1 on, A2 off, B1 on, B2 on -->
+      <circle cx="47"  cy="38" r="8" fill="#FBBF24"/>
+      <circle cx="107" cy="38" r="7.5" fill="none" stroke="#3a414e" stroke-width="2"/>
+      <circle cx="167" cy="38" r="8" fill="#A855F7"/>
+      <circle cx="227" cy="38" r="8" fill="#EF4444"/>
+      <!-- System row (y=118): A1 off, A2 on, B1 on, B2 off -->
+      <circle cx="47"  cy="118" r="7.5" fill="none" stroke="#3a414e" stroke-width="2"/>
+      <circle cx="107" cy="118" r="8" fill="#F59E0B"/>
+      <circle cx="167" cy="118" r="8" fill="#A855F7"/>
+      <circle cx="227" cy="118" r="7.5" fill="none" stroke="#3a414e" stroke-width="2"/>
+      <!-- Phone row (y=198): A1 on, A2 off, B1 on, B2 off -->
+      <circle cx="47"  cy="198" r="8" fill="#FBBF24"/>
+      <circle cx="107" cy="198" r="7.5" fill="none" stroke="#3a414e" stroke-width="2"/>
+      <circle cx="167" cy="198" r="8" fill="#A855F7"/>
+      <circle cx="227" cy="198" r="7.5" fill="none" stroke="#3a414e" stroke-width="2"/>
+      <!-- App row (y=278): A1 off, A2 on, B1 on, B2 on -->
+      <circle cx="47"  cy="278" r="7.5" fill="none" stroke="#3a414e" stroke-width="2"/>
+      <circle cx="107" cy="278" r="8" fill="#F59E0B"/>
+      <circle cx="167" cy="278" r="8" fill="#A855F7"/>
+      <circle cx="227" cy="278" r="8" fill="#EF4444"/>
+    </g>
+  </g>
+
+  <!-- ── BUSES ──────────────────────────────────────────────────── -->
+  <g>
+    <g transform="translate(638,82)">
+      <rect class="card" width="190" height="56" rx="11" stroke="#FBBF24" stroke-opacity="0.5"/>
+      <circle cx="22" cy="28" r="6" fill="#FBBF24"/>
+      <text x="38" y="27" class="lbl">A1 Monitor</text>
+      <text x="38" y="44" class="sub">gain · mute · meter</text>
+    </g>
+    <g transform="translate(638,162)">
+      <rect class="card" width="190" height="56" rx="11" stroke="#F59E0B" stroke-opacity="0.5"/>
+      <circle cx="22" cy="28" r="6" fill="#F59E0B"/>
+      <text x="38" y="27" class="lbl">A2 Speakers</text>
+      <text x="38" y="44" class="sub">gain · mute · meter</text>
+    </g>
+    <g transform="translate(638,242)">
+      <rect class="card" width="190" height="56" rx="11" stroke="#A855F7" stroke-opacity="0.5"/>
+      <circle cx="22" cy="28" r="6" fill="#A855F7"/>
+      <text x="38" y="27" class="lbl">B1 Stream</text>
+      <text x="38" y="44" class="sub">gain · mute · meter</text>
+    </g>
+    <g transform="translate(638,322)">
+      <rect class="card" width="190" height="56" rx="11" stroke="#EF4444" stroke-opacity="0.5"/>
+      <circle cx="22" cy="28" r="6" fill="#EF4444"/>
+      <text x="38" y="27" class="lbl">B2 Record</text>
+      <text x="38" y="44" class="sub">gain · mute · meter</text>
+    </g>
+  </g>
+
+  <!-- ── OUTPUTS ────────────────────────────────────────────────── -->
+  <g>
+    <g transform="translate(996,82)">
+      <rect class="card" width="172" height="56" rx="11"/>
+      <text x="18" y="27" class="lbl">Headphones</text>
+      <text x="18" y="44" class="sub">monitor device</text>
+    </g>
+    <g transform="translate(996,162)">
+      <rect class="card" width="172" height="56" rx="11"/>
+      <text x="18" y="27" class="lbl">Speakers</text>
+      <text x="18" y="44" class="sub">playback device</text>
+    </g>
+    <g transform="translate(996,242)">
+      <rect class="card" width="172" height="56" rx="11"/>
+      <text x="18" y="27" class="lbl">Virtual Cable</text>
+      <text x="18" y="44" class="sub">OBS · Discord · Zoom</text>
+    </g>
+    <g transform="translate(996,322)">
+      <rect class="card" width="172" height="56" rx="11"/>
+      <text x="18" y="27" class="lbl">Recorder</text>
+      <text x="18" y="44" class="sub">WAV file</text>
+    </g>
+  </g>
+
+  <!-- DSP chain footnote -->
+  <g transform="translate(318,430)">
+    <rect class="card" width="850" height="58" rx="12" fill="#151922"/>
+    <text x="20" y="26" class="hdr" fill="#9AA3B2">PER-BUS DSP</text>
+    <g font-size="13" font-weight="600" fill="#E6E9EF">
+      <text x="20"  y="46">High-pass</text>
+      <text x="130" y="46">Noise Gate</text>
+      <text x="250" y="46">Compressor</text>
+      <text x="385" y="46">EQ</text>
+      <text x="440" y="46">Soft Limiter</text>
+      <text x="575" y="46">Ducking</text>
+    </g>
+    <g fill="#6B7280" font-size="16" font-weight="400">
+      <text x="105" y="46">→</text>
+      <text x="228" y="46">→</text>
+      <text x="362" y="46">→</text>
+      <text x="418" y="46">→</text>
+      <text x="552" y="46">→</text>
+    </g>
+    <text x="690" y="46" font-size="12" fill="#6B7280">peak · RMS · LUFS metering</text>
+  </g>
+</svg>
