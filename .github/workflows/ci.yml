@@ -37,6 +37,11 @@ jobs:
   rust:
     name: Rust (windows)
     runs-on: windows-latest
+    # The runner's CMake 4.x rejects audiopus_sys's vendored libopus
+    # `cmake_minimum_required(<3.5)`. This env (CMake 3.31+) lets the old
+    # project configure instead of erroring at line 1.
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
     defaults:
       run:
         working-directory: src-tauri
