@@ -510,7 +510,7 @@ pub fn start(
                                 None,
                             )
                         } else {
-                            // Rate mismatch: linear-resample to the bus rate (#20).
+                            // Rate mismatch: cubic-resample to the bus rate (#20, #36).
                             // Share a fill-snapshot atomic with the output callback so
                             // nudge_ratio can steer the ring backlog toward target
                             // without glitching (drift-aware SRC, #36).
@@ -521,10 +521,11 @@ pub fn start(
                                     * in_channels;
                             let mut producer = producer;
                             let peak = Arc::clone(&shared_for_thread);
-                            let mut resampler = crate::audio::resampler::LinearResampler::new(
+                            let mut resampler = crate::audio::resampler::Resampler::new(
                                 in_rate,
                                 out_rate,
                                 in_channels,
+                                crate::audio::resampler::ResampleQuality::Quality,
                             );
                             input_device.build_input_stream(
                                 &in_stream_cfg,
