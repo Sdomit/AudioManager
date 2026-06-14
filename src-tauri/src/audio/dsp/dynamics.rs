@@ -52,8 +52,14 @@ impl CompressorCoeffs {
     }
 }
 
-/// Feed-forward VCA compressor with peak envelope detection.
-/// Hard knee. Attack/release on both envelope and gain smoothing.
+/// Feed-forward VCA compressor with peak envelope detection. Hard knee.
+///
+/// NOTE: attack/release coefficients are applied to BOTH the level envelope and
+/// the gain smoother, so the *effective* attack/release is roughly 2x the dialed
+/// value (two cascaded one-poles). This is left as-is deliberately: collapsing it
+/// to a single smoothing stage would re-voice the shipped #33 Stream Voice preset,
+/// so accurate-ballistics tuning is deferred to a dedicated pass rather than
+/// changed silently on the integration line.
 ///
 /// Typical voice settings: threshold −18 dB, ratio 4:1, attack 5 ms,
 /// release 80 ms, makeup_db to taste (0–6 dB).

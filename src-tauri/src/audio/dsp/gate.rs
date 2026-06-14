@@ -13,6 +13,12 @@ fn ms_to_coeff(ms: f32, sr: f32) -> f32 {
     (-1.0 / (ms * 0.001 * sr)).exp()
 }
 
+/// Hysteresis: the gate closes 3 dB below the level it opens at, so a signal
+/// hovering around the threshold can't chatter the gate open/closed. Derived
+/// internally from the open threshold (no extra config field).
+/// `10^(-3 dB / 20)` ≈ 0.7079.
+const GATE_HYSTERESIS_RATIO: f32 = 0.707_946;
+
 /// Gate coefficients, precomputed on the IPC thread so the realtime callback
 /// retunes via [`NoiseGate::set_coeffs`] without running `exp`/`powf`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,7 +47,9 @@ impl GateCoeffs {
 }
 
 /// Noise gate: silences signal below `threshold_db` after `hold` expires.
-/// Uses a one-pole envelope follower + hold counter + gain ramp.
+/// Uses a hold counter + gain ramp with 3 dB of threshold hysteresis (opens at
+/// `threshold_db`, closes 3 dB lower) so signal near the threshold cannot
+/// chatter the gate.
 ///
 /// Typical voice settings: threshold −40 dB, attack 10 ms, hold 80 ms, release 150 ms.
 pub struct NoiseGate {
@@ -98,13 +106,18 @@ impl DspEffect for NoiseGate {
             buf[0].abs()
         };
 
+        // Hysteresis: open at `threshold_lin`, close only once the signal drops
+        // 3 dB below it. Between the two thresholds the gate sustains its current
+        // state, so a signal riding the threshold cannot chatter.
         if peak >= self.threshold_lin {
             self.open = true;
             self.hold_counter = self.hold_samples;
-        } else if self.hold_counter > 0 {
-            self.hold_counter -= 1;
-        } else {
-            self.open = false;
+        } else if peak < self.threshold_lin * GATE_HYSTERESIS_RATIO {
+            if self.hold_counter > 0 {
+                self.hold_counter -= 1;
+            } else {
+                self.open = false;
+            }
         }
 
         let target = if self.open { 1.0_f32 } else { 0.0_f32 };
@@ -143,6 +156,35 @@ mod tests {
         assert_eq!(c.hold_samples, (0.080 * 48_000.0) as u32);
         assert!(c.attack_coeff > 0.0 && c.attack_coeff < 1.0);
         assert!(c.release_coeff > 0.0 && c.release_coeff < 1.0);
+    }
+
+    #[test]
+    fn hysteresis_band_keeps_open_gate_open() {
+        // threshold -40 dB; close threshold is 3 dB lower (~-43 dB). attack/
+        // release/hold = 0 so gain and closing are immediate, isolating the
+        // open/close state machine.
+        let mut g = NoiseGate::new(-40.0, 0.0, 0.0, 0.0, 48_000.0);
+        g.process(&mut [0.5, 0.0], 1); // loud → opens
+        assert!(g.open);
+        // A sample inside the hysteresis band (below open, above close) must NOT
+        // close the gate.
+        g.process(&mut [db_to_lin(-41.5), 0.0], 1);
+        assert!(g.open, "band signal must keep an open gate open");
+        // Dropping below the close threshold closes it (hold = 0).
+        g.process(&mut [db_to_lin(-50.0), 0.0], 1);
+        assert!(!g.open, "signal below close threshold must close the gate");
+    }
+
+    #[test]
+    fn hysteresis_band_does_not_open_closed_gate() {
+        let mut g = NoiseGate::new(-40.0, 0.0, 0.0, 0.0, 48_000.0);
+        assert!(!g.open);
+        // In the band but below the open threshold: a closed gate stays closed.
+        g.process(&mut [db_to_lin(-41.5), 0.0], 1);
+        assert!(!g.open, "band signal below open threshold must not open the gate");
+        // Only crossing the open threshold opens it.
+        g.process(&mut [db_to_lin(-39.0), 0.0], 1);
+        assert!(g.open, "crossing the open threshold opens the gate");
     }
 
     #[test]
