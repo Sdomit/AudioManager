@@ -27,6 +27,8 @@ pub struct CompressorCoeffs {
     pub makeup_lin: f32,
     pub env_attack: f32,
     pub env_release: f32,
+    /// Retained for the live (seqlock) wire format only; the runtime compressor
+    /// no longer applies a second gain-smoothing pass (see `Compressor::process`).
     pub gain_attack: f32,
     pub gain_release: f32,
 }
@@ -53,7 +55,9 @@ impl CompressorCoeffs {
 }
 
 /// Feed-forward VCA compressor with peak envelope detection.
-/// Hard knee. Attack/release on both envelope and gain smoothing.
+/// Hard knee. Attack/release ballistics live in the peak envelope follower;
+/// the gain computer is static so the configured attack/release apply exactly
+/// once (a second gain-smoothing pass previously ~doubled the effective times).
 ///
 /// Typical voice settings: threshold −18 dB, ratio 4:1, attack 5 ms,
 /// release 80 ms, makeup_db to taste (0–6 dB).
@@ -63,8 +67,6 @@ pub struct Compressor {
     makeup_lin: f32,
     env_attack: f32,
     env_release: f32,
-    gain_attack: f32,
-    gain_release: f32,
     envelope: f32,
     gain_db: f32,
     enabled: bool,
@@ -85,8 +87,6 @@ impl Compressor {
             makeup_lin: db_to_lin(makeup_db),
             env_attack: ms_to_coeff(attack_ms, sample_rate),
             env_release: ms_to_coeff(release_ms, sample_rate),
-            gain_attack: ms_to_coeff(attack_ms, sample_rate),
-            gain_release: ms_to_coeff(release_ms, sample_rate),
             envelope: 0.0,
             gain_db: 0.0,
             enabled: true,
@@ -105,8 +105,6 @@ impl Compressor {
         self.makeup_lin = c.makeup_lin;
         self.env_attack = c.env_attack;
         self.env_release = c.env_release;
-        self.gain_attack = c.gain_attack;
-        self.gain_release = c.gain_release;
     }
 }
 
@@ -127,21 +125,16 @@ impl DspEffect for Compressor {
         };
         self.envelope = self.envelope * env_coeff + peak * (1.0 - env_coeff);
 
-        // Gain reduction in dB (hard knee).
+        // Static gain reduction in dB (hard knee), derived directly from the
+        // smoothed envelope. The attack/release ballistics already live in the
+        // envelope follower above; smoothing the gain here too cascaded two
+        // identical one-poles and ~doubled the effective attack/release.
         let level_db = lin_to_db(self.envelope);
-        let target_gain_db = if level_db > self.threshold_db {
+        self.gain_db = if level_db > self.threshold_db {
             (self.threshold_db - level_db) * (1.0 - 1.0 / self.ratio)
         } else {
             0.0
         };
-
-        // Smooth gain reduction changes (attack when reducing, release when recovering).
-        let g_coeff = if target_gain_db < self.gain_db {
-            self.gain_attack
-        } else {
-            self.gain_release
-        };
-        self.gain_db = self.gain_db * g_coeff + target_gain_db * (1.0 - g_coeff);
 
         let gain = db_to_lin(self.gain_db) * self.makeup_lin;
         buf[0] *= gain;
@@ -263,7 +256,7 @@ mod tests {
         assert_eq!(c.ratio, r.ratio);
         assert!((c.makeup_lin - r.makeup_lin).abs() < 1e-9);
         assert!((c.env_attack - r.env_attack).abs() < 1e-9);
-        assert!((c.gain_release - r.gain_release).abs() < 1e-9);
+        assert!((c.env_release - r.env_release).abs() < 1e-9);
     }
 
     #[test]
@@ -284,6 +277,25 @@ mod tests {
         ));
         assert_eq!((comp.envelope, comp.gain_db), saved);
         assert_eq!(comp.ratio, 8.0);
+    }
+
+    #[test]
+    fn comp_gain_tracks_envelope_without_second_smoothing() {
+        // With the redundant gain-smoothing pass removed, gain_db is the
+        // instantaneous static hard-knee target of the current envelope at every
+        // sample — no extra lag. The old double-smoothed code failed this.
+        let mut comp = Compressor::new(-18.0, 4.0, 5.0, 80.0, 0.0, 48_000.0);
+        let levels = [0.9_f32, 0.1, 0.5, 0.02, 0.7];
+        for &lv in levels.iter().cycle().take(200) {
+            comp.process(&mut [lv, lv], 2);
+            let level_db = lin_to_db(comp.envelope);
+            let target = if level_db > -18.0 {
+                (-18.0 - level_db) * (1.0 - 1.0 / 4.0)
+            } else {
+                0.0
+            };
+            assert!((comp.gain_db - target).abs() < 1e-6);
+        }
     }
 
     #[test]
