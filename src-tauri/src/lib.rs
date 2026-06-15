@@ -14,9 +14,9 @@ use tauri_plugin_opener::OpenerExt;
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::device_watch::{self, DeviceDiff, DeviceSnapshot};
 use audio::devices::{DeviceInfo, DeviceListError};
-use audio::dsp::{BusDspConfig, DspConfig};
+use audio::dsp::{AutomixConfig, AutomixGroupUpdate, BusDspConfig, DspConfig, MAX_AUTOMIX_GROUPS};
 use audio::graph::InputChannel;
-use audio::mixer::{EngineError, MixerInput};
+use audio::mixer::{EngineError, MixerEngine, MixerInput};
 use audio::source::InputSourceSpec;
 use audio::recorder::{
     self, CallbackTapKind, RecorderSettings, RecordingFile, RecordingInfo, StartRecorderRequest,
@@ -24,7 +24,7 @@ use audio::recorder::{
 };
 use audio::routing::Route;
 use presets::{PresetFileV2, PresetLoadResult, PresetLoadWarning, PresetSummary};
-use state::{AppInner, AppState};
+use state::{AppInner, AppState, AutomixGroupDef};
 
 // ── Device enumeration ────────────────────────────────────────────────────────
 
@@ -103,6 +103,50 @@ fn app_local_dir(app: &tauri::AppHandle) -> Result<PathBuf, EngineError> {
     })
 }
 
+/// Resolve the automix groups to per-engine `AutomixGroupUpdate`s: each group's
+/// member device ids → this engine's input-slot bitmask. Groups with no member
+/// present in this engine are dropped (they don't affect it); the realtime layer
+/// caps at [`MAX_AUTOMIX_GROUPS`]. Input slots ≥ 32 can't be masked, but the
+/// engine enforces ≤ 8 inputs so that never bites.
+fn automix_updates_for_engine(
+    groups: &[AutomixGroupDef],
+    engine: &MixerEngine,
+) -> Vec<AutomixGroupUpdate> {
+    groups
+        .iter()
+        .filter_map(|g| {
+            let mut mask = 0u32;
+            for dev in &g.members {
+                if let Some((idx, _)) = engine.input_index(dev) {
+                    if idx < 32 {
+                        mask |= 1 << idx;
+                    }
+                }
+            }
+            if mask == 0 {
+                return None;
+            }
+            Some(AutomixGroupUpdate {
+                enabled: g.config.enabled,
+                member_mask: mask,
+                config: g.config,
+            })
+        })
+        .take(MAX_AUTOMIX_GROUPS)
+        .collect()
+}
+
+/// Re-resolve and publish automix groups to every running engine. Call after a
+/// group definition changes; the per-engine rebuild path publishes on its own.
+fn republish_automix_all(inner: &AppInner) {
+    for bus in inner.buses.values() {
+        if let Some(engine) = bus.engine.as_ref() {
+            let updates = automix_updates_for_engine(&inner.automix_groups, engine);
+            engine.update_automix(&updates);
+        }
+    }
+}
+
 /// Stop the engine for `bus_id` and restart it from current matrix state.
 ///
 /// A bus runs only when all of these are true:
@@ -127,6 +171,9 @@ fn rebuild_bus_filtered(
     // Centralized teardown: stops recorders first, then drops the engine
     // so WASAPI handles are released before the restart attempt.
     tear_down_engine(inner, bus_id);
+    // Snapshot automix groups before the mutable bus borrow so the new engine
+    // can be seeded with resolved group masks without re-borrowing `inner`.
+    let automix_groups = inner.automix_groups.clone();
     let (enabled, output_id, bus_vol, bus_muted, bus_dsp, buffer_size_frames) = {
         let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
             message: format!("Unknown bus: {bus_id:?}"),
@@ -194,6 +241,13 @@ fn rebuild_bus_filtered(
             }
             let bus = inner.buses.get_mut(&bus_id).expect("bus exists");
             bus.engine = Some(engine);
+            // Seed the fresh engine with the automix groups resolved against its
+            // input slots (live sound gate, Feature B). Uses the pre-snapshotted
+            // groups so we don't re-borrow `inner` while `bus` is held.
+            if let Some(engine) = bus.engine.as_ref() {
+                let updates = automix_updates_for_engine(&automix_groups, engine);
+                engine.update_automix(&updates);
+            }
             // Partial failure: the bus runs its live inputs. Don't set last_error
             // — the frontend maps any last_error to a full "error" status, which
             // would falsely flag a working bus. Log the silent inputs instead.
@@ -377,6 +431,11 @@ fn apply_preset_state(
         }
     }
 
+    // Restore automix groups (live sound gate, Feature B). Engines aren't
+    // started here (preset load leaves audio stopped), so resolution/publish
+    // happens later when each bus is enabled and rebuilt.
+    inner.automix_groups = preset.automix_groups.clone();
+
     inner.last_error = None;
     Ok(())
 }
@@ -520,7 +579,7 @@ fn save_preset(
     name: String,
 ) -> Result<PresetSummary, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    let preset = presets::build_preset_v2(&name, &inner.buses, &inner.graph)?;
+    let preset = presets::build_preset_v2(&name, &inner.buses, &inner.graph, &inner.automix_groups)?;
     let path = presets::preset_file_path(&app, &preset.name)?;
     presets::write_preset_file(&path, &preset)?;
     inner.last_error = None;
@@ -1085,6 +1144,114 @@ fn update_bus_dsp(
     Ok(bus.read_status())
 }
 
+// ── Automix groups (live sound gate, Feature B) ───────────────────────────────
+
+/// List all automix (live-sound-gate) groups.
+#[tauri::command]
+fn automix_list_groups(state: tauri::State<AppState>) -> Vec<AutomixGroupDef> {
+    state.inner.lock().unwrap().automix_groups.clone()
+}
+
+/// Create an empty automix group (no members, default params). Returns the new
+/// group so the UI gets its generated id.
+#[tauri::command]
+fn automix_create_group(
+    state: tauri::State<AppState>,
+    name: String,
+) -> Result<AutomixGroupDef, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if inner.automix_groups.len() >= MAX_AUTOMIX_GROUPS {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Automix group limit reached ({MAX_AUTOMIX_GROUPS})"),
+        ));
+    }
+    let group = AutomixGroupDef {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        members: Vec::new(),
+        config: AutomixConfig::default(),
+    };
+    inner.automix_groups.push(group.clone());
+    inner.last_error = None;
+    Ok(group)
+}
+
+/// Replace a group's member set (input device ids). Re-resolves and publishes to
+/// every running engine. Duplicates are dropped, original order preserved.
+#[tauri::command]
+fn automix_set_members(
+    state: tauri::State<AppState>,
+    group_id: String,
+    members: Vec<String>,
+) -> Result<Vec<AutomixGroupDef>, EngineError> {
+    let mut seen = BTreeSet::new();
+    let members: Vec<String> = members
+        .into_iter()
+        .filter(|m| seen.insert(m.clone()))
+        .collect();
+    let mut inner = state.inner.lock().unwrap();
+    {
+        let group = inner
+            .automix_groups
+            .iter_mut()
+            .find(|g| g.id == group_id)
+            .ok_or_else(|| EngineError {
+                message: format!("Unknown automix group: {group_id}"),
+            })?;
+        group.members = members;
+    }
+    republish_automix_all(&inner);
+    inner.last_error = None;
+    Ok(inner.automix_groups.clone())
+}
+
+/// Update a group's automix params (enabled / attack / release / floor /
+/// noise floor). Clamped, then republished to every running engine.
+#[tauri::command]
+fn automix_set_config(
+    state: tauri::State<AppState>,
+    group_id: String,
+    config: AutomixConfig,
+) -> Result<Vec<AutomixGroupDef>, EngineError> {
+    let mut config = config;
+    config.clamp();
+    let mut inner = state.inner.lock().unwrap();
+    {
+        let group = inner
+            .automix_groups
+            .iter_mut()
+            .find(|g| g.id == group_id)
+            .ok_or_else(|| EngineError {
+                message: format!("Unknown automix group: {group_id}"),
+            })?;
+        group.config = config;
+    }
+    republish_automix_all(&inner);
+    inner.last_error = None;
+    Ok(inner.automix_groups.clone())
+}
+
+/// Delete an automix group and republish (the engine sees one fewer group).
+#[tauri::command]
+fn automix_delete_group(
+    state: tauri::State<AppState>,
+    group_id: String,
+) -> Result<Vec<AutomixGroupDef>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    let before = inner.automix_groups.len();
+    inner.automix_groups.retain(|g| g.id != group_id);
+    if inner.automix_groups.len() == before {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Unknown automix group: {group_id}"),
+        ));
+    }
+    republish_automix_all(&inner);
+    inner.last_error = None;
+    Ok(inner.automix_groups.clone())
+}
+
 // ── Recording ─────────────────────────────────────────────────────────────────
 
 /// Resolve target engine + callback tap kind + WAV header info for a spec.
@@ -1413,12 +1580,14 @@ mod tests {
                 ],
                 dsp: Default::default(),
             }],
+            automix_groups: vec![],
         };
 
         let mut inner = AppInner {
             buses: BusRuntime::default_set(),
             graph: AudioGraph::new(),
             recorders: BTreeMap::new(),
+            automix_groups: Vec::new(),
             last_error: Some("stale".to_string()),
         };
 
@@ -1439,6 +1608,7 @@ mod tests {
             buses: BusRuntime::default_set(),
             graph: AudioGraph::new(),
             recorders: BTreeMap::new(),
+            automix_groups: Vec::new(),
             last_error: None,
         }
     }
@@ -1998,6 +2168,11 @@ pub fn run() {
             set_bus_latency_mode,
             update_input_dsp,
             update_bus_dsp,
+            automix_list_groups,
+            automix_create_group,
+            automix_set_members,
+            automix_set_config,
+            automix_delete_group,
             start_recording,
             start_master_recording,
             stop_recording,
