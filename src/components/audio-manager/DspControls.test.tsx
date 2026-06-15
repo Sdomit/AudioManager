@@ -118,6 +118,41 @@ describe("InputDspControls", () => {
     expect(onChange.mock.calls[0][0].mono).toBe(true);
   });
 
+  it("StereoSection: no 3D toggle without onSpatialChange", () => {
+    render(<StereoSection stereo={defaultStereo()} onChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: "3D" })).toBeNull();
+  });
+
+  it("StereoSection: 3D toggle enables binaural; pad replaces the flat controls", () => {
+    const onSpatialChange = vi.fn();
+    const { rerender } = render(
+      <StereoSection
+        stereo={defaultStereo()}
+        onChange={() => {}}
+        onSpatialChange={onSpatialChange}
+      />,
+    );
+    // Off: flat controls present, 3D pill toggles binaural on.
+    expect(screen.getByText("Pan")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    expect(onSpatialChange).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
+    );
+
+    // On: the position pad (slider) shows and the flat Pan control is hidden
+    // (the backend bypasses the stereo stage, so it would be inert).
+    rerender(
+      <StereoSection
+        stereo={defaultStereo()}
+        onChange={() => {}}
+        spatial={{ enabled: true, azimuth_deg: 0, distance: 0 }}
+        onSpatialChange={onSpatialChange}
+      />,
+    );
+    expect(screen.getByRole("slider")).toBeTruthy();
+    expect(screen.queryByText("Pan")).toBeNull();
+  });
+
   it("shows the Stream Voice + Reset preset row only when onStreamVoice is given", () => {
     const { rerender } = render(
       <InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />,

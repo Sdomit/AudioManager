@@ -13,6 +13,7 @@
 import { useId, useRef, useState } from "react";
 
 import { orderedInputFx, reorderInputFx, type InputFxKey } from "./inputFx";
+import { PositionPad } from "./PositionPad";
 import type {
   BandKind,
   CompressorConfig,
@@ -23,6 +24,7 @@ import type {
   GateConfig,
   HpfConfig,
   LimiterConfig,
+  SpatialConfig,
   StereoConfig,
 } from "../../types/engine";
 import {
@@ -30,6 +32,7 @@ import {
   bandUsesGain,
   bandUsesQ,
   defaultDspConfig,
+  defaultSpatial,
   defaultStereo,
   DSP_RANGE,
   isStereoActive,
@@ -101,33 +104,75 @@ function fmtPan(pan: number): string {
   return pan < 0 ? `L${pct}` : `R${pct}`;
 }
 
-/** Stereo image controls (#34). Always visible (no enable toggle): the controls
- *  default to transparent, and Reset restores that. */
+/** Stereo image controls (#34) + binaural 3D position (#binaural). The Stereo
+ *  controls default to transparent; Reset restores that. Toggling 3D swaps the
+ *  flat stereo controls for a top-down position pad — when 3D is on the backend
+ *  bypasses the whole stereo stage (azimuth owns left/right), so the flat
+ *  controls would be inert and are hidden. */
 export function StereoSection({
   stereo,
   onChange,
+  spatial = defaultSpatial(),
+  onSpatialChange,
 }: {
   stereo: StereoConfig;
   onChange: (next: StereoConfig) => void;
+  spatial?: SpatialConfig;
+  onSpatialChange?: (next: SpatialConfig) => void;
 }) {
   const patch = (p: Partial<StereoConfig>) => onChange({ ...stereo, ...p });
-  const active = isStereoActive(stereo);
+  const spatialPatch = (p: Partial<SpatialConfig>) =>
+    onSpatialChange?.({ ...spatial, ...p });
+  const binaural = !!spatial.enabled;
+  const active = isStereoActive(stereo) || binaural;
   return (
     <div className={styles.effect} data-on={active ? "" : undefined}>
       <div className={styles.effectHeader}>
         <span className={styles.effectTitle}>Stereo</span>
+        {onSpatialChange && (
+          <button
+            type="button"
+            className={styles.pill}
+            data-on={binaural ? "" : undefined}
+            aria-pressed={binaural}
+            title="Binaural 3D position (best on headphones)"
+            onClick={() => spatialPatch({ enabled: !binaural })}
+            style={{ marginRight: "auto", marginLeft: 8 }}
+          >
+            3D
+          </button>
+        )}
         <button
           type="button"
           className={styles.stereoReset}
           disabled={!active}
-          onClick={() => onChange(defaultStereo())}
+          onClick={() =>
+            binaural
+              ? spatialPatch({ azimuth_deg: 0, distance: 0 })
+              : onChange(defaultStereo())
+          }
         >
           Reset
         </button>
       </div>
-      <div className={styles.params}>
-        <Param
-          label="Pan"
+      {binaural ? (
+        <div className={styles.params} style={{ alignItems: "center", textAlign: "center" }}>
+          <PositionPad
+            azimuthDeg={spatial.azimuth_deg}
+            distance={spatial.distance}
+            onChange={(azimuth_deg, distance) =>
+              spatialPatch({ azimuth_deg, distance })
+            }
+          />
+          <p className={styles.note}>
+            Binaural 3D — drag to place the source around you. Best on headphones;
+            on speakers it reads as a tone/level shift. Overrides pan &amp; width.
+          </p>
+        </div>
+      ) : (
+        <div className={styles.params}>
+          <Param
+            label="Pan"
           value={stereo.pan}
           range={DSP_RANGE.stereoPan}
           format={fmtPan}
@@ -194,7 +239,8 @@ export function StereoSection({
           onReset={() => patch({ width: 1 })}
           onChange={(v) => patch({ width: v })}
         />
-      </div>
+        </div>
+      )}
     </div>
   );
 }

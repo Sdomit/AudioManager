@@ -244,13 +244,16 @@ export function InputDetail({
         </div>
       </section>
 
-      {/* Stereo image (#feature3): pan (left/right), Center, Width, and a
-          Mono/Stereo fold — prominent and visible in every view. Single source;
-          the DSP chain below no longer renders its own copy. */}
+      {/* Stereo image (#feature3) + binaural 3D position (#binaural): pan,
+          Center, Width, Mono/Stereo fold, and a 3D toggle that swaps the flat
+          controls for a position pad — prominent and visible in every view.
+          Single source; the DSP chain below no longer renders its own copy. */}
       <section className={styles.section}>
         <StereoSection
           stereo={input.dsp.stereo}
           onChange={(stereo) => onDspChange({ ...input.dsp, stereo })}
+          spatial={input.dsp.spatial}
+          onSpatialChange={(spatial) => onDspChange({ ...input.dsp, spatial })}
         />
       </section>
 

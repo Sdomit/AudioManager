@@ -1,4 +1,5 @@
 pub mod automix;
+pub mod binaural;
 pub mod config;
 pub mod denoise;
 pub mod dynamics;

@@ -19,6 +19,7 @@ import type {
   GateConfig,
   HpfConfig,
   LimiterConfig,
+  SpatialConfig,
   StereoConfig,
 } from "../../types/engine";
 
@@ -108,6 +109,12 @@ export function defaultStereo(): StereoConfig {
   };
 }
 
+/** Binaural 3D defaults: disabled, front, at the head (mirrors the Rust
+ *  `SpatialConfig::default`). */
+export function defaultSpatial(): SpatialConfig {
+  return { enabled: false, azimuth_deg: 0, distance: 0 };
+}
+
 /** True when any stereo control departs from transparent identity (mirrors the
  *  Rust `StereoConfig::is_active`). */
 export function isStereoActive(s: StereoConfig): boolean {
@@ -142,6 +149,7 @@ export function defaultDspConfig(): DspConfig {
     limiter: defaultLimiter(),
     order: [...DEFAULT_DSP_ORDER],
     stereo: defaultStereo(),
+    spatial: defaultSpatial(),
   };
 }
 
@@ -183,6 +191,7 @@ export function streamVoiceConfig(): DspConfig {
     limiter: defaultLimiter(),
     order: [...DEFAULT_DSP_ORDER],
     stereo: defaultStereo(),
+    spatial: defaultSpatial(),
   };
 }
 
@@ -213,6 +222,8 @@ export const DSP_RANGE = {
   stereoPan: [-1, 1, 0.01] as const,
   stereoCenter: [0, 2, 0.01] as const,
   stereoWidth: [0, 2, 0.01] as const,
+  spatialAzimuth: [-180, 180, 1] as const,
+  spatialDistance: [0, 1, 0.01] as const,
 } as const;
 
 /** Allowed fixed output buffer sizes (frames). `null` = driver default. */
