@@ -547,11 +547,11 @@ function FxOrderStrip({
               cursor: "grab",
               padding: "2px 8px",
               borderRadius: 6,
-              border: `1px solid ${over ? "var(--am-accent)" : "var(--am-border, rgba(255,255,255,0.14))"}`,
+              border: `1px solid ${over ? "var(--am-accent)" : "var(--am-border-default)"}`,
               background: over
                 ? "var(--am-accent)"
                 : "var(--am-surface-2, rgba(255,255,255,0.06))",
-              color: over ? "#000" : "var(--am-text, inherit)",
+              color: over ? "#000" : "var(--am-text-primary)",
               fontSize: 11,
               opacity: dragging ? 0.45 : 1,
             }}
