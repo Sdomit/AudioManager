@@ -702,7 +702,7 @@ fn remove_input(
     device_id: String,
 ) -> Result<Vec<InputChannel>, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    let affected: Vec<BusId> = BusId::ALL
+    let mut affected: Vec<BusId> = BusId::ALL
         .into_iter()
         .filter(|bus_id| {
             inner
@@ -712,6 +712,16 @@ fn remove_input(
                 .unwrap_or(false)
         })
         .collect();
+    // Monitor preview routes to A1 without an enabled send (#feature1), so A1
+    // also needs a rebuild to drop the source from the running monitor engine.
+    let monitored = inner
+        .graph
+        .get_input(&device_id)
+        .map(|i| i.monitor)
+        .unwrap_or(false);
+    if monitored && !affected.contains(&BusId::A1) {
+        affected.push(BusId::A1);
+    }
 
     if !inner.graph.remove_input(&device_id) {
         return Err(new_last_error(
@@ -1850,7 +1860,7 @@ fn disconnect_phone(
     net::session::remove(session_id, bye_reason);
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     let mut inner = state.inner.lock().unwrap();
-    let affected: Vec<BusId> = BusId::ALL
+    let mut affected: Vec<BusId> = BusId::ALL
         .into_iter()
         .filter(|bus_id| {
             inner
@@ -1860,6 +1870,16 @@ fn disconnect_phone(
                 .unwrap_or(false)
         })
         .collect();
+    // Monitor preview routes to A1 with no enabled send (#feature1); rebuild A1
+    // too so a disconnected phone drops out of the running monitor engine.
+    let monitored = inner
+        .graph
+        .get_input(&device_id)
+        .map(|i| i.monitor)
+        .unwrap_or(false);
+    if monitored && !affected.contains(&BusId::A1) {
+        affected.push(BusId::A1);
+    }
     if inner.graph.remove_input(&device_id) {
         for bus_id in affected {
             if let Err(err) = rebuild_bus(&mut inner, bus_id) {

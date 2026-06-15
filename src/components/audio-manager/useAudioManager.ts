@@ -258,8 +258,18 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
     case "set_input_muted":
       return updateInput(state, action.id, (i) => ({ ...i, muted: action.muted }));
 
-    case "set_input_monitor":
-      return updateInput(state, action.id, (i) => ({ ...i, monitor: action.enabled }));
+    case "set_input_monitor": {
+      // Monitor feeds A1 without a Send, so recompute bus state too — A1 should
+      // read running/silent based on whether anything is monitored (#feature1).
+      const inputs = state.inputs.map((i) =>
+        i.id === action.id ? { ...i, monitor: action.enabled } : i,
+      );
+      const buses = state.buses.map((b) => ({
+        ...b,
+        state: deriveBusState(b, busActive(state.sends, inputs, b.id)),
+      }));
+      return { ...state, inputs, buses };
+    }
 
     case "set_input_dsp":
       return updateInput(state, action.id, (i) => ({ ...i, dsp: action.dsp }));
@@ -477,7 +487,11 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
             ...b,
             level: b.enabled ? level : 0,
             clipUntil: clipping ? Date.now() + 2400 : b.clipUntil,
-            state: deriveBusStateWithClip(b, hasAnySend(state.sends, b.id), clipping),
+            state: deriveBusStateWithClip(
+              b,
+              busActive(state.sends, state.inputs, b.id),
+              clipping,
+            ),
           };
         }),
         // Input meters reflect the captured signal regardless of mute or
@@ -514,6 +528,15 @@ function updateInput(state: AudioManagerState, id: string, fn: (i: AudioInput) =
 
 function hasAnySend(sends: Send[], busId: BusId): boolean {
   return sends.some((s) => s.busId === busId && s.enabled);
+}
+
+/** Whether a bus carries any input — an enabled send, or (for the monitor bus
+ *  A1) a monitored input, which feeds A1 without a Send (#feature1). Drives
+ *  bus-state derivation so monitoring an otherwise-unrouted input still shows
+ *  A1 as running rather than silent. */
+function busActive(sends: Send[], inputs: AudioInput[], busId: BusId): boolean {
+  if (hasAnySend(sends, busId)) return true;
+  return busId === "A1" && inputs.some((i) => !!i.monitor);
 }
 
 function deriveBusState(b: Bus, hasSends: boolean): Bus["state"] {
@@ -955,7 +978,9 @@ export function useAudioManager(): UseAudioManager {
       const input = getInput(id);
       if (!input) return;
       const prev = input.monitor ?? false;
-      recordHistory();
+      // Monitor is a transient listen toggle, not persisted routing, so it is
+      // deliberately NOT pushed to undo/redo history (snapshots only track
+      // gain/muted/sends/dsp). Optimistic update with rollback on IPC failure.
       dispatch({ type: "set_input_monitor", id, enabled });
       ipc.setInputMonitor(id, enabled).catch((e) => {
         console.error("setInputMonitor failed:", e);
@@ -982,6 +1007,9 @@ export function useAudioManager(): UseAudioManager {
               .map((s) => s.busId),
           ),
         );
+        // Monitor preview (#feature1) feeds A1 without a Send, so keep the
+        // monitor engine's DSP copy in sync too.
+        if (input.monitor && !routed.includes("A1")) routed.push("A1");
         const targets: BusId[] = routed.length > 0 ? routed : ["A1"];
         // Live publish to every routed bus's engine. A single non-running bus
         // can reject without aborting the others (graph persistence already
