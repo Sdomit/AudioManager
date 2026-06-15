@@ -60,6 +60,7 @@ use super::filter::{
     high_pass_coeffs, high_pass_coeffs_q, high_shelf_coeffs, low_pass_coeffs, low_shelf_coeffs,
     notch_coeffs, peaking_coeffs, BiquadFilter,
 };
+use super::automix::{AutomixCoeffs, AutomixGroup, AutomixGroupUpdate, MAX_AUTOMIX_GROUPS};
 use super::gate::{GateCoeffs, NoiseGate};
 use super::DspEffect;
 
@@ -550,6 +551,126 @@ impl BusDspShared {
     }
 }
 
+/// Stack copy of one automix group's published state.
+struct AutomixGroupSnapshot {
+    enabled: bool,
+    member_mask: u32,
+    coeffs: AutomixCoeffs,
+}
+
+/// One group slot inside [`AutomixShared`]. Carries the membership bitmask plus
+/// the precomputed coefficients; all accesses are `Relaxed`, ordered by the
+/// parent seqlock's generation fences.
+struct AtomicAutomixGroup {
+    enabled: AtomicBool,
+    member_mask: AtomicU32,
+    attack_coeff: AtomicF32,
+    release_coeff: AtomicF32,
+    floor_lin: AtomicF32,
+    noise_floor_lin: AtomicF32,
+}
+
+impl AtomicAutomixGroup {
+    fn new() -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            member_mask: AtomicU32::new(0),
+            attack_coeff: AtomicF32::new(0.0),
+            release_coeff: AtomicF32::new(0.0),
+            floor_lin: AtomicF32::new(0.0),
+            noise_floor_lin: AtomicF32::new(0.0),
+        }
+    }
+
+    fn store(&self, u: &AutomixGroupUpdate, sr: f32) {
+        let c = AutomixCoeffs::compute(&u.config, sr);
+        self.enabled.store(u.enabled, RELAXED);
+        self.member_mask.store(u.member_mask, RELAXED);
+        self.attack_coeff.store(c.attack_coeff);
+        self.release_coeff.store(c.release_coeff);
+        self.floor_lin.store(c.floor_lin);
+        self.noise_floor_lin.store(c.noise_floor_lin);
+    }
+
+    fn store_disabled(&self) {
+        self.enabled.store(false, RELAXED);
+        self.member_mask.store(0, RELAXED);
+    }
+
+    fn load(&self) -> AutomixGroupSnapshot {
+        AutomixGroupSnapshot {
+            enabled: self.enabled.load(RELAXED),
+            member_mask: self.member_mask.load(RELAXED),
+            coeffs: AutomixCoeffs {
+                attack_coeff: self.attack_coeff.load(),
+                release_coeff: self.release_coeff.load(),
+                floor_lin: self.floor_lin.load(),
+                noise_floor_lin: self.noise_floor_lin.load(),
+            },
+        }
+    }
+}
+
+/// Shared cross-input automix parameter block (Feature B). One per engine,
+/// carrying up to [`MAX_AUTOMIX_GROUPS`] groups, published through the same
+/// seqlock discipline as the per-input/per-bus blocks. Unlike those it is keyed
+/// per-group (membership bitmask), not per-slot — the realtime gate is inherently
+/// cross-input.
+pub struct AutomixShared {
+    generation: AtomicU32,
+    groups: [AtomicAutomixGroup; MAX_AUTOMIX_GROUPS],
+}
+
+impl Default for AutomixShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AutomixShared {
+    pub fn new() -> Self {
+        Self {
+            generation: AtomicU32::new(0),
+            groups: std::array::from_fn(|_| AtomicAutomixGroup::new()),
+        }
+    }
+
+    /// Publish the full group set. Groups beyond `updates.len()` are disabled.
+    /// Single-writer seqlock, same protocol as [`InputDspShared::publish`].
+    pub fn publish(&self, updates: &[AutomixGroupUpdate], sample_rate: f32) {
+        let g = self.generation.load(RELAXED);
+        self.generation.store(g.wrapping_add(1), RELAXED); // enter: odd
+        fence(Ordering::Release);
+        for (i, slot) in self.groups.iter().enumerate() {
+            match updates.get(i) {
+                Some(u) => slot.store(u, sample_rate),
+                None => slot.store_disabled(),
+            }
+        }
+        fence(Ordering::Release);
+        self.generation.store(g.wrapping_add(2), RELAXED); // exit: even
+    }
+
+    /// Callback entry point: apply a newly published group set to `slots`. No-op
+    /// when a write is in flight, unchanged since the last apply, or raced.
+    pub fn reload_if_changed(&self, slots: &mut AutomixSlots) -> bool {
+        let s1 = self.generation.load(RELAXED);
+        if s1 & 1 != 0 || s1 == slots.last_gen {
+            return false;
+        }
+        fence(Ordering::Acquire);
+        let snaps: [AutomixGroupSnapshot; MAX_AUTOMIX_GROUPS] =
+            std::array::from_fn(|i| self.groups[i].load());
+        fence(Ordering::Acquire);
+        if self.generation.load(RELAXED) != s1 {
+            return false;
+        }
+        slots.apply(&snaps);
+        slots.last_gen = s1;
+        true
+    }
+}
+
 // ── Concrete effect slots (audio-callback side) ────────────────────────────────
 
 /// Enable flush-to-zero (FTZ) + denormals-are-zero (DAZ) for SSE float math on
@@ -899,6 +1020,53 @@ impl BusDspSlots {
         }
         if self.limiter.is_enabled() {
             process_block_effect(&mut self.limiter, interleaved, channels);
+        }
+    }
+}
+
+/// Audio-callback-side automix state: the group processors plus the seqlock
+/// generation last applied. Allocated once before the stream starts; retuned in
+/// place via [`AutomixShared::reload_if_changed`].
+pub struct AutomixSlots {
+    last_gen: u32,
+    groups: [AutomixGroup; MAX_AUTOMIX_GROUPS],
+}
+
+impl Default for AutomixSlots {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AutomixSlots {
+    pub fn new() -> Self {
+        Self {
+            last_gen: u32::MAX,
+            groups: std::array::from_fn(|_| AutomixGroup::new()),
+        }
+    }
+
+    fn apply(&mut self, snaps: &[AutomixGroupSnapshot; MAX_AUTOMIX_GROUPS]) {
+        for (g, s) in self.groups.iter_mut().zip(snaps.iter()) {
+            g.set(s.enabled, s.member_mask, s.coeffs);
+        }
+    }
+
+    /// Fold every enabled group's per-member share gains into `out_gain` (one
+    /// multiplier per input slot, pre-initialized to 1.0 by the caller). Runs
+    /// once per block on the post-DSP input scratch.
+    #[inline]
+    pub fn process_block(
+        &mut self,
+        scratch: &[Vec<f32>],
+        avail_frames: &[usize],
+        in_ch: &[usize],
+        n: usize,
+        frames: usize,
+        out_gain: &mut [f32],
+    ) {
+        for g in self.groups.iter_mut() {
+            g.process_block(scratch, avail_frames, in_ch, n, frames, out_gain);
         }
     }
 }

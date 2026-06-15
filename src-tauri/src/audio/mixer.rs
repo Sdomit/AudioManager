@@ -7,8 +7,11 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 
 use crate::audio::dsp::{
-    live::{enable_flush_denormals, BusDspShared, BusDspSlots, InputDspShared, InputDspSlots},
-    BusDspConfig, DspConfig,
+    live::{
+        enable_flush_denormals, AutomixShared, AutomixSlots, BusDspShared, BusDspSlots,
+        InputDspShared, InputDspSlots,
+    },
+    AutomixGroupUpdate, BusDspConfig, DspConfig,
 };
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::meters::{verdict_for, LoudnessSnapshot, StreamAnalyzer, SILENCE_FLOOR_DB};
@@ -150,6 +153,9 @@ pub struct MixerEngine {
     pub dsp_shared: Vec<Arc<InputDspShared>>,
     /// Bus DSP seqlock block (final limiter). Live-updatable, same as inputs.
     pub bus_dsp_shared: Arc<BusDspShared>,
+    /// Cross-input automix seqlock block (live sound gate, Feature B).
+    /// IPC calls `update_automix` to (re)publish group membership + params.
+    pub automix_shared: Arc<AutomixShared>,
     /// Channel into the output callback. IPC sends `Add`/`Remove` to wire
     /// recording taps in/out without restarting the engine.
     pub tap_command_tx: mpsc::Sender<TapCommand>,
@@ -177,6 +183,8 @@ struct StartInfo {
     dsp_shared: Vec<Arc<InputDspShared>>,
     /// IPC-writable bus DSP shared block (limiter). Live-updatable like inputs.
     bus_dsp_shared: Arc<BusDspShared>,
+    /// IPC-writable cross-input automix shared block (Feature B).
+    automix_shared: Arc<AutomixShared>,
 }
 
 impl MixerEngine {
@@ -272,6 +280,14 @@ impl MixerEngine {
     /// audio callback's next block via `reload_if_changed`.
     pub fn update_bus_dsp(&self, cfg: &BusDspConfig) {
         self.bus_dsp_shared.publish(cfg, self.sample_rate as f32);
+    }
+
+    /// Publish the cross-input automix group set (live sound gate, Feature B).
+    /// `updates` carry membership as input-slot bitmasks (resolved by the IPC
+    /// layer from device ids) plus per-group params. Lock-free; applied on the
+    /// callback's next block. Groups beyond the published count are disabled.
+    pub fn update_automix(&self, updates: &[AutomixGroupUpdate]) {
+        self.automix_shared.publish(updates, self.sample_rate as f32);
     }
 
     /// Read and reset the dropout counters, aggregated across all inputs.
@@ -812,6 +828,13 @@ pub fn start(
             let bus_dsp_shared_cb = Arc::clone(&bus_dsp_shared_arc);
             let mut bus_dsp_slots = BusDspSlots::new(sr);
 
+            // Cross-input automix (live sound gate, Feature B). Starts empty
+            // (all groups disabled); IPC publishes membership + params live via
+            // MixerEngine::update_automix. One shared block, one local slot set.
+            let automix_shared_arc = Arc::new(AutomixShared::new());
+            let automix_shared_cb = Arc::clone(&automix_shared_arc);
+            let mut automix_slots = AutomixSlots::new();
+
             // Streaming loudness analyzer (#38). Owned by the output callback,
             // fed the final post-clamp frame; publishes to shared atomics once
             // per output block. Constructed at the output stream's rate.
@@ -968,6 +991,28 @@ pub fn start(
                         // frame post-sum below. Cheap no-op when unchanged.
                         bus_dsp_shared_cb.reload_if_changed(&mut bus_dsp_slots);
 
+                        // Cross-input automix (live sound gate, Feature B). Runs
+                        // after per-input DSP (so shares are read off cleaned
+                        // signals) and before the per-frame mix. Writes one gain
+                        // multiplier per input slot, folded into the per-input
+                        // gain below. Default 1.0 (untouched) for non-members and
+                        // when no group is enabled. `in_ch_block` mirrors the
+                        // per-input channel counts for the energy window.
+                        let mut automix_gain = [1.0f32; MAX_INPUTS];
+                        automix_shared_cb.reload_if_changed(&mut automix_slots);
+                        let mut in_ch_block = [1usize; MAX_INPUTS];
+                        for i in 0..n {
+                            in_ch_block[i] = consumers[i].1;
+                        }
+                        automix_slots.process_block(
+                            &input_scratch,
+                            &avail_frames,
+                            &in_ch_block,
+                            n,
+                            frames,
+                            &mut automix_gain,
+                        );
+
                         for f in 0..frames {
                             // Stack-allocated accumulator. out_channels is 1 or 2
                             // (validated before stream creation).
@@ -976,7 +1021,13 @@ pub fn start(
                             for i in 0..n {
                                 // When muted, gain is 0; the ring was already drained
                                 // in bulk above, so overflow protection is preserved.
-                                let g = if muted[i] { 0.0 } else { gains[i] };
+                                // automix_gain[i] is the live-sound-gate share
+                                // multiplier (1.0 when no group covers this input).
+                                let g = if muted[i] {
+                                    0.0
+                                } else {
+                                    gains[i] * automix_gain[i]
+                                };
                                 let in_ch = consumers[i].1; // 1 or 2 (validated)
 
                                 // Read one input frame from the pre-drained scratch,
@@ -1144,6 +1195,7 @@ pub fn start(
                     input_errors,
                     dsp_shared: dsp_shared_arcs,
                     bus_dsp_shared: bus_dsp_shared_arc,
+                    automix_shared: automix_shared_arc,
                 },
             ))
         })();
@@ -1186,6 +1238,7 @@ pub fn start(
             meters,
             dsp_shared: info.dsp_shared,
             bus_dsp_shared: info.bus_dsp_shared,
+            automix_shared: info.automix_shared,
             tap_command_tx,
             out_channels: info.out_channels,
             sample_rate: info.sample_rate,
@@ -1257,6 +1310,7 @@ mod tests {
             }),
             dsp_shared: vec![],
             bus_dsp_shared: Arc::new(BusDspShared::new(&BusDspConfig::default(), 48_000.0)),
+            automix_shared: Arc::new(AutomixShared::new()),
             tap_command_tx: tap_tx,
             out_channels: 2,
             sample_rate: 48000,

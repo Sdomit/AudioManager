@@ -1,3 +1,4 @@
+pub mod automix;
 pub mod config;
 pub mod denoise;
 pub mod dynamics;
@@ -5,7 +6,8 @@ pub mod filter;
 pub mod gate;
 pub mod live;
 
-pub use config::{BusDspConfig, DspConfig};
+pub use automix::{AutomixGroupUpdate, MAX_AUTOMIX_GROUPS};
+pub use config::{AutomixConfig, BusDspConfig, DspConfig};
 // `BandKind`/`DspStage` are referenced by tests via the `dsp::` path; internal
 // production code imports the rest straight from `config::` / the effect modules.
 #[cfg(test)]

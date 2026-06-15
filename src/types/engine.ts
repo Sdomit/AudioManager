@@ -184,6 +184,30 @@ export interface BusDspConfig {
   limiter: LimiterConfig;
 }
 
+/** Live-sound-gate automix params (Feature B), per group. Dugan-style
+ *  gain-sharing: members share unity gain by level so the closest mic dominates
+ *  and duplicate captures of the same voice are suppressed. */
+export interface AutomixConfig {
+  enabled: boolean;
+  /** Energy-follower rise time (ms): how fast a newly-loud mic takes the share. */
+  attack_ms: number;
+  /** Energy-follower fall time (ms): how slowly a mic relinquishes its share. */
+  release_ms: number;
+  /** Minimum gain (dB) a suppressed member keeps, so a mic never hard-mutes. */
+  floor_db: number;
+  /** Group activity gate (dB): below this the group holds its last gains. */
+  noise_floor_db: number;
+}
+
+/** An automix group: a set of co-located inputs (by device id) sharing gain. */
+export interface AutomixGroupDef {
+  id: string;
+  name: string;
+  /** Member input device ids (same keys as mixer inputs / the audio graph). */
+  members: string[];
+  config: AutomixConfig;
+}
+
 /** Stream-confidence verdict (#38): a recommendation, not just numbers. */
 export type LoudnessVerdict = "no_signal" | "too_quiet" | "healthy" | "too_hot";
 

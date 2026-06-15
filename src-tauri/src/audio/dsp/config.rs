@@ -256,6 +256,50 @@ impl LimiterConfig {
     }
 }
 
+/// Per-group gain-sharing automix parameters (Dugan-style), used by the live
+/// sound gate (Feature B). Co-located mics in one group share unity gain
+/// weighted by each mic's level, so the loudest (closest) mic dominates and
+/// duplicate captures of the same voice are pushed down — killing echo and
+/// comb-filtering. Pure data: maps to `AutomixCoeffs` and the realtime
+/// `AutomixGroup` in `automix.rs`. Cross-input, so unlike the other configs this
+/// is not part of `DspConfig` (which is per-input); membership is carried
+/// separately as resolved slot indices.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct AutomixConfig {
+    pub enabled: bool,
+    /// Energy-follower rise time (ms): how fast a newly-loud mic takes the share.
+    pub attack_ms: f32,
+    /// Energy-follower fall time (ms): how slowly a mic relinquishes its share.
+    pub release_ms: f32,
+    /// Minimum gain (dB) a suppressed member keeps, so a mic never hard-mutes.
+    pub floor_db: f32,
+    /// Group activity gate (dB): below this summed level the group holds its last
+    /// gains (treated as silent) rather than dividing near-zero energy.
+    pub noise_floor_db: f32,
+}
+
+impl Default for AutomixConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            attack_ms: 40.0,
+            release_ms: 250.0,
+            floor_db: -60.0,
+            noise_floor_db: -50.0,
+        }
+    }
+}
+
+impl AutomixConfig {
+    pub fn clamp(&mut self) {
+        let d = Self::default();
+        self.attack_ms = clamp_finite(self.attack_ms, d.attack_ms, TIME_MIN, TIME_MAX);
+        self.release_ms = clamp_finite(self.release_ms, d.release_ms, TIME_MIN, TIME_MAX);
+        self.floor_db = clamp_finite(self.floor_db, d.floor_db, -90.0, 0.0);
+        self.noise_floor_db = clamp_finite(self.noise_floor_db, d.noise_floor_db, -90.0, 0.0);
+    }
+}
+
 /// Neural denoiser backend. `Rnnoise` is the only one actually compiled in.
 /// `DeepFilterNet`'s engine is NOT buildable yet (upstream tract/model blocker —
 /// see denoise.rs and Cargo.toml), so selecting it would silently run as RNNoise.
