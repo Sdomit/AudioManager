@@ -40,11 +40,7 @@
 }
 
 .menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  z-index: 30;
+  z-index: 9999;
   background: var(--am-surface-2);
   border: 1px solid var(--am-border-default);
   border-radius: 10px;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import * as ipc from "../../ipc/commands";
 import type { DeviceInfo } from "../../types/engine";
@@ -28,9 +29,19 @@ export function BusDeviceDropdown({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 0 });
+
+  const computePos = () => {
+    if (triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
+    computePos();
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -54,18 +65,24 @@ export function BusDeviceDropdown({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      const inRoot = rootRef.current?.contains(target);
+      const inMenu = (document.getElementById("bus-device-menu-portal") as HTMLElement | null)?.contains(target);
+      if (!inRoot && !inMenu) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
+    const onScroll = () => { computePos(); };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
     };
   }, [open]);
 
@@ -74,30 +91,12 @@ export function BusDeviceDropdown({
     setOpen(false);
   };
 
-  return (
-    <div className={styles.root} ref={rootRef}>
-      <button
-        type="button"
-        className={styles.trigger}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title={currentDevice ?? "Select output device"}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((o) => !o);
-        }}
-      >
-        <span className={currentDevice ? styles.deviceName : styles.deviceMissing}>
-          {currentDevice ?? "Select output device"}
-        </span>
-        <span className={styles.chevron} aria-hidden>
-          ▾
-        </span>
-      </button>
-
-      {open && (
+  const menu = open
+    ? createPortal(
         <div
+          id="bus-device-menu-portal"
           className={styles.menu}
+          style={{ position: "fixed", top: menuPos.top, left: menuPos.left, width: menuPos.width }}
           role="listbox"
           aria-label={`Output device for ${busLabel}`}
           onClick={(e) => e.stopPropagation()}
@@ -137,8 +136,33 @@ export function BusDeviceDropdown({
               Unassign device
             </button>
           )}
-        </div>
-      )}
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <div className={styles.root} ref={rootRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={styles.trigger}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={currentDevice ?? "Select output device"}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+      >
+        <span className={currentDevice ? styles.deviceName : styles.deviceMissing}>
+          {currentDevice ?? "Select output device"}
+        </span>
+        <span className={styles.chevron} aria-hidden>
+          ▾
+        </span>
+      </button>
+      {menu}
     </div>
   );
 }

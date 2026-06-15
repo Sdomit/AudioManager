@@ -87,7 +87,7 @@ export function BusCard({
 
       {/* Meter + dB */}
       <div className={styles.meterRow}>
-        <MeterCanvas level={bus.level} width={meterWidth} height={10} />
+        <MeterCanvas level={bus.level} width={meterWidth} height={5} />
         <div className={styles.dbReadout}>
           {bus.state === "running" || bus.state === "clipping"
             ? levelToDb(bus.level)
@@ -105,6 +105,7 @@ export function BusCard({
 
       {/* Volume slider */}
       <div className={styles.volumeRow}>
+        <span className={styles.volLabel}>VOL</span>
         <VolumeSlider
           value={bus.volume}
           onChange={onVolumeChange}
@@ -203,6 +204,11 @@ function VolumeSlider({
       <div
         className={styles.sliderFill}
         style={{ width: `${value * 100}%`, background: accent }}
+        aria-hidden
+      />
+      <div
+        className={styles.sliderThumb}
+        style={{ left: `${value * 100}%` }}
         aria-hidden
       />
     </div>
