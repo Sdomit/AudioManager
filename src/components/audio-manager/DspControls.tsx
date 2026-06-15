@@ -148,7 +148,11 @@ export function StereoSection({
           disabled={!active}
           onClick={() =>
             binaural
-              ? spatialPatch({ azimuth_deg: 0, distance: 0 })
+              ? // Full reset to the transparent default: turn 3D off (so the
+                // stereo stage resumes — leaving it on still mono-folds a stereo
+                // source) and recentre. The pad's own double-click recentres
+                // while staying in 3D.
+                spatialPatch({ enabled: false, azimuth_deg: 0, distance: 0 })
               : onChange(defaultStereo())
           }
         >
