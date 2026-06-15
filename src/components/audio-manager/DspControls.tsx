@@ -103,7 +103,7 @@ function fmtPan(pan: number): string {
 
 /** Stereo image controls (#34). Always visible (no enable toggle): the controls
  *  default to transparent, and Reset restores that. */
-function StereoSection({
+export function StereoSection({
   stereo,
   onChange,
 }: {
@@ -706,11 +706,6 @@ export function InputDspControls({
           onChange={(v) => setLim({ release_ms: v })}
         />
       </EffectSection>
-
-      <StereoSection
-        stereo={dsp.stereo}
-        onChange={(stereo) => onChange({ ...dsp, stereo })}
-      />
     </div>
   );
 }
