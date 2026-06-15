@@ -2,11 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
-import { BusLimiterControls, InputDspControls } from "./DspControls";
+import { BusLimiterControls, InputDspControls, StereoSection } from "./DspControls";
 import {
   b1ProtectLimiter,
   defaultDspConfig,
   defaultLimiter,
+  defaultStereo,
   streamVoiceConfig,
 } from "./dspDefaults";
 
@@ -86,34 +87,35 @@ describe("InputDspControls", () => {
     expect(next.hpf.freq_hz).toBe(120);
   });
 
-  it("renders the always-visible Stereo section with pan + toggles", () => {
-    render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
+  it("StereoSection renders pan + toggles (prominent, outside the DSP chain)", () => {
+    render(<StereoSection stereo={defaultStereo()} onChange={() => {}} />);
     expect(screen.getByText("Stereo")).toBeTruthy();
     expect(screen.getByText("Pan")).toBeTruthy();
+    expect(screen.getByText("Center")).toBeTruthy();
+    expect(screen.getByText("Width")).toBeTruthy();
     expect(screen.getByText("Mono")).toBeTruthy();
     expect(screen.getByText("Swap L/R")).toBeTruthy();
   });
 
-  it("editing pan emits stereo.pan, preserving the chain", () => {
+  it("StereoSection: editing pan emits stereo.pan", () => {
     const onChange = vi.fn();
-    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+    render(<StereoSection stereo={defaultStereo()} onChange={onChange} />);
 
     fireEvent.change(screen.getByLabelText("Pan"), { target: { value: "1" } });
 
     const calls = onChange.mock.calls;
     const next = calls[calls.length - 1][0];
-    expect(next.stereo.pan).toBe(1);
-    expect(next.limiter.threshold_db).toBe(-1);
+    expect(next.pan).toBe(1);
   });
 
-  it("Mono toggle flips stereo.mono", () => {
+  it("StereoSection: Mono toggle flips stereo.mono", () => {
     const onChange = vi.fn();
-    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+    render(<StereoSection stereo={defaultStereo()} onChange={onChange} />);
 
     fireEvent.click(screen.getByText("Mono"));
 
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0].stereo.mono).toBe(true);
+    expect(onChange.mock.calls[0][0].mono).toBe(true);
   });
 
   it("shows the Stream Voice + Reset preset row only when onStreamVoice is given", () => {

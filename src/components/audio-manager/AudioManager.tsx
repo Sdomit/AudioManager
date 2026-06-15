@@ -13,6 +13,7 @@ import { AmvcBanner } from "./AmvcBanner";
 import { PresetBanner } from "./PresetBanner";
 import { PresetSaveDialog } from "./PresetSaveDialog";
 import { RecordingsPanel } from "./RecordingsPanel";
+import { AutomixPanel } from "./AutomixPanel";
 import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
 import { PhonePairingSheet } from "./PhonePairingSheet";
@@ -83,6 +84,7 @@ export function AudioManager() {
   const { state } = am;
 
   const [busPickerFor, setBusPickerFor] = useState<BusId | null>(null);
+  const [automixOpen, setAutomixOpen] = useState(false);
   const busPickerTarget = busPickerFor
     ? state.buses.find((b) => b.id === busPickerFor) ?? null
     : null;
@@ -371,6 +373,7 @@ export function AudioManager() {
         onStartMasterRecording={() => void am.startMasterRecording()}
         onStopAllRecordings={() => void am.stopAllRecordings()}
         onOpenRecordings={am.openRecordingsPanel}
+        onOpenAutomix={() => setAutomixOpen(true)}
         onLoadPreset={am.loadPreset}
         onOpenSaveDialog={() => setPresetDialog({ kind: "save" })}
         onRenamePreset={(id) => {
@@ -540,6 +543,14 @@ export function AudioManager() {
         onSetDir={(p) => void am.setRecordingsDir(p)}
         onDelete={(p) => void am.deleteRecordingFile(p)}
         onRefresh={() => void am.refreshRecordingFiles()}
+      />
+
+      <AutomixPanel
+        open={automixOpen}
+        inputs={state.inputs}
+        sends={state.sends}
+        buses={state.buses}
+        onClose={() => setAutomixOpen(false)}
       />
 
       <StreamSetupSheet

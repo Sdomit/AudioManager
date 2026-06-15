@@ -41,14 +41,15 @@
 | **Wireless phone input** | Pair a phone over Wi-Fi and use it as a routable mixer input |
 | **B1 stream output** | Built-in guidance for virtual cable routing to OBS, Discord, Zoom |
 
-
 ## Coming Soon
 
 | Feature | Description |
 | --- | --- |
 | **Phone remote control** | Mute, adjust gain, and toggle effects on the desktop mixer directly from the paired phone's browser — no app install required |
-| **Live sound gate for streaming** | Per-input noise gate exposed as a one-click control on stream buses, pre-tuned for voice; tighten threshold and release without leaving the routing view |
-| **Live sound gate for phone input** | Same gate UI on the wireless phone input — silence the room between sentences, stream-ready out of the box |
+| **Live sound gate — stream buses** | Per-input noise gate exposed as a one-click control on stream buses, pre-tuned for voice; threshold, attack, hold, and release adjustable without leaving the routing view |
+| **Live sound gate — phone inputs** | Same gate applied per wireless phone input — silences the room between sentences so background noise never bleeds into the stream |
+| **Multi-phone proximity gating** | When multiple phones are connected in the same room, each phone's gate listens for the loudest nearby voice and opens only for it. If two phones pick up the same person, the quieter input is suppressed automatically — eliminating echo, phasing, and duplicate audio on the mix. Each participant is captured by the phone closest to them; everyone else is gated out. |
+
 ## Signal Flow
 
 Inputs pass through the routing matrix into four buses. Each bus runs its own DSP chain and metering, then drives an output device, a virtual cable, or a file.
@@ -126,9 +127,30 @@ After launching the app:
 - B1 stream output does not play on your computer, it only routes to the virtual cable
 - Audio routes exactly as configured: input to B1 with B1 assigned to speakers will feed back
 
+## Virtual Audio Driver
+
+AudioManager has a sibling project — **[AudioManagerVirtualCable](https://github.com/Sdomit/AudioManagerVirtualCable)** — that will replace the need for third-party virtual cables like VB-Cable.
+
+When complete, it will expose AudioManager-owned endpoints directly to Windows so any app (OBS, Discord, Zoom, games, browsers) can select them as normal playback or recording devices — no extra software required.
+
+**Planned devices:**
+
+| Device | Type | Use |
+| --- | --- | --- |
+| AudioManager Cable 1 Playback / Recording | render + capture | general routing |
+| AudioManager Cable 2 Playback / Recording | render + capture | second independent cable |
+| AudioManager Stream Output | render | dedicated stream bus → OBS |
+| AudioManager Voice Output | render | dedicated voice bus → Discord / Zoom |
+
+**Current status:** the user-mode bridge (WASAPI loopback capture, PCM ring transport, JSON health status) and the helper (device detection, install-status, `pnputil` ops) are implemented in Rust and unit-tested. The **kernel driver** — the part that creates the branded Windows devices — is not yet built. It is blocked on toolchain setup (VS + WDK) and driver signing (EV cert + Microsoft Partner Center attestation).
+
+AudioManager already detects third-party virtual cables by name and will detect these devices the same way once the driver ships. The integration is optional — AudioManager runs fully without it.
+
+> See [AudioManagerVirtualCable](https://github.com/Sdomit/AudioManagerVirtualCable) for architecture, signing docs, and build instructions.
+
 ## Known Limitations
 
-- No custom virtual audio driver (uses external virtual cable devices)
+- Virtual audio driver in progress — see above; third-party cables (VB-Cable etc.) required in the meantime
 - No ASIO support (uses WASAPI)
 - No sample-rate conversion (device sample rates must match)
 - Windows first (macOS / Linux untested)

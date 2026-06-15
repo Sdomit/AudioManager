@@ -3,6 +3,8 @@ import type {
   AmvcQueryResult,
   AmvcSyncPlan,
   AudioSessionInfo,
+  AutomixConfig,
+  AutomixGroupDef,
   BusDspConfig,
   BusId,
   BusStatus,
@@ -279,6 +281,34 @@ export const updateBusDsp = (
   config: BusDspConfig,
 ): Promise<BusStatus> =>
   invoke<BusStatus>("update_bus_dsp", { busId, config });
+
+// ── Automix groups (live sound gate, Feature B) ───────────────────────────────
+
+/** List all live-sound-gate automix groups. */
+export const automixListGroups = (): Promise<AutomixGroupDef[]> =>
+  invoke<AutomixGroupDef[]>("automix_list_groups");
+
+/** Create an empty automix group; returns the new group (with its generated id). */
+export const automixCreateGroup = (name: string): Promise<AutomixGroupDef> =>
+  invoke<AutomixGroupDef>("automix_create_group", { name });
+
+/** Replace a group's member set (input device ids). Returns the full group list. */
+export const automixSetMembers = (
+  groupId: string,
+  members: string[],
+): Promise<AutomixGroupDef[]> =>
+  invoke<AutomixGroupDef[]>("automix_set_members", { groupId, members });
+
+/** Update a group's automix params (enabled/attack/release/floor/noise floor). */
+export const automixSetConfig = (
+  groupId: string,
+  config: AutomixConfig,
+): Promise<AutomixGroupDef[]> =>
+  invoke<AutomixGroupDef[]>("automix_set_config", { groupId, config });
+
+/** Delete an automix group. Returns the remaining group list. */
+export const automixDeleteGroup = (groupId: string): Promise<AutomixGroupDef[]> =>
+  invoke<AutomixGroupDef[]>("automix_delete_group", { groupId });
 
 // ── Phone Wireless Audio (#39-#45) ───────────────────────────────────────────
 

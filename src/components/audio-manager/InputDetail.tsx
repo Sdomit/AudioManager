@@ -6,7 +6,7 @@ import {
   XIcon,
   PlusIcon,
 } from "./Icon";
-import { InputDspControls } from "./DspControls";
+import { InputDspControls, StereoSection } from "./DspControls";
 import { StereoMeter } from "./StereoMeter";
 import { RecordButton } from "./RecordButton";
 import type {
@@ -244,9 +244,19 @@ export function InputDetail({
         </div>
       </section>
 
+      {/* Stereo image (#feature3): pan (left/right), Center, Width, and a
+          Mono/Stereo fold — prominent and visible in every view. Single source;
+          the DSP chain below no longer renders its own copy. */}
+      <section className={styles.section}>
+        <StereoSection
+          stereo={input.dsp.stereo}
+          onChange={(stereo) => onDspChange({ ...input.dsp, stereo })}
+        />
+      </section>
+
       {/* Per-input effect chain (#feature4): edited here in every view. In the
           node canvas, clicking an input or its FX badge selects it and opens
-          this panel — pan / mono / width live in the Stereo block below. */}
+          this panel. */}
       <section className={styles.section}>
         <div className={styles.sectionTitle}>Processing (DSP)</div>
         <InputDspControls

@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   BroadcastIcon,
   ChevronDownIcon,
+  PhoneIcon,
   RecordIcon,
   SettingsIcon,
 } from "./Icon";
@@ -42,6 +43,8 @@ interface TopBarProps {
   onStopAllRecordings: () => void;
   /** Open the recordings drawer. */
   onOpenRecordings: () => void;
+  /** Open the live-sound-gate (automix groups) drawer. */
+  onOpenAutomix: () => void;
   /** Open the settings sheet (#feature9). */
   onOpenSettings: () => void;
 }
@@ -70,6 +73,7 @@ export function TopBar({
   onStartMasterRecording,
   onStopAllRecordings,
   onOpenRecordings,
+  onOpenAutomix,
   onOpenSettings,
 }: TopBarProps) {
   const loaded = presets.find((p) => p.id === loadedPresetId);
@@ -154,6 +158,16 @@ export function TopBar({
           aria-label="Open recordings panel"
         >
           <RecordIcon size={16} />
+        </button>
+
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={onOpenAutomix}
+          title="Live sound gate (automix groups)"
+          aria-label="Open live sound gate panel"
+        >
+          <PhoneIcon size={16} />
         </button>
 
         <button

@@ -81,6 +81,10 @@ pub struct PresetFileV2 {
     pub saved_at_utc: String,
     pub buses: Vec<PresetBusV2>,
     pub inputs: Vec<PresetInputV2>,
+    /// Live-sound-gate automix groups (Feature B). `serde(default)` so presets
+    /// saved before Feature B load with no groups.
+    #[serde(default)]
+    pub automix_groups: Vec<crate::state::AutomixGroupDef>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -266,6 +270,7 @@ pub fn validate_preset_v2(preset: &mut PresetFileV2) -> Result<(), EngineError> 
     preset.name = normalize_preset_name(&preset.name)?;
     normalize_buses(&mut preset.buses)?;
     normalize_inputs(&mut preset.inputs)?;
+    normalize_automix_groups(&mut preset.automix_groups)?;
     Ok(())
 }
 
@@ -327,10 +332,11 @@ pub fn build_preset_v2(
     name: &str,
     buses: &BTreeMap<BusId, BusRuntime>,
     graph: &AudioGraph,
+    automix_groups: &[crate::state::AutomixGroupDef],
 ) -> Result<PresetFileV2, EngineError> {
     let input_names = list_input_devices().ok().map(index_by_id).unwrap_or_default();
     let output_names = list_output_devices().ok().map(index_by_id).unwrap_or_default();
-    build_preset_v2_with_maps(name, buses, graph, &input_names, &output_names)
+    build_preset_v2_with_maps(name, buses, graph, automix_groups, &input_names, &output_names)
 }
 
 pub fn migrate_v1_to_v2(
@@ -411,6 +417,7 @@ pub fn migrate_v1_to_v2(
         saved_at_utc: source.saved_at_utc,
         buses,
         inputs: inputs_by_id.into_values().collect(),
+        automix_groups: Vec::new(),
     };
     validate_preset_v2(&mut migrated)?;
     Ok((migrated, warnings))
@@ -564,6 +571,33 @@ fn normalize_inputs(inputs: &mut Vec<PresetInputV2>) -> Result<(), EngineError> 
     Ok(())
 }
 
+/// Validate/normalize automix groups: trim + reject empty/duplicate ids (so
+/// `find`-by-id and `retain`-by-id commands stay consistent), clamp each
+/// group's params, and dedup members within a group (the realtime mask is a
+/// set). Mirrors `normalize_inputs`' duplicate-rejection contract.
+fn normalize_automix_groups(
+    groups: &mut Vec<crate::state::AutomixGroupDef>,
+) -> Result<(), EngineError> {
+    let mut seen_ids = HashSet::<String>::new();
+    for group in groups {
+        group.id = group.id.trim().to_string();
+        if group.id.is_empty() {
+            return Err(EngineError {
+                message: "Preset automix group has empty id".to_string(),
+            });
+        }
+        if !seen_ids.insert(group.id.clone()) {
+            return Err(EngineError {
+                message: format!("Preset contains duplicate automix group '{}'", group.id),
+            });
+        }
+        group.config.clamp();
+        let mut seen_members = HashSet::<String>::new();
+        group.members.retain(|m| seen_members.insert(m.clone()));
+    }
+    Ok(())
+}
+
 fn normalize_sends(input_id: &str, sends: &mut Vec<PresetSendV2>) -> Result<(), EngineError> {
     let mut by_bus = HashMap::<BusId, PresetSendV2>::new();
     for mut send in sends.drain(..) {
@@ -601,6 +635,7 @@ fn build_preset_v2_with_maps(
     name: &str,
     buses: &BTreeMap<BusId, BusRuntime>,
     graph: &AudioGraph,
+    automix_groups: &[crate::state::AutomixGroupDef],
     input_names: &HashMap<String, String>,
     output_names: &HashMap<String, String>,
 ) -> Result<PresetFileV2, EngineError> {
@@ -661,6 +696,7 @@ fn build_preset_v2_with_maps(
         saved_at_utc: now_utc_string(),
         buses: buses_v2,
         inputs: inputs_v2,
+        automix_groups: automix_groups.to_vec(),
     };
     validate_preset_v2(&mut preset)?;
     Ok(preset)
@@ -866,6 +902,7 @@ mod tests {
             saved_at_utc: "0".to_string(),
             buses: vec![default_bus(BusId::A1), default_bus(BusId::A1)],
             inputs: vec![],
+            automix_groups: vec![],
         };
 
         assert!(validate_preset_v2(&mut preset).is_err());
@@ -1002,6 +1039,86 @@ mod tests {
     }
 
     #[test]
+    fn automix_groups_round_trip_and_back_compat() {
+        use crate::audio::dsp::AutomixConfig;
+        use crate::state::AutomixGroupDef;
+        let preset = PresetFileV2 {
+            schema_version: SCHEMA_VERSION_V2,
+            name: "am".to_string(),
+            saved_at_utc: "0".to_string(),
+            buses: default_buses(),
+            inputs: vec![],
+            automix_groups: vec![AutomixGroupDef {
+                id: "g1".to_string(),
+                name: "Room".to_string(),
+                members: vec!["phone:a".to_string(), "phone:b".to_string()],
+                config: AutomixConfig {
+                    enabled: true,
+                    ..AutomixConfig::default()
+                },
+            }],
+        };
+        let json = serde_json::to_string(&preset).unwrap();
+        let back: PresetFileV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.automix_groups, preset.automix_groups);
+
+        // A preset saved before Feature B has no `automix_groups` key; it must
+        // still deserialize, with an empty group list (serde default).
+        let legacy = r#"{"schema_version":2,"name":"legacy","saved_at_utc":"0","buses":[],"inputs":[]}"#;
+        let legacy_back: PresetFileV2 = serde_json::from_str(legacy).unwrap();
+        assert!(legacy_back.automix_groups.is_empty());
+    }
+
+    #[test]
+    fn validate_v2_rejects_duplicate_automix_group_ids() {
+        use crate::audio::dsp::AutomixConfig;
+        use crate::state::AutomixGroupDef;
+        let g = |id: &str| AutomixGroupDef {
+            id: id.to_string(),
+            name: "g".to_string(),
+            members: vec![],
+            config: AutomixConfig::default(),
+        };
+        let mut preset = PresetFileV2 {
+            schema_version: SCHEMA_VERSION_V2,
+            name: "dup automix".to_string(),
+            saved_at_utc: "0".to_string(),
+            buses: default_buses(),
+            inputs: vec![],
+            automix_groups: vec![g("g1"), g("g1")],
+        };
+        assert!(validate_preset_v2(&mut preset).is_err());
+    }
+
+    #[test]
+    fn validate_v2_dedups_automix_members() {
+        use crate::audio::dsp::AutomixConfig;
+        use crate::state::AutomixGroupDef;
+        let mut preset = PresetFileV2 {
+            schema_version: SCHEMA_VERSION_V2,
+            name: "dup members".to_string(),
+            saved_at_utc: "0".to_string(),
+            buses: default_buses(),
+            inputs: vec![],
+            automix_groups: vec![AutomixGroupDef {
+                id: "g1".to_string(),
+                name: "g".to_string(),
+                members: vec![
+                    "phone:a".to_string(),
+                    "phone:a".to_string(),
+                    "phone:b".to_string(),
+                ],
+                config: AutomixConfig::default(),
+            }],
+        };
+        validate_preset_v2(&mut preset).unwrap();
+        assert_eq!(
+            preset.automix_groups[0].members,
+            vec!["phone:a".to_string(), "phone:b".to_string()]
+        );
+    }
+
+    #[test]
     fn validate_v2_rejects_duplicate_input_ids() {
         let mut preset = PresetFileV2 {
             schema_version: SCHEMA_VERSION_V2,
@@ -1024,6 +1141,7 @@ mod tests {
                     dsp: DspConfig::default(),
                 },
             ],
+            automix_groups: vec![],
         };
 
         assert!(validate_preset_v2(&mut preset).is_err());
@@ -1043,6 +1161,7 @@ mod tests {
                 sends: vec![default_send(BusId::A1), default_send(BusId::A1)],
                 dsp: DspConfig::default(),
             }],
+            automix_groups: vec![],
         };
 
         assert!(validate_preset_v2(&mut preset).is_err());
@@ -1079,6 +1198,7 @@ mod tests {
                 }],
                 dsp: DspConfig::default(),
             }],
+            automix_groups: vec![],
         };
 
         validate_preset_v2(&mut preset).unwrap();
@@ -1168,7 +1288,8 @@ mod tests {
         output_names.insert("spk".to_string(), "Speaker Name".to_string());
 
         let preset =
-            build_preset_v2_with_maps("test", &buses, &graph, &input_names, &output_names).unwrap();
+            build_preset_v2_with_maps("test", &buses, &graph, &[], &input_names, &output_names)
+                .unwrap();
         assert_eq!(preset.schema_version, SCHEMA_VERSION_V2);
         assert_eq!(preset.buses.len(), 4);
         assert_eq!(preset.inputs.len(), 1);
