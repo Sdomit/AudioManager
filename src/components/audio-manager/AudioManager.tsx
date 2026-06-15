@@ -461,8 +461,6 @@ export function AudioManager() {
           onInputGainChange={am.setInputGain}
           onBusVolumeChange={am.setBusVolume}
           onInputDsp={am.setInputDsp}
-          onBusEq={am.setBusEq}
-          onBusLimiter={am.setBusLimiter}
         />
 
         {/* Detail panel: always present in matrix/flow; in the nodes canvas it
@@ -514,7 +512,6 @@ export function AudioManager() {
             }
             onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
             onStopRecording={(id: string) => void am.stopRecording(id)}
-            inputOnly={state.routingView === "nodes"}
           />
           </EqSampleRateContext.Provider>
         )}

@@ -10,8 +10,9 @@
  * here only need sensible travel — see `DSP_RANGE` in `dspDefaults.ts`.
  */
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
+import { orderedInputFx, reorderInputFx, type InputFxKey } from "./inputFx";
 import type {
   BandKind,
   CompressorConfig,
@@ -392,6 +393,128 @@ export function BusLimiterControls({
 
 /* ── Input chain ────────────────────────────────────────────────────────── */
 
+/**
+ * Drag-to-reorder strip for the per-input effect chain (#feature5).
+ *
+ * The node canvas reorders effects by wiring fx ports; flow and matrix modes
+ * have no canvas, so this compact strip gives them the same control. It lists
+ * the enabled effects in their wired order (`dsp.order`) and lets the user drag
+ * one chip onto another to splice it before that stage, mutating `dsp.order`
+ * via the shared `reorderInputFx` helper. Hand-rolled mouse drag (window-level
+ * mouseup, matching NodeView) — no drag library. Hidden when fewer than two
+ * effects are enabled (nothing to reorder).
+ */
+function FxOrderStrip({
+  dsp,
+  onChange,
+}: {
+  dsp: DspConfig;
+  onChange: (next: DspConfig) => void;
+}) {
+  const ordered = orderedInputFx(dsp);
+  const [dragKey, setDragKey] = useState<InputFxKey | null>(null);
+  const [overKey, setOverKey] = useState<InputFxKey | null>(null);
+  const dragRef = useRef<InputFxKey | null>(null);
+  const overRef = useRef<InputFxKey | null>(null);
+
+  if (ordered.length < 2) return null;
+
+  const begin = (key: InputFxKey) => {
+    dragRef.current = key;
+    overRef.current = key;
+    setDragKey(key);
+    setOverKey(key);
+    const onUp = () => {
+      const from = dragRef.current;
+      const before = overRef.current;
+      if (from && before && from !== before) {
+        onChange(reorderInputFx(dsp, from, before));
+      }
+      dragRef.current = null;
+      overRef.current = null;
+      setDragKey(null);
+      setOverKey(null);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const enter = (key: InputFxKey) => {
+    if (!dragRef.current) return;
+    overRef.current = key;
+    setOverKey(key);
+  };
+
+  // Keyboard a11y: swap a focused chip with its adjacent enabled neighbour via
+  // Alt+Arrow. Always routes through reorderInputFx so disabled stages keep
+  // their place in the full dsp.order (only the moved stage is repositioned).
+  const nudge = (key: InputFxKey, dir: -1 | 1) => {
+    const keys = ordered.map((f) => f.key);
+    const i = keys.indexOf(key);
+    const j = i + dir;
+    if (j < 0 || j >= keys.length) return;
+    const neighbor = keys[j];
+    onChange(
+      dir === 1
+        ? reorderInputFx(dsp, neighbor, key) // pull next neighbour before key
+        : reorderInputFx(dsp, key, neighbor), // push key before prev neighbour
+    );
+  };
+
+  return (
+    <div
+      role="list"
+      aria-label="Effect order — drag a stage to reorder"
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 4,
+        marginBottom: 8,
+        userSelect: "none",
+      }}
+    >
+      {ordered.map((fx, i) => {
+        const dragging = dragKey === fx.key;
+        const over = overKey === fx.key && dragKey !== null && !dragging;
+        return (
+          <button
+            key={fx.key}
+            type="button"
+            role="listitem"
+            aria-label={`${fx.label}, position ${i + 1} of ${ordered.length}. Drag to reorder, or Alt+Arrow keys.`}
+            onMouseDown={() => begin(fx.key)}
+            onMouseEnter={() => enter(fx.key)}
+            onKeyDown={(e) => {
+              if (e.altKey && e.key === "ArrowLeft") {
+                e.preventDefault();
+                nudge(fx.key, -1);
+              } else if (e.altKey && e.key === "ArrowRight") {
+                e.preventDefault();
+                nudge(fx.key, 1);
+              }
+            }}
+            style={{
+              cursor: "grab",
+              padding: "2px 8px",
+              borderRadius: 6,
+              border: `1px solid ${over ? "var(--am-accent)" : "var(--am-border, rgba(255,255,255,0.14))"}`,
+              background: over
+                ? "var(--am-accent)"
+                : "var(--am-surface-2, rgba(255,255,255,0.06))",
+              color: over ? "#000" : "var(--am-text, inherit)",
+              fontSize: 11,
+              opacity: dragging ? 0.45 : 1,
+            }}
+          >
+            {i > 0 && <span aria-hidden style={{ opacity: 0.4, marginRight: 4 }}>→</span>}
+            {fx.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function InputDspControls({
   dsp,
   onChange,
@@ -437,6 +560,8 @@ export function InputDspControls({
           </button>
         </div>
       )}
+
+      <FxOrderStrip dsp={dsp} onChange={onChange} />
 
       <EffectSection
         title="Noise suppression (AI)"

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { defaultDspConfig } from "./dspDefaults";
-import { orderedInputFx, reorderInputFx, setInputFxEnabled } from "./NodeFxPopover";
+import { orderedInputFx, reorderInputFx, setInputFxEnabled } from "./inputFx";
 
 describe("input fx chain ordering", () => {
   it("orderedInputFx respects dsp.order and drops disabled stages", () => {

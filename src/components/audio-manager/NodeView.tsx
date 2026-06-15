@@ -15,13 +15,10 @@ import type {
   BusId,
   DetailSelection,
   DspConfig,
-  EqConfig,
-  LimiterConfig,
   Send,
   TapSpec,
 } from "./types";
 import {
-  NodeFxPopover,
   countBusFx,
   countInputFx,
   orderedInputFx,
@@ -30,8 +27,7 @@ import {
   INPUT_FX_DEFS,
   inputFxEnabled,
   type InputFxKey,
-  type NodeFxTarget,
-} from "./NodeFxPopover";
+} from "./inputFx";
 import { gainToDb } from "./units";
 import { bipartiteToGraph } from "./graphAdapter";
 import {
@@ -97,12 +93,9 @@ interface NodeViewProps {
   onRemoveInput?: (id: string) => void;
   onInputGainChange: (id: string, v: number) => void;
   onBusVolumeChange: (id: BusId, v: number) => void;
-  /** Per-input DSP chain edit (denoise/HPF/gate/EQ/comp/limiter). */
+  /** Per-input DSP chain edit (denoise/HPF/gate/EQ/comp/limiter). Used for
+   *  on-canvas fx toggle/reorder; full editing happens in the detail panel. */
   onInputDsp: (id: string, dsp: DspConfig) => void;
-  /** Per-bus EQ edit. */
-  onBusEq: (id: BusId, eq: EqConfig) => void;
-  /** Per-bus limiter edit. */
-  onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
 }
 
 interface MarqueeState {
@@ -447,8 +440,6 @@ export function NodeView({
   onInputGainChange,
   onBusVolumeChange,
   onInputDsp,
-  onBusEq,
-  onBusLimiter,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   // The Routing header renders `<div id="am-node-toolbar-slot" />` when in node
@@ -465,19 +456,18 @@ export function NodeView({
     obs.observe(document.body, { childList: true, subtree: true });
     return () => obs.disconnect();
   }, []);
-  // Open node FX editor (anchored at the click). Null when closed.
-  const [openFx, setOpenFx] = useState<NodeFxTarget | null>(null);
-  const openInputFx = useCallback((id: string, e: React.MouseEvent) => {
-    // Screen coords (popover is position:fixed), clamped so it stays on-screen.
-    const x = Math.min(Math.max(8, e.clientX - 150), window.innerWidth - 320);
-    const y = Math.min(Math.max(8, e.clientY), window.innerHeight - 200);
-    setOpenFx({ kind: "input", id, x, y });
-  }, []);
-  const openBusFx = useCallback((id: BusId, e: React.MouseEvent) => {
-    const x = Math.min(Math.max(8, e.clientX - 150), window.innerWidth - 320);
-    const y = Math.min(Math.max(8, e.clientY), window.innerHeight - 200);
-    setOpenFx({ kind: "bus", id, x, y });
-  }, []);
+  // Clicking a node's FX badge/box selects the node so its effect chain opens
+  // in the right-hand DetailPanel (#feature4). The old floating popover is gone;
+  // editing lives in one place. The optional event arg is unused but kept so the
+  // node components can pass their click event without a signature change.
+  const openInputFx = useCallback(
+    (id: string, _e?: React.MouseEvent) => onSelectInput(id),
+    [onSelectInput],
+  );
+  const openBusFx = useCallback(
+    (id: BusId, _e?: React.MouseEvent) => onSelectBus(id),
+    [onSelectBus],
+  );
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
   const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
     w: MIN_CANVAS_W,
@@ -2294,18 +2284,6 @@ export function NodeView({
           })()}
       </div>
       </div>
-
-      {openFx && (
-        <NodeFxPopover
-          target={openFx}
-          inputs={inputs}
-          buses={buses}
-          onInputDsp={onInputDsp}
-          onBusEq={onBusEq}
-          onBusLimiter={onBusLimiter}
-          onClose={() => setOpenFx(null)}
-        />
-      )}
 
       {addFxMenu &&
         (() => {
