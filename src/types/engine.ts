@@ -247,11 +247,23 @@ export interface InputChannel {
   sends: InputSend[];
   /** Per-input DSP chain. Optional for back-compat with pre-#32 payloads. */
   dsp?: DspConfig;
+  /** Monitor preview (#feature1): force-routed to the monitor bus (A1) for
+   *  headphone listening. Optional for back-compat with pre-#feature1 payloads. */
+  monitor?: boolean;
+  /** User/auto display label (#feature8). null/absent → name derived from id.
+   *  Phone inputs are auto-labelled with the paired device's hostname. */
+  label?: string | null;
 }
 
 export interface InputPeakStatus {
   device_id: string;
+  /** Raw pre-DSP capture peak (mono). Kept for back-compat / aria labels. */
   peak: number;
+  /** Post-stereo per-channel peaks (#feature10) — follow pan / mono / width. */
+  peak_l: number;
+  peak_r: number;
+  /** Source channel count (1 = mono → UI renders a single meter bar). */
+  channels: number;
 }
 
 // ── Recording ────────────────────────────────────────────────────────────────

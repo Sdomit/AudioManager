@@ -1,0 +1,137 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.sheet {
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  background: var(--am-surface, #1b1d23);
+  color: var(--am-text, #e8e8ea);
+  border: 1px solid var(--am-border, rgba(255, 255, 255, 0.12));
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--am-border, rgba(255, 255, 255, 0.1));
+}
+
+.title {
+  font-size: 15px;
+}
+
+.close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px 0;
+  flex-wrap: wrap;
+}
+
+.tab {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--am-surface-2, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tabActive {
+  background: var(--am-accent, #4f8cff);
+  color: #000;
+}
+
+.panel {
+  padding: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sectionTitle {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.muted {
+  opacity: 0.6;
+}
+
+.subtle {
+  opacity: 0.8;
+}
+
+.error {
+  color: var(--am-meter-clip, #ef4444);
+}
+
+.deviceGroup {
+  margin-bottom: 14px;
+}
+
+.deviceList {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.list {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.dim {
+  opacity: 0.55;
+}
+
+.dimmer {
+  opacity: 0.45;
+}
+
+.densityRow {
+  display: flex;
+  gap: 8px;
+}
+
+.densityBtn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--am-border, rgba(255, 255, 255, 0.14));
+  background: var(--am-surface-2, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.densityBtnActive {
+  border-color: var(--am-accent, #4f8cff);
+  background: var(--am-accent, #4f8cff);
+  color: #000;
+}
+
+.spaced {
+  margin-top: 12px;
+}
+
+.link {
+  color: var(--am-accent, #4f8cff);
+}

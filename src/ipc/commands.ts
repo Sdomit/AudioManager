@@ -100,12 +100,35 @@ export const addInput = (deviceId: string): Promise<InputChannel[]> =>
 export const removeInput = (deviceId: string): Promise<InputChannel[]> =>
   invoke<InputChannel[]>("remove_input", { deviceId });
 
+/** Swap an input's device, preserving gain/sends/dsp/monitor/label (#feature7).
+ *  A failed swap leaves the original input untouched (validated backend-side). */
+export const replaceInput = (
+  oldDeviceId: string,
+  newDeviceId: string,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("replace_input", { oldDeviceId, newDeviceId });
+
+/** Set or clear an input's display label (#feature8). Pass null to revert. */
+export const renameInput = (
+  deviceId: string,
+  label: string | null,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("rename_input", { deviceId, label });
+
 export const setInputGain = (
   deviceId: string,
   gain: number,
   muted: boolean,
 ): Promise<InputChannel[]> =>
   invoke<InputChannel[]>("set_input_gain", { deviceId, gain, muted });
+
+/** Toggle monitor preview (#feature1): route the input to the monitor bus (A1)
+ *  for headphone listening without changing its persisted sends. */
+export const setInputMonitor = (
+  deviceId: string,
+  enabled: boolean,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("set_input_monitor", { deviceId, enabled });
 
 export const setSend = (
   deviceId: string,

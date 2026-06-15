@@ -44,6 +44,7 @@ import type {
   DetailSelection,
   DspConfig,
   EqConfig,
+  InputMeterLevel,
   LimiterConfig,
   Preset,
   RecordingFile,
@@ -148,6 +149,7 @@ type Action =
   | { type: "set_bus_eq"; id: BusId; eq: EqConfig }
   | { type: "set_input_gain"; id: string; gain: number }
   | { type: "set_input_muted"; id: string; muted: boolean }
+  | { type: "set_input_monitor"; id: string; enabled: boolean }
   | { type: "set_input_dsp"; id: string; dsp: DspConfig }
   | { type: "remove_input"; id: string }
   | { type: "add_input" }
@@ -164,7 +166,11 @@ type Action =
   | { type: "set_selection"; selection: DetailSelection }
   | { type: "open_stream_setup" }
   | { type: "close_stream_setup" }
-  | { type: "tick_meters"; busLevels: Record<BusId, number>; inputLevels: Record<string, number> }
+  | {
+      type: "tick_meters";
+      busLevels: Record<BusId, number>;
+      inputLevels: Record<string, InputMeterLevel>;
+    }
   | { type: "restore_snapshot"; snap: Snapshot }
   | { type: "set_undo_redo_flags"; canUndo: boolean; canRedo: boolean }
   | { type: "set_recordings"; recordings: ActiveRecording[] }
@@ -251,6 +257,19 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
 
     case "set_input_muted":
       return updateInput(state, action.id, (i) => ({ ...i, muted: action.muted }));
+
+    case "set_input_monitor": {
+      // Monitor feeds A1 without a Send, so recompute bus state too — A1 should
+      // read running/silent based on whether anything is monitored (#feature1).
+      const inputs = state.inputs.map((i) =>
+        i.id === action.id ? { ...i, monitor: action.enabled } : i,
+      );
+      const buses = state.buses.map((b) => ({
+        ...b,
+        state: deriveBusState(b, busActive(state.sends, inputs, b.id)),
+      }));
+      return { ...state, inputs, buses };
+    }
 
     case "set_input_dsp":
       return updateInput(state, action.id, (i) => ({ ...i, dsp: action.dsp }));
@@ -468,13 +487,28 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
             ...b,
             level: b.enabled ? level : 0,
             clipUntil: clipping ? Date.now() + 2400 : b.clipUntil,
-            state: deriveBusStateWithClip(b, hasAnySend(state.sends, b.id), clipping),
+            state: deriveBusStateWithClip(
+              b,
+              busActive(state.sends, state.inputs, b.id),
+              clipping,
+            ),
           };
         }),
-        inputs: state.inputs.map((i) => ({
-          ...i,
-          level: i.muted ? 0 : action.inputLevels[i.id] ?? i.level,
-        })),
+        // Input meters reflect the captured signal regardless of mute or
+        // routing (#feature2): a muted/unrouted input still shows movement so
+        // you can see the source is live. The stereo legs follow pan / mono /
+        // width (#feature10). No sample this tick → keep the prior values.
+        inputs: state.inputs.map((i) => {
+          const m = action.inputLevels[i.id];
+          if (!m) return i;
+          return {
+            ...i,
+            level: m.level,
+            levelL: m.levelL,
+            levelR: m.levelR,
+            channels: m.channels,
+          };
+        }),
       };
 
     default:
@@ -494,6 +528,15 @@ function updateInput(state: AudioManagerState, id: string, fn: (i: AudioInput) =
 
 function hasAnySend(sends: Send[], busId: BusId): boolean {
   return sends.some((s) => s.busId === busId && s.enabled);
+}
+
+/** Whether a bus carries any input — an enabled send, or (for the monitor bus
+ *  A1) a monitored input, which feeds A1 without a Send (#feature1). Drives
+ *  bus-state derivation so monitoring an otherwise-unrouted input still shows
+ *  A1 as running rather than silent. */
+function busActive(sends: Send[], inputs: AudioInput[], busId: BusId): boolean {
+  if (hasAnySend(sends, busId)) return true;
+  return busId === "A1" && inputs.some((i) => !!i.monitor);
 }
 
 function deriveBusState(b: Bus, hasSends: boolean): Bus["state"] {
@@ -930,6 +973,23 @@ export function useAudioManager(): UseAudioManager {
     [getInput],
   );
 
+  const setInputMonitor = useCallback(
+    (id: string, enabled: boolean) => {
+      const input = getInput(id);
+      if (!input) return;
+      const prev = input.monitor ?? false;
+      // Monitor is a transient listen toggle, not persisted routing, so it is
+      // deliberately NOT pushed to undo/redo history (snapshots only track
+      // gain/muted/sends/dsp). Optimistic update with rollback on IPC failure.
+      dispatch({ type: "set_input_monitor", id, enabled });
+      ipc.setInputMonitor(id, enabled).catch((e) => {
+        console.error("setInputMonitor failed:", e);
+        dispatch({ type: "set_input_monitor", id, enabled: prev });
+      });
+    },
+    [getInput],
+  );
+
   const setInputDsp = useCallback(
     (id: string, dsp: DspConfig) => {
       dispatch({ type: "set_input_dsp", id, dsp });
@@ -947,6 +1007,9 @@ export function useAudioManager(): UseAudioManager {
               .map((s) => s.busId),
           ),
         );
+        // Monitor preview (#feature1) feeds A1 without a Send, so keep the
+        // monitor engine's DSP copy in sync too.
+        if (input.monitor && !routed.includes("A1")) routed.push("A1");
         const targets: BusId[] = routed.length > 0 ? routed : ["A1"];
         // Live publish to every routed bus's engine. A single non-running bus
         // can reject without aborting the others (graph persistence already
@@ -1000,6 +1063,45 @@ export function useAudioManager(): UseAudioManager {
         .then(() => refresh())
         .catch((e) => {
           console.error("addInput failed:", e);
+        });
+    },
+    [refresh],
+  );
+
+  // Swap an input's device, preserving its config (#feature7). Backend-validated
+  // and atomic — a failed swap leaves the original untouched, so we just refresh
+  // from the graph either way (no optimistic dispatch to roll back).
+  const replaceInput = useCallback(
+    (oldDeviceId: string, newDeviceId: string) => {
+      if (oldDeviceId === newDeviceId) return;
+      ipc
+        .replaceInput(oldDeviceId, newDeviceId)
+        .then(() => {
+          // Record the pre-swap snapshot only after the backend accepts the
+          // swap — on rejection the graph is unchanged, so a history entry
+          // would duplicate the current state and make one undo a no-op.
+          recordHistory();
+          refresh();
+        })
+        .catch((e) => {
+          console.error("replaceInput failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
+  // Set or clear an input's display label (#feature8). Pass null/blank to revert
+  // to the device-derived name. Metadata only — refresh to pick up the new name.
+  const renameInput = useCallback(
+    (deviceId: string, label: string | null) => {
+      const trimmed = label?.trim() ? label.trim() : null;
+      ipc
+        .renameInput(deviceId, trimmed)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("renameInput failed:", e);
+          refresh();
         });
     },
     [refresh],
@@ -1389,10 +1491,13 @@ export function useAudioManager(): UseAudioManager {
     closeRecordingsPanel,
     setInputGain,
     setInputMuted,
+    setInputMonitor,
     setInputDsp,
     applyStreamVoice,
     removeInput,
     addInput,
+    replaceInput,
+    renameInput,
     toggleSend,
     setSendGain,
     setSendMuted,

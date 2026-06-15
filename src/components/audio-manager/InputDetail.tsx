@@ -2,11 +2,12 @@ import {
   iconForKind,
   iconForBusRole,
   MuteIcon,
+  HeadphonesIcon,
   XIcon,
   PlusIcon,
 } from "./Icon";
 import { InputDspControls } from "./DspControls";
-import { MeterCanvas } from "./MeterCanvas";
+import { StereoMeter } from "./StereoMeter";
 import { RecordButton } from "./RecordButton";
 import type {
   ActiveRecording,
@@ -18,6 +19,7 @@ import type {
   TapSpec,
 } from "./types";
 import { gainToDb } from "./units";
+import type { DeviceInfo } from "../../types/engine";
 import styles from "./InputDetail.module.css";
 
 interface InputDetailProps {
@@ -27,6 +29,7 @@ interface InputDetailProps {
   activeRecordings: ActiveRecording[];
   onGainChange: (v: number) => void;
   onMuteToggle: () => void;
+  onMonitorToggle: () => void;
   onRemove: () => void;
   onToggleSend: (busId: BusId) => void;
   onSendGainChange: (busId: BusId, v: number) => void;
@@ -35,8 +38,12 @@ interface InputDetailProps {
   onApplyStreamVoice: () => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
-  /** When true, hide the in-panel DSP chain — node view edits fx via canvas. */
-  inputOnly?: boolean;
+  /** Available capture devices for the "Change source" picker (#feature7). */
+  inputDevices: DeviceInfo[];
+  /** Set/clear this input's display label (#feature8); null reverts. */
+  onRename: (label: string | null) => void;
+  /** Swap this input's device, preserving its config (#feature7). */
+  onReplaceSource: (newDeviceId: string) => void;
 }
 
 /**
@@ -55,6 +62,7 @@ export function InputDetail({
   activeRecordings,
   onGainChange,
   onMuteToggle,
+  onMonitorToggle,
   onRemove,
   onToggleSend,
   onSendGainChange,
@@ -63,10 +71,13 @@ export function InputDetail({
   onApplyStreamVoice,
   onStartRecording,
   onStopRecording,
-  inputOnly,
+  inputDevices,
+  onRename,
+  onReplaceSource,
 }: InputDetailProps) {
   const sendMap = new Map<BusId, Send>();
   sends.forEach((s) => sendMap.set(s.busId, s));
+
   const preSpec: TapSpec = { kind: "input_pre", device_id: input.id };
   // Pre-gain capture is only possible while at least one bus engine has
   // this input loaded (it taps inside the bus engine's output callback).
@@ -106,9 +117,81 @@ export function InputDetail({
         </span>
       </div>
 
+      {/* Source: rename (#feature8) + swap device (#feature7). */}
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Source</div>
+        <div className={styles.gainRow}>
+          <span className={styles.gainLabel}>Name</span>
+          <input
+            // Remount per input so defaultValue tracks the selected input.
+            key={input.id}
+            type="text"
+            defaultValue={input.name}
+            placeholder="Display name"
+            aria-label="Rename input"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== input.name) onRename(v.length ? v : null);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--am-border, rgba(255,255,255,0.14))",
+              background: "var(--am-surface-2, rgba(255,255,255,0.06))",
+              color: "inherit",
+              fontSize: 12,
+            }}
+          />
+        </div>
+        <div className={styles.gainRow}>
+          <span className={styles.gainLabel}>Change</span>
+          <select
+            value=""
+            aria-label="Change source device"
+            onChange={(e) => {
+              if (e.target.value) onReplaceSource(e.target.value);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--am-border, rgba(255,255,255,0.14))",
+              background: "var(--am-surface-2, rgba(255,255,255,0.06))",
+              color: "inherit",
+              fontSize: 12,
+            }}
+          >
+            <option value="">Change source…</option>
+            {inputDevices
+              .filter((d) => d.id !== input.id)
+              .map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+          </select>
+        </div>
+      </section>
+
       {/* Meter */}
       <div className={styles.meterBlock}>
-        <MeterCanvas level={input.level} width={300} height={10} peakHold variant="input" />
+        <StereoMeter
+          levelL={input.levelL}
+          levelR={input.levelR}
+          level={input.level}
+          channels={input.channels}
+          width={300}
+          height={16}
+          peakHold
+          variant="input"
+        />
       </div>
 
       {/* Master controls */}
@@ -140,6 +223,15 @@ export function InputDetail({
             <MuteIcon size={14} />
             <span>{input.muted ? "Muted" : "Mute"}</span>
           </button>
+          <button
+            className={`${styles.muteBtn} ${input.monitor ? styles.muteBtnActive : ""}`}
+            onClick={onMonitorToggle}
+            aria-pressed={!!input.monitor}
+            title="Monitor: hear this input on the monitor bus (A1) without enabling the speaker send"
+          >
+            <HeadphonesIcon size={14} />
+            <span>{input.monitor ? "Monitoring" : "Monitor"}</span>
+          </button>
           <RecordButton
             spec={preSpec}
             active={activeRecordings}
@@ -152,17 +244,17 @@ export function InputDetail({
         </div>
       </section>
 
-      {/* DSP chain (hidden in node view — fx are edited on the canvas). */}
-      {!inputOnly && (
-        <section className={styles.section}>
-          <div className={styles.sectionTitle}>Processing (DSP)</div>
-          <InputDspControls
-            dsp={input.dsp}
-            onChange={onDspChange}
-            onStreamVoice={onApplyStreamVoice}
-          />
-        </section>
-      )}
+      {/* Per-input effect chain (#feature4): edited here in every view. In the
+          node canvas, clicking an input or its FX badge selects it and opens
+          this panel — pan / mono / width live in the Stereo block below. */}
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Processing (DSP)</div>
+        <InputDspControls
+          dsp={input.dsp}
+          onChange={onDspChange}
+          onStreamVoice={onApplyStreamVoice}
+        />
+      </section>
 
       {/* Sends */}
       <section className={styles.section}>

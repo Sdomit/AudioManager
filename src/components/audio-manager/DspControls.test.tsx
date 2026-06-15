@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { BusLimiterControls, InputDspControls } from "./DspControls";
 import {
@@ -151,6 +151,53 @@ describe("InputDspControls", () => {
 
     fireEvent.click(screen.getByTitle("Reset all stages to defaults (bypassed)"));
     expect(onChange).toHaveBeenCalledWith(defaultDspConfig());
+  });
+});
+
+describe("FxOrderStrip (#feature5 reorder)", () => {
+  const twoEnabled = () => {
+    const d = defaultDspConfig();
+    return {
+      ...d,
+      hpf: { ...d.hpf, enabled: true },
+      gate: { ...d.gate, enabled: true },
+    };
+  };
+
+  it("is hidden when fewer than two effects are enabled", () => {
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
+    expect(screen.queryByRole("list", { name: /Effect order/i })).toBeNull();
+  });
+
+  it("lists enabled effects in wired order", () => {
+    render(<InputDspControls dsp={twoEnabled()} onChange={() => {}} />);
+    const strip = screen.getByRole("list", { name: /Effect order/i });
+    const chips = within(strip).getAllByRole("listitem");
+    expect(chips).toHaveLength(2);
+    // Default order is denoise→hpf→gate→…, so High-pass precedes Gate.
+    expect(chips[0].textContent).toContain("High-pass");
+    expect(chips[1].textContent).toContain("Gate");
+  });
+
+  it("Alt+ArrowRight reorders without dropping disabled stages", () => {
+    const onChange = vi.fn();
+    render(<InputDspControls dsp={twoEnabled()} onChange={onChange} />);
+    const chips = within(
+      screen.getByRole("list", { name: /Effect order/i }),
+    ).getAllByRole("listitem");
+
+    fireEvent.keyDown(chips[0], { key: "ArrowRight", altKey: true });
+
+    expect(onChange).toHaveBeenCalled();
+    const calls = onChange.mock.calls;
+    const next = calls[calls.length - 1][0];
+    const order = next.order as string[];
+    // hpf now sits after gate…
+    expect(order.indexOf("gate")).toBeLessThan(order.indexOf("hpf"));
+    // …and every stage is still present (no stages dropped from the chain).
+    expect([...order].sort()).toEqual(
+      ["comp", "denoise", "eq", "gate", "hpf", "limiter"].sort(),
+    );
   });
 });
 

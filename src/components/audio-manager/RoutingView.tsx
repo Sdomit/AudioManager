@@ -9,8 +9,6 @@ import type {
   BusId,
   DetailSelection,
   DspConfig,
-  EqConfig,
-  LimiterConfig,
   RoutingView as RoutingViewKind,
   Send,
   TapSpec,
@@ -42,8 +40,7 @@ interface RoutingViewProps {
   onInputGainChange: (id: string, v: number) => void;
   onBusVolumeChange: (id: BusId, v: number) => void;
   onInputDsp: (id: string, dsp: DspConfig) => void;
-  onBusEq: (id: BusId, eq: EqConfig) => void;
-  onBusLimiter: (id: BusId, limiter: LimiterConfig) => void;
+  onToggleInputMute: (id: string) => void;
 }
 
 /**
@@ -72,8 +69,7 @@ export function RoutingView({
   onInputGainChange,
   onBusVolumeChange,
   onInputDsp,
-  onBusEq,
-  onBusLimiter,
+  onToggleInputMute,
 }: RoutingViewProps) {
   return (
     <section className={styles.routing} aria-label="Routing">
@@ -135,8 +131,7 @@ export function RoutingView({
             onInputGainChange={onInputGainChange}
             onBusVolumeChange={onBusVolumeChange}
             onInputDsp={onInputDsp}
-            onBusEq={onBusEq}
-            onBusLimiter={onBusLimiter}
+            onToggleInputMute={onToggleInputMute}
           />
         )}
       </div>

@@ -9,6 +9,7 @@ interface InputListProps {
   selection: DetailSelection;
   onSelectInput: (id: string) => void;
   onMuteInput: (id: string) => void;
+  onMonitorInput: (id: string) => void;
   onInputGainChange: (id: string, v: number) => void;
   onAddInput: () => void;
 }
@@ -22,6 +23,7 @@ export function InputList({
   selection,
   onSelectInput,
   onMuteInput,
+  onMonitorInput,
   onInputGainChange,
   onAddInput,
 }: InputListProps) {
@@ -72,6 +74,7 @@ export function InputList({
               selected={selection.kind === "input" && selection.inputId === input.id}
               onSelect={() => onSelectInput(input.id)}
               onToggleMute={() => onMuteInput(input.id)}
+              onToggleMonitor={() => onMonitorInput(input.id)}
               onGainChange={(v) => onInputGainChange(input.id, v)}
             />
           ))

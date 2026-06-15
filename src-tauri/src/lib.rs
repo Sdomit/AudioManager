@@ -404,7 +404,13 @@ struct EngineStatus {
 #[derive(serde::Serialize)]
 struct InputPeakStatus {
     device_id: String,
+    /// Raw pre-DSP capture peak (mono). Kept for back-compat / aria labels.
     peak: f32,
+    /// Post-stereo per-channel peaks (#feature10) — track pan / mono / width.
+    peak_l: f32,
+    peak_r: f32,
+    /// Source channel count (1 = mono → UI renders a single meter bar).
+    channels: u16,
 }
 
 #[derive(serde::Serialize)]
@@ -475,7 +481,7 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
     let a1 = inner.buses.get(&BusId::A1);
     match a1.and_then(|b| b.engine.as_ref()) {
         Some(engine) => {
-            let (input_peaks, output_peak, clipped_recently) = engine.read_and_reset_meters();
+            let (input_meters, output_peak, clipped_recently) = engine.read_and_reset_meters();
             EngineStatus {
                 status: "running",
                 output_device: Some(engine.output_device_name.clone()),
@@ -484,7 +490,8 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
                     .iter()
                     .map(|input| input.device_name.clone())
                     .collect(),
-                input_peaks,
+                // Legacy shape exposes only the capture peak.
+                input_peaks: input_meters.iter().map(|m| m.capture).collect(),
                 output_peak,
                 clipped_recently,
                 last_error: a1.and_then(|b| b.last_error.clone()).or(inner.last_error.clone()),
@@ -695,7 +702,7 @@ fn remove_input(
     device_id: String,
 ) -> Result<Vec<InputChannel>, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    let affected: Vec<BusId> = BusId::ALL
+    let mut affected: Vec<BusId> = BusId::ALL
         .into_iter()
         .filter(|bus_id| {
             inner
@@ -705,6 +712,16 @@ fn remove_input(
                 .unwrap_or(false)
         })
         .collect();
+    // Monitor preview routes to A1 without an enabled send (#feature1), so A1
+    // also needs a rebuild to drop the source from the running monitor engine.
+    let monitored = inner
+        .graph
+        .get_input(&device_id)
+        .map(|i| i.monitor)
+        .unwrap_or(false);
+    if monitored && !affected.contains(&BusId::A1) {
+        affected.push(BusId::A1);
+    }
 
     if !inner.graph.remove_input(&device_id) {
         return Err(new_last_error(
@@ -726,6 +743,96 @@ fn remove_input(
         net::session::remove(&session_id, "disconnected");
     }
 
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+/// Swap an input's underlying device, preserving gain / mute / sends / DSP /
+/// monitor / label (#feature7). The new source is validated before any graph
+/// mutation, and an engine-rebuild failure rolls the device id back, so a
+/// failed replacement leaves the original input exactly as it was.
+#[tauri::command]
+fn replace_input(
+    state: tauri::State<AppState>,
+    old_device_id: String,
+    new_device_id: String,
+) -> Result<Vec<InputChannel>, EngineError> {
+    if old_device_id == new_device_id {
+        let inner = state.inner.lock().unwrap();
+        return Ok(inner.graph.list_inputs());
+    }
+    // Validate the replacement source BEFORE mutating the graph.
+    ensure_input_source(&new_device_id)?;
+
+    let mut inner = state.inner.lock().unwrap();
+    // Buses to rebuild: the input's enabled sends, plus A1 if it is monitored
+    // (monitor routes to A1 without an enabled send — see #feature1).
+    let mut affected: Vec<BusId> = BusId::ALL
+        .into_iter()
+        .filter(|bus_id| {
+            inner
+                .graph
+                .get_send(&old_device_id, *bus_id)
+                .map(|send| send.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+    let monitored = inner
+        .graph
+        .get_input(&old_device_id)
+        .map(|i| i.monitor)
+        .unwrap_or(false);
+    if monitored && !affected.contains(&BusId::A1) {
+        affected.push(BusId::A1);
+    }
+
+    if !inner.graph.replace_input_device(&old_device_id, &new_device_id) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Cannot replace input '{old_device_id}' with '{new_device_id}'"),
+        ));
+    }
+
+    for bus_id in &affected {
+        if let Err(err) = rebuild_bus(&mut inner, *bus_id) {
+            // Roll the device id back and restore the original engines so the
+            // failed replacement leaves the input untouched.
+            inner
+                .graph
+                .replace_input_device(&new_device_id, &old_device_id);
+            for b in &affected {
+                let _ = rebuild_bus(&mut inner, *b);
+            }
+            return Err(store_last_error(&mut inner, err));
+        }
+    }
+
+    // If the replaced source was a connected phone, end its session too (mirror
+    // remove_input) so the handset stops streaming rather than lingering as an
+    // orphaned, still-"connected" background source.
+    if let InputSourceSpec::RemotePhone { session_id } = InputSourceSpec::parse(&old_device_id) {
+        net::session::remove(&session_id, "disconnected");
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+/// Set or clear an input's display label (#feature8). Metadata only — no engine
+/// rebuild. Pass `None`/blank to revert to the device-derived name.
+#[tauri::command]
+fn rename_input(
+    state: tauri::State<AppState>,
+    device_id: String,
+    label: Option<String>,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_label(&device_id, label) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
     inner.last_error = None;
     Ok(inner.graph.list_inputs())
 }
@@ -757,6 +864,37 @@ fn set_input_gain(
                 }
             }
         }
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+/// Toggle monitor preview for an input (#feature1): force-route it to the
+/// monitor bus (A1) for headphone listening without touching its persisted
+/// sends. Idempotent and never duplicates an already-enabled A1 send.
+#[tauri::command]
+fn set_input_monitor(
+    state: tauri::State<AppState>,
+    device_id: String,
+    enabled: bool,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    let Some(prev) = inner.graph.get_input(&device_id).map(|i| i.monitor) else {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    };
+    inner.graph.set_monitor(&device_id, enabled);
+    // Monitor changes which inputs the A1 engine carries, so rebuild A1 to add
+    // or drop the preview tap. Persisted routing for every bus is left as-is.
+    if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
+        // Roll the flag back so the graph matches the frontend's optimistic
+        // revert — otherwise a later hydrate would re-show the input monitored
+        // and re-route it to A1 even though the rebuild failed.
+        inner.graph.set_monitor(&device_id, prev);
+        return Err(store_last_error(&mut inner, err));
     }
 
     inner.last_error = None;
@@ -829,25 +967,33 @@ fn list_buses(state: tauri::State<AppState>) -> Vec<BusStatus> {
 fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let inner = state.inner.lock().unwrap();
 
-    let mut input_peaks_by_device: BTreeMap<String, f32> = BTreeMap::new();
+    // Per-device meter aggregate (a device may feed more than one bus engine;
+    // take the max across them). `channels` comes from the engine's input info.
+    #[derive(Default, Clone, Copy)]
+    struct DeviceMeterAgg {
+        capture: f32,
+        peak_l: f32,
+        peak_r: f32,
+        channels: u16,
+    }
+    let mut input_peaks_by_device: BTreeMap<String, DeviceMeterAgg> = BTreeMap::new();
     let mut buses = Vec::with_capacity(inner.buses.len());
 
     for bus in inner.buses.values() {
         let (output_peak, clipped_recently, underruns, overruns, loudness) =
             match bus.engine.as_ref() {
                 Some(engine) => {
-                    let (input_peaks, output_peak, clipped_recently) =
+                    let (input_meters, output_peak, clipped_recently) =
                         engine.read_and_reset_meters();
                     for (idx, info) in engine.inputs.iter().enumerate() {
-                        let peak = input_peaks.get(idx).copied().unwrap_or(0.0);
-                        input_peaks_by_device
+                        let m = input_meters.get(idx).copied().unwrap_or_default();
+                        let agg = input_peaks_by_device
                             .entry(info.device_name.clone())
-                            .and_modify(|current| {
-                                if peak > *current {
-                                    *current = peak;
-                                }
-                            })
-                            .or_insert(peak);
+                            .or_default();
+                        agg.capture = agg.capture.max(m.capture);
+                        agg.peak_l = agg.peak_l.max(m.peak_l);
+                        agg.peak_r = agg.peak_r.max(m.peak_r);
+                        agg.channels = agg.channels.max(info.channels);
                     }
                     let (un, ov) = engine.read_and_reset_xruns();
                     (output_peak, clipped_recently, un, ov, engine.read_loudness())
@@ -869,7 +1015,13 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
 
     let input_peaks = input_peaks_by_device
         .into_iter()
-        .map(|(device_id, peak)| InputPeakStatus { device_id, peak })
+        .map(|(device_id, a)| InputPeakStatus {
+            device_id,
+            peak: a.capture,
+            peak_l: a.peak_l,
+            peak_r: a.peak_r,
+            channels: a.channels,
+        })
         .collect();
 
     SystemStatus {
@@ -1769,6 +1921,13 @@ fn phone_accept_client(
         let mut inner = state.inner.lock().unwrap();
         if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
             inner.graph.add_input(&device_id);
+            // Auto-name the phone input with its hostname (#feature8). Only on
+            // first add, so a user rename survives a later reconnect.
+            if let Some(status) = net::session::status(&session_id) {
+                if !status.label.trim().is_empty() {
+                    inner.graph.set_label(&device_id, Some(status.label));
+                }
+            }
         }
     }
     // Trust could not be saved (corrupt store / disk error): the phone works now
@@ -1803,7 +1962,7 @@ fn disconnect_phone(
     net::session::remove(session_id, bye_reason);
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     let mut inner = state.inner.lock().unwrap();
-    let affected: Vec<BusId> = BusId::ALL
+    let mut affected: Vec<BusId> = BusId::ALL
         .into_iter()
         .filter(|bus_id| {
             inner
@@ -1813,6 +1972,16 @@ fn disconnect_phone(
                 .unwrap_or(false)
         })
         .collect();
+    // Monitor preview routes to A1 with no enabled send (#feature1); rebuild A1
+    // too so a disconnected phone drops out of the running monitor engine.
+    let monitored = inner
+        .graph
+        .get_input(&device_id)
+        .map(|i| i.monitor)
+        .unwrap_or(false);
+    if monitored && !affected.contains(&BusId::A1) {
+        affected.push(BusId::A1);
+    }
     if inner.graph.remove_input(&device_id) {
         for bus_id in affected {
             if let Err(err) = rebuild_bus(&mut inner, bus_id) {
@@ -1933,6 +2102,13 @@ pub fn run() {
                     .any(|c| c.device_id == device_id)
                 {
                     inner.graph.add_input(&device_id);
+                    // Auto-name the resumed phone with its stored hostname so the
+                    // label is consistent with the live-accept path (#feature8).
+                    if let Some(label) = net::paired::label_of(session_id) {
+                        if !label.trim().is_empty() {
+                            inner.graph.set_label(&device_id, Some(label));
+                        }
+                    }
                 }
             }));
 
@@ -1985,7 +2161,10 @@ pub fn run() {
             list_inputs,
             add_input,
             remove_input,
+            replace_input,
+            rename_input,
             set_input_gain,
+            set_input_monitor,
             set_send,
             set_send_gain,
             list_buses,
