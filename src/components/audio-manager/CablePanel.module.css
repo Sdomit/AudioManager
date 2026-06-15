@@ -1,16 +1,16 @@
 .panel {
-  border: 1px solid var(--am-border, #2e333a);
+  border: 1px solid var(--am-border-default);
   border-radius: 10px;
   padding: 12px 14px;
   margin-bottom: 16px;
-  background: var(--am-bg, #14171c);
+  background: var(--am-surface-1);
   border-left-width: 3px;
 }
 
 .tone_ok { border-left-color: #34d399; }
 .tone_warn { border-left-color: #fbbf24; }
 .tone_error { border-left-color: #f87171; }
-.tone_neutral { border-left-color: var(--am-fg-dim, #9aa3ad); }
+.tone_neutral { border-left-color: var(--am-text-secondary); }
 
 .head {
   display: flex;
@@ -29,7 +29,7 @@
 .dot_ok { background: #34d399; }
 .dot_warn { background: #fbbf24; }
 .dot_error { background: #f87171; }
-.dot_neutral { background: var(--am-fg-dim, #9aa3ad); }
+.dot_neutral { background: var(--am-text-secondary); }
 
 .headText {
   min-width: 0;
@@ -38,12 +38,12 @@
 .headline {
   font-size: 13px;
   font-weight: 600;
-  color: var(--am-fg, #e6e8ea);
+  color: var(--am-text-primary);
 }
 
 .detail {
   font-size: 12px;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   margin-top: 2px;
 }
 
@@ -71,7 +71,7 @@
 }
 
 .epLive {
-  color: var(--am-fg, #e6e8ea);
+  color: var(--am-text-primary);
 }
 
 .epLive .epDot {
@@ -79,12 +79,12 @@
 }
 
 .epMissing {
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   opacity: 0.6;
 }
 
 .epMissing .epDot {
-  background: var(--am-fg-dim, #9aa3ad);
+  background: var(--am-text-secondary);
 }
 
 .epTag {
@@ -94,8 +94,8 @@
   font-size: 10px;
   font-weight: 600;
   line-height: 16px;
-  color: var(--am-fg, #e6e8ea);
-  background: var(--am-border, #2e333a);
+  color: var(--am-text-primary);
+  background: var(--am-border-default);
   flex-shrink: 0;
 }
 
@@ -135,16 +135,16 @@
 .secondaryBtn {
   padding: 6px 14px;
   border-radius: 6px;
-  border: 1px solid var(--am-border, #2e333a);
+  border: 1px solid var(--am-border-default);
   background: transparent;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   font-size: 12px;
   cursor: pointer;
 }
 
 .secondaryBtn:hover:not(:disabled) {
-  color: var(--am-fg, #e6e8ea);
-  border-color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-primary);
+  border-color: var(--am-text-secondary);
 }
 
 .secondaryBtn:disabled {

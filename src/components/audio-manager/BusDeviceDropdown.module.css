@@ -9,9 +9,9 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  background: var(--am-bg, #14171c);
-  border: 1px solid var(--am-border, #2e333a);
-  color: var(--am-fg, #e6e8ea);
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-default);
+  color: var(--am-text-primary);
   padding: 7px 10px;
   border-radius: 8px;
   font-size: 12px;
@@ -20,7 +20,7 @@
 }
 
 .trigger:hover {
-  border-color: var(--am-fg-dim, #9aa3ad);
+  border-color: var(--am-text-secondary);
 }
 
 .deviceName {
@@ -30,12 +30,12 @@
 }
 
 .deviceMissing {
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
 }
 
 .chevron {
   flex-shrink: 0;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   font-size: 10px;
 }
 
@@ -45,8 +45,8 @@
   left: 0;
   right: 0;
   z-index: 30;
-  background: var(--am-bg-elev, #1c2027);
-  border: 1px solid var(--am-border, #2e333a);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
   border-radius: 10px;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
   padding: 6px;
@@ -62,7 +62,7 @@
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
-  color: var(--am-fg, #e6e8ea);
+  color: var(--am-text-primary);
   padding: 8px 10px;
   border-radius: 7px;
   cursor: pointer;
@@ -70,7 +70,7 @@
 
 .item:hover {
   background: rgba(255, 255, 255, 0.04);
-  border-color: var(--am-border, #2e333a);
+  border-color: var(--am-border-default);
 }
 
 .item.selected {
@@ -88,15 +88,15 @@
 
 .itemMeta {
   font-size: 11px;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
 }
 
 .unassign {
   width: 100%;
   margin-top: 4px;
   background: transparent;
-  border: 1px solid var(--am-border, #2e333a);
-  color: var(--am-fg-dim, #9aa3ad);
+  border: 1px solid var(--am-border-default);
+  color: var(--am-text-secondary);
   padding: 7px 10px;
   border-radius: 7px;
   font-size: 12px;
@@ -104,14 +104,14 @@
 }
 
 .unassign:hover {
-  color: var(--am-fg, #e6e8ea);
-  border-color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-primary);
+  border-color: var(--am-text-secondary);
 }
 
 .msg {
   padding: 14px 10px;
   text-align: center;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   font-size: 12px;
 }
 
