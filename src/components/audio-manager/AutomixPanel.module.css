@@ -81,6 +81,16 @@
   border-radius: var(--am-radius-md);
 }
 
+.gateWarn {
+  margin: var(--am-space-2) var(--am-space-4) 0;
+  padding: var(--am-space-2) var(--am-space-3);
+  font-size: var(--am-text-12, 12px);
+  line-height: 1.4;
+  color: var(--am-warn, #d97706);
+  background: rgba(217, 119, 6, 0.1);
+  border-radius: var(--am-radius-md);
+}
+
 .suggestion {
   margin: var(--am-space-3) var(--am-space-4) 0;
   padding: var(--am-space-3);

@@ -548,6 +548,8 @@ export function AudioManager() {
       <AutomixPanel
         open={automixOpen}
         inputs={state.inputs}
+        sends={state.sends}
+        buses={state.buses}
         onClose={() => setAutomixOpen(false)}
       />
 
