@@ -132,6 +132,13 @@ export const setInputMonitor = (
 ): Promise<InputChannel[]> =>
   invoke<InputChannel[]>("set_input_monitor", { deviceId, enabled });
 
+/** Set an input's boost/trim multiplier in [1.0, 5.0] (#feature-boost). */
+export const setInputBoost = (
+  deviceId: string,
+  boost: number,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("set_input_boost", { deviceId, boost });
+
 export const setSend = (
   deviceId: string,
   busId: BusId,
