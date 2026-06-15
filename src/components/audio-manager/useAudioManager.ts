@@ -150,6 +150,7 @@ type Action =
   | { type: "set_input_gain"; id: string; gain: number }
   | { type: "set_input_muted"; id: string; muted: boolean }
   | { type: "set_input_monitor"; id: string; enabled: boolean }
+  | { type: "set_input_boost"; id: string; boost: number }
   | { type: "set_input_dsp"; id: string; dsp: DspConfig }
   | { type: "remove_input"; id: string }
   | { type: "add_input" }
@@ -270,6 +271,9 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
       }));
       return { ...state, inputs, buses };
     }
+
+    case "set_input_boost":
+      return updateInput(state, action.id, (i) => ({ ...i, boost: action.boost }));
 
     case "set_input_dsp":
       return updateInput(state, action.id, (i) => ({ ...i, dsp: action.dsp }));
@@ -990,6 +994,22 @@ export function useAudioManager(): UseAudioManager {
     [getInput],
   );
 
+  const setInputBoost = useCallback(
+    (id: string, boost: number) => {
+      // Optimistic update; the backend re-clamps to [1, 5]. Throttled like the
+      // gain fader (one IPC per frame) since the boost slider drags. Boost is a
+      // trim setting not captured in undo snapshots, so — like monitor — it is
+      // not pushed to history.
+      dispatch({ type: "set_input_boost", id, boost });
+      scheduleWrite(`input-boost:${id}`, () => {
+        const input = getInput(id);
+        if (!input) return Promise.resolve();
+        return ipc.setInputBoost(id, input.boost ?? 1);
+      });
+    },
+    [getInput, scheduleWrite],
+  );
+
   const setInputDsp = useCallback(
     (id: string, dsp: DspConfig) => {
       dispatch({ type: "set_input_dsp", id, dsp });
@@ -1492,6 +1512,7 @@ export function useAudioManager(): UseAudioManager {
     setInputGain,
     setInputMuted,
     setInputMonitor,
+    setInputBoost,
     setInputDsp,
     applyStreamVoice,
     removeInput,

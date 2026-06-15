@@ -92,6 +92,9 @@ export interface AudioInput {
   /** Monitor preview on (#feature1) — heard on the monitor bus (A1) for
    *  headphone listening without enabling the speaker send. Absent → off. */
   monitor?: boolean;
+  /** Input boost/trim multiplier 1.0..5.0 (#feature-boost), 1.0 = off (100%).
+   *  Clean gain on top of the fader for quiet sources. Absent → 1.0. */
+  boost?: number;
   /** Per-input effect chain HPF→Gate→EQ→Comp→Limiter (#32). */
   dsp: DspConfig;
 }
@@ -209,6 +212,8 @@ export interface AudioManagerActions {
   /** Toggle monitor preview (#feature1): hear the input on the monitor bus (A1)
    *  without enabling its speaker send. */
   setInputMonitor: (id: string, enabled: boolean) => void;
+  /** Set the input boost/trim multiplier 1.0..5.0 (#feature-boost). Live. */
+  setInputBoost: (id: string, boost: number) => void;
   /** Update the per-input DSP chain (#32). Live, no restart. */
   setInputDsp: (id: string, dsp: DspConfig) => void;
   /**

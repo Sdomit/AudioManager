@@ -496,6 +496,7 @@ export function AudioManager() {
               if (!input) return;
               am.setInputMonitor(id, !(input.monitor ?? false));
             }}
+            onInputBoost={am.setInputBoost}
             onInputDsp={am.setInputDsp}
             onApplyStreamVoice={am.applyStreamVoice}
             onRemoveInput={am.removeInput}

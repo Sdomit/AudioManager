@@ -290,6 +290,9 @@ export interface InputChannel {
   /** User/auto display label (#feature8). null/absent → name derived from id.
    *  Phone inputs are auto-labelled with the paired device's hostname. */
   label?: string | null;
+  /** Input boost/trim multiplier in [1.0, 5.0] (#feature-boost), 1.0 = off.
+   *  Clean gain on top of the fader for quiet sources. Absent → 1.0. */
+  boost?: number;
 }
 
 export interface InputPeakStatus {

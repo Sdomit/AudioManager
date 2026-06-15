@@ -56,6 +56,18 @@ pub struct InputChannel {
     /// older graphs/presets load with no custom label.
     #[serde(default)]
     pub label: Option<String>,
+    /// Input boost / trim (#feature-boost): a clean-gain multiplier applied on
+    /// top of the fader, for quiet sources (camera / shotgun mics). Range
+    /// [1.0, 5.0] where 1.0 = +0 (off / 100%) and 5.0 = 500% (~+14 dB). Kept
+    /// separate from `gain` so the fader stays a normal 0..unity..+6 dB control
+    /// and the boost round-trips losslessly. `serde(default_boost)` so older
+    /// graphs/presets load at unity (no boost).
+    #[serde(default = "default_boost")]
+    pub boost: f32,
+}
+
+fn default_boost() -> f32 {
+    1.0
 }
 
 impl InputChannel {
@@ -68,6 +80,7 @@ impl InputChannel {
             dsp: DspConfig::default(),
             monitor: false,
             label: None,
+            boost: 1.0,
         }
     }
 
@@ -76,6 +89,15 @@ impl InputChannel {
             1.0
         } else {
             v.clamp(0.0, 2.0)
+        }
+    }
+
+    /// Clamp the boost multiplier to [1.0, 5.0] (100%..500%); non-finite → 1.0.
+    pub fn clamp_boost(v: f32) -> f32 {
+        if !v.is_finite() {
+            1.0
+        } else {
+            v.clamp(1.0, 5.0)
         }
     }
 }
@@ -180,6 +202,20 @@ impl AudioGraph {
         true
     }
 
+    /// Set an input's boost/trim multiplier (#feature-boost), clamped to
+    /// [1.0, 5.0]. Returns false if no input matches `device_id`.
+    pub fn set_boost(&mut self, device_id: &str, boost: f32) -> bool {
+        let Some(input) = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.device_id == device_id)
+        else {
+            return false;
+        };
+        input.boost = InputChannel::clamp_boost(boost);
+        true
+    }
+
     /// Toggle monitor preview for an input (#feature1). Does not touch `sends`,
     /// so the persisted routing is unchanged. Returns false if no input matches.
     pub fn set_monitor(&mut self, device_id: &str, enabled: bool) -> bool {
@@ -243,7 +279,8 @@ impl AudioGraph {
         // unity send, without an enabled send (#feature1).
         let monitor_only = bus_id == BusId::A1 && input.monitor && !send.enabled;
         let send_volume = if send.enabled { send.volume } else { 1.0 };
-        let effective_gain = input.gain * send_volume;
+        // Boost/trim (#feature-boost) multiplies on top of fader * send.
+        let effective_gain = input.gain * send_volume * input.boost;
         let gain = if effective_gain.is_finite() {
             effective_gain.max(0.0)
         } else {
@@ -268,7 +305,8 @@ impl AudioGraph {
                 }
                 // Monitor-only uses unity send (the input fader still applies).
                 let send_volume = if send.enabled { send.volume } else { 1.0 };
-                let effective_gain = input.gain * send_volume;
+                // Boost/trim (#feature-boost) multiplies on top of fader * send.
+                let effective_gain = input.gain * send_volume * input.boost;
                 let gain = if effective_gain.is_finite() {
                     effective_gain.max(0.0)
                 } else {
@@ -444,6 +482,25 @@ mod tests {
         // Exactly one contribution, using the configured send volume (not unity).
         assert_eq!(a1.len(), 1);
         assert!((a1[0].1 - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn boost_multiplies_effective_gain_and_clamps() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("mic");
+        graph.set_send("mic", BusId::A1, true); // unity send, unity fader
+        // Default boost is unity → effective gain 1.0.
+        assert!((graph.effective_inputs_for_bus(BusId::A1)[0].1 - 1.0).abs() < f32::EPSILON);
+
+        // 3x boost → 300% effective gain.
+        assert!(graph.set_boost("mic", 3.0));
+        assert!((graph.effective_inputs_for_bus(BusId::A1)[0].1 - 3.0).abs() < f32::EPSILON);
+
+        // Clamp: above 5.0 saturates at 5.0 (500%), below 1.0 floors at 1.0.
+        graph.set_boost("mic", 9.0);
+        assert!((graph.get_input("mic").unwrap().boost - 5.0).abs() < f32::EPSILON);
+        graph.set_boost("mic", 0.2);
+        assert!((graph.get_input("mic").unwrap().boost - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

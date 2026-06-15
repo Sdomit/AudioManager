@@ -30,6 +30,8 @@ interface InputDetailProps {
   onGainChange: (v: number) => void;
   onMuteToggle: () => void;
   onMonitorToggle: () => void;
+  /** Set the input boost/trim multiplier 1.0..5.0 (#feature-boost). */
+  onBoostChange: (boost: number) => void;
   onRemove: () => void;
   onToggleSend: (busId: BusId) => void;
   onSendGainChange: (busId: BusId, v: number) => void;
@@ -63,6 +65,7 @@ export function InputDetail({
   onGainChange,
   onMuteToggle,
   onMonitorToggle,
+  onBoostChange,
   onRemove,
   onToggleSend,
   onSendGainChange,
@@ -232,6 +235,18 @@ export function InputDetail({
             <HeadphonesIcon size={14} />
             <span>{input.monitor ? "Monitoring" : "Monitor"}</span>
           </button>
+          <button
+            className={`${styles.muteBtn} ${(input.boost ?? 1) > 1.0001 ? styles.muteBtnActive : ""}`}
+            onClick={() => onBoostChange((input.boost ?? 1) > 1.0001 ? 1 : 2)}
+            aria-pressed={(input.boost ?? 1) > 1.0001}
+            title="Boost: extra clean gain for quiet sources (camera / shotgun mics)"
+          >
+            <span>
+              {(input.boost ?? 1) > 1.0001
+                ? `Boost ${Math.round((input.boost ?? 1) * 100)}%`
+                : "Boost"}
+            </span>
+          </button>
           <RecordButton
             spec={preSpec}
             active={activeRecordings}
@@ -242,6 +257,31 @@ export function InputDetail({
             size={14}
           />
         </div>
+        {/* Advanced boost (#feature-boost): clean gain 100%..500% for quiet
+            sources. Shown only when boost is engaged; double-click resets. */}
+        {(input.boost ?? 1) > 1.0001 && (
+          <div className={styles.gainRow}>
+            <span className={styles.gainLabel}>Boost</span>
+            <div className={styles.gainSliderWrap}>
+              <input
+                type="range"
+                min={1}
+                max={5}
+                step={0.05}
+                value={input.boost ?? 1}
+                onChange={(e) => onBoostChange(Number(e.target.value))}
+                onDoubleClick={() => onBoostChange(1)}
+                className={styles.nativeSlider}
+                style={{ accentColor: "var(--am-accent)" }}
+                aria-label="Input boost, 100 to 500 percent"
+              />
+            </div>
+            <span className={styles.gainReadout}>
+              {Math.round((input.boost ?? 1) * 100)}% · +
+              {(20 * Math.log10(input.boost ?? 1)).toFixed(1)} dB
+            </span>
+          </div>
+        )}
       </section>
 
       {/* Stereo image (#feature3) + binaural 3D position (#binaural): pan,

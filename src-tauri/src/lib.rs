@@ -937,6 +937,42 @@ fn set_input_gain(
     Ok(inner.graph.list_inputs())
 }
 
+/// Set an input's boost/trim multiplier (#feature-boost), clamped to
+/// [1.0, 5.0] (100%..500%). Applied on top of the fader as a clean-gain stage
+/// for quiet sources. Live: re-pushes the effective gain to every running bus
+/// engine via the same lock-free atomic as the fader — no engine restart.
+#[tauri::command]
+fn set_input_boost(
+    state: tauri::State<AppState>,
+    device_id: String,
+    boost: f32,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_boost(&device_id, boost) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+
+    for bus_id in BusId::ALL {
+        if let Some((effective_gain, effective_muted, enabled)) =
+            inner.graph.effective_input_for_bus(&device_id, bus_id)
+        {
+            if enabled {
+                if let Some(bus) = inner.buses.get(&bus_id) {
+                    if let Some(engine) = bus.engine.as_ref() {
+                        engine.update_gain(&device_id, effective_gain, effective_muted);
+                    }
+                }
+            }
+        }
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
 /// Toggle monitor preview for an input (#feature1): force-route it to the
 /// monitor bus (A1) for headphone listening without touching its persisted
 /// sends. Idempotent and never duplicates an already-enabled A1 send.
@@ -2342,6 +2378,7 @@ pub fn run() {
             replace_input,
             rename_input,
             set_input_gain,
+            set_input_boost,
             set_input_monitor,
             set_send,
             set_send_gain,

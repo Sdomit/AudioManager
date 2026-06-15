@@ -133,6 +133,7 @@ export function adaptInput(ch: InputChannel, meter?: InputPeakStatus): AudioInpu
     levelR: meter ? Math.max(0, meter.peak_r) : undefined,
     channels: meter?.channels,
     monitor: ch.monitor ?? false,
+    boost: ch.boost ?? 1,
     dsp: ch.dsp ?? defaultDspConfig(),
   };
 }
