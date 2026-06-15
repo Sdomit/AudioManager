@@ -109,10 +109,11 @@ export function defaultStereo(): StereoConfig {
   };
 }
 
-/** Binaural 3D defaults: disabled, front, at the head (mirrors the Rust
- *  `SpatialConfig::default`). */
+/** Binaural 3D defaults: ENABLED, front, at the head (mirrors the Rust
+ *  `SpatialConfig::default`). On at azimuth 0 / distance 0 is transparent for a
+ *  mono source, so a new input shows the 3D pad but isn't colored until dragged. */
 export function defaultSpatial(): SpatialConfig {
-  return { enabled: false, azimuth_deg: 0, distance: 0 };
+  return { enabled: true, azimuth_deg: 0, distance: 0 };
 }
 
 /** True when any stereo control departs from transparent identity (mirrors the

@@ -531,7 +531,12 @@ pub struct SpatialConfig {
 impl Default for SpatialConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            // Binaural 3D is on by default. At azimuth 0 / distance 0 the
+            // spatialiser is transparent for a mono source (mics), so a fresh
+            // input is unaffected until the position pad is dragged; stereo
+            // sources are folded to a centered mono point (binaural positions a
+            // point source). Toggle 3D off per-input to keep flat stereo.
+            enabled: true,
             azimuth_deg: 0.0,
             distance: 0.0,
         }

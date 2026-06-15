@@ -88,7 +88,14 @@ describe("InputDspControls", () => {
   });
 
   it("StereoSection renders pan + toggles (prominent, outside the DSP chain)", () => {
-    render(<StereoSection stereo={defaultStereo()} onChange={() => {}} />);
+    // 3D is on by default now, so pass it off explicitly to test the flat controls.
+    render(
+      <StereoSection
+        stereo={defaultStereo()}
+        spatial={{ enabled: false, azimuth_deg: 0, distance: 0 }}
+        onChange={() => {}}
+      />,
+    );
     expect(screen.getByText("Stereo")).toBeTruthy();
     expect(screen.getByText("Pan")).toBeTruthy();
     expect(screen.getByText("Center")).toBeTruthy();
@@ -99,7 +106,13 @@ describe("InputDspControls", () => {
 
   it("StereoSection: editing pan emits stereo.pan", () => {
     const onChange = vi.fn();
-    render(<StereoSection stereo={defaultStereo()} onChange={onChange} />);
+    render(
+      <StereoSection
+        stereo={defaultStereo()}
+        spatial={{ enabled: false, azimuth_deg: 0, distance: 0 }}
+        onChange={onChange}
+      />,
+    );
 
     fireEvent.change(screen.getByLabelText("Pan"), { target: { value: "1" } });
 
@@ -110,7 +123,13 @@ describe("InputDspControls", () => {
 
   it("StereoSection: Mono toggle flips stereo.mono", () => {
     const onChange = vi.fn();
-    render(<StereoSection stereo={defaultStereo()} onChange={onChange} />);
+    render(
+      <StereoSection
+        stereo={defaultStereo()}
+        spatial={{ enabled: false, azimuth_deg: 0, distance: 0 }}
+        onChange={onChange}
+      />,
+    );
 
     fireEvent.click(screen.getByText("Mono"));
 
@@ -128,6 +147,7 @@ describe("InputDspControls", () => {
     const { rerender } = render(
       <StereoSection
         stereo={defaultStereo()}
+        spatial={{ enabled: false, azimuth_deg: 0, distance: 0 }}
         onChange={() => {}}
         onSpatialChange={onSpatialChange}
       />,

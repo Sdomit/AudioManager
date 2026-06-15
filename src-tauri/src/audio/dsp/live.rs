@@ -1254,6 +1254,9 @@ mod tests {
         assert!(shared.reload_if_changed(&mut slots));
 
         let mut c = DspConfig::default();
+        // Binaural is on by default and overrides the flat stereo stage, so turn
+        // it off to exercise the pan path.
+        c.spatial.enabled = false;
         c.stereo.pan = 1.0; // hard right
         c.clamp();
         shared.publish(&c, SR);
