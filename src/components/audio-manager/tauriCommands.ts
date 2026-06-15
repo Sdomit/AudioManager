@@ -23,6 +23,7 @@ import type {
   Bus,
   BusId,
   AudioInput,
+  InputMeterLevel,
   Send,
   Preset,
 } from "./types";
@@ -45,15 +46,15 @@ export async function hydrate(): Promise<{
     ipc.listPresets(),
   ]);
 
-  const peakByDevice = new Map<string, number>();
+  const meterByDevice = new Map<string, (typeof status.input_peaks)[number]>();
   for (const p of status.input_peaks) {
-    peakByDevice.set(p.device_id, p.peak);
+    meterByDevice.set(p.device_id, p);
   }
 
   const sends = adaptSendsFromInputs(status.inputs);
   const buses = status.buses.map((b) => adaptBus(b, busHasAnySend(sends, b.id)));
   const inputs = status.inputs.map((ch) =>
-    adaptInput(ch, peakByDevice.get(ch.device_id) ?? 0),
+    adaptInput(ch, meterByDevice.get(ch.device_id)),
   );
   const adaptedPresets = presets.map(adaptPreset);
 
@@ -97,16 +98,23 @@ export async function listPresets(): Promise<Preset[]> {
  */
 export async function pollMeters(): Promise<{
   busLevels: Record<BusId, number>;
-  inputLevels: Record<string, number>;
+  inputLevels: Record<string, InputMeterLevel>;
 }> {
   const status = await ipc.getSystemStatus();
   const busLevels: Record<BusId, number> = {} as Record<BusId, number>;
   for (const b of status.buses) {
     busLevels[b.id] = Math.max(0, b.output_peak);
   }
-  const inputLevels: Record<string, number> = {};
+  const inputLevels: Record<string, InputMeterLevel> = {};
   for (const p of status.input_peaks) {
-    inputLevels[p.device_id] = Math.max(0, p.peak);
+    const levelL = Math.max(0, p.peak_l);
+    const levelR = Math.max(0, p.peak_r);
+    inputLevels[p.device_id] = {
+      level: Math.max(0, p.peak, levelL, levelR),
+      levelL,
+      levelR,
+      channels: p.channels,
+    };
   }
   return { busLevels, inputLevels };
 }

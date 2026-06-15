@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
-import { BusLimiterControls, InputDspControls } from "./DspControls";
+import { BusLimiterControls, InputDspControls, StereoSection } from "./DspControls";
 import {
   b1ProtectLimiter,
   defaultDspConfig,
   defaultLimiter,
+  defaultStereo,
   streamVoiceConfig,
 } from "./dspDefaults";
 
@@ -86,34 +87,35 @@ describe("InputDspControls", () => {
     expect(next.hpf.freq_hz).toBe(120);
   });
 
-  it("renders the always-visible Stereo section with pan + toggles", () => {
-    render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
+  it("StereoSection renders pan + toggles (prominent, outside the DSP chain)", () => {
+    render(<StereoSection stereo={defaultStereo()} onChange={() => {}} />);
     expect(screen.getByText("Stereo")).toBeTruthy();
     expect(screen.getByText("Pan")).toBeTruthy();
+    expect(screen.getByText("Center")).toBeTruthy();
+    expect(screen.getByText("Width")).toBeTruthy();
     expect(screen.getByText("Mono")).toBeTruthy();
     expect(screen.getByText("Swap L/R")).toBeTruthy();
   });
 
-  it("editing pan emits stereo.pan, preserving the chain", () => {
+  it("StereoSection: editing pan emits stereo.pan", () => {
     const onChange = vi.fn();
-    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+    render(<StereoSection stereo={defaultStereo()} onChange={onChange} />);
 
     fireEvent.change(screen.getByLabelText("Pan"), { target: { value: "1" } });
 
     const calls = onChange.mock.calls;
     const next = calls[calls.length - 1][0];
-    expect(next.stereo.pan).toBe(1);
-    expect(next.limiter.threshold_db).toBe(-1);
+    expect(next.pan).toBe(1);
   });
 
-  it("Mono toggle flips stereo.mono", () => {
+  it("StereoSection: Mono toggle flips stereo.mono", () => {
     const onChange = vi.fn();
-    render(<InputDspControls dsp={defaultDspConfig()} onChange={onChange} />);
+    render(<StereoSection stereo={defaultStereo()} onChange={onChange} />);
 
     fireEvent.click(screen.getByText("Mono"));
 
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0].stereo.mono).toBe(true);
+    expect(onChange.mock.calls[0][0].mono).toBe(true);
   });
 
   it("shows the Stream Voice + Reset preset row only when onStreamVoice is given", () => {
@@ -151,6 +153,53 @@ describe("InputDspControls", () => {
 
     fireEvent.click(screen.getByTitle("Reset all stages to defaults (bypassed)"));
     expect(onChange).toHaveBeenCalledWith(defaultDspConfig());
+  });
+});
+
+describe("FxOrderStrip (#feature5 reorder)", () => {
+  const twoEnabled = () => {
+    const d = defaultDspConfig();
+    return {
+      ...d,
+      hpf: { ...d.hpf, enabled: true },
+      gate: { ...d.gate, enabled: true },
+    };
+  };
+
+  it("is hidden when fewer than two effects are enabled", () => {
+    render(<InputDspControls dsp={defaultDspConfig()} onChange={() => {}} />);
+    expect(screen.queryByRole("list", { name: /Effect order/i })).toBeNull();
+  });
+
+  it("lists enabled effects in wired order", () => {
+    render(<InputDspControls dsp={twoEnabled()} onChange={() => {}} />);
+    const strip = screen.getByRole("list", { name: /Effect order/i });
+    const chips = within(strip).getAllByRole("listitem");
+    expect(chips).toHaveLength(2);
+    // Default order is denoise→hpf→gate→…, so High-pass precedes Gate.
+    expect(chips[0].textContent).toContain("High-pass");
+    expect(chips[1].textContent).toContain("Gate");
+  });
+
+  it("Alt+ArrowRight reorders without dropping disabled stages", () => {
+    const onChange = vi.fn();
+    render(<InputDspControls dsp={twoEnabled()} onChange={onChange} />);
+    const chips = within(
+      screen.getByRole("list", { name: /Effect order/i }),
+    ).getAllByRole("listitem");
+
+    fireEvent.keyDown(chips[0], { key: "ArrowRight", altKey: true });
+
+    expect(onChange).toHaveBeenCalled();
+    const calls = onChange.mock.calls;
+    const next = calls[calls.length - 1][0];
+    const order = next.order as string[];
+    // hpf now sits after gate…
+    expect(order.indexOf("gate")).toBeLessThan(order.indexOf("hpf"));
+    // …and every stage is still present (no stages dropped from the chain).
+    expect([...order].sort()).toEqual(
+      ["comp", "denoise", "eq", "gate", "hpf", "limiter"].sort(),
+    );
   });
 });
 

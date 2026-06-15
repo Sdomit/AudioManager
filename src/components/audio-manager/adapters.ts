@@ -13,6 +13,7 @@
 import type {
   BusStatus,
   InputChannel,
+  InputPeakStatus,
   InputSend,
   PresetSummary,
 } from "../../types/engine";
@@ -117,15 +118,21 @@ function inputNameFor(deviceId: string): string {
   return deviceId;
 }
 
-export function adaptInput(ch: InputChannel, peak: number): AudioInput {
+export function adaptInput(ch: InputChannel, meter?: InputPeakStatus): AudioInput {
   return {
     id: ch.device_id,
-    name: inputNameFor(ch.device_id),
+    // Prefer the explicit label (#feature8 — phone hostname / user rename),
+    // falling back to the device-id-derived name.
+    name: ch.label?.trim() ? ch.label.trim() : inputNameFor(ch.device_id),
     kind: inputKindFor(ch.device_id),
     device: ch.device_id,
     gain: backendVolumeToUi(ch.gain),
     muted: ch.muted,
-    level: Math.max(0, peak),
+    level: Math.max(0, meter?.peak ?? 0),
+    levelL: meter ? Math.max(0, meter.peak_l) : undefined,
+    levelR: meter ? Math.max(0, meter.peak_r) : undefined,
+    channels: meter?.channels,
+    monitor: ch.monitor ?? false,
     dsp: ch.dsp ?? defaultDspConfig(),
   };
 }

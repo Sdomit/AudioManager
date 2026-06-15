@@ -81,10 +81,30 @@ export interface AudioInput {
   /** UI scale 0..1 */
   gain: number;
   muted: boolean;
-  /** Current input meter level 0..1.2 */
+  /** Current input meter level 0..1.2 (max of L/R; aria + mono fallback). */
   level: number;
+  /** Post-stereo per-channel meter levels 0..1.2 (#feature10). Absent until the
+   *  first meter poll; components fall back to `level` when undefined. */
+  levelL?: number;
+  levelR?: number;
+  /** Source channel count (1 = mono → single meter bar). Absent → treat as stereo. */
+  channels?: number;
+  /** Monitor preview on (#feature1) — heard on the monitor bus (A1) for
+   *  headphone listening without enabling the speaker send. Absent → off. */
+  monitor?: boolean;
   /** Per-input effect chain HPF→Gate→EQ→Comp→Limiter (#32). */
   dsp: DspConfig;
+}
+
+/** Per-input meter sample from the fast meter poll (#feature10). */
+export interface InputMeterLevel {
+  /** max(L, R, capture) — aria label + mono fallback. */
+  level: number;
+  /** Post-stereo per-channel levels 0..1.2 (follow pan / mono / width). */
+  levelL: number;
+  levelR: number;
+  /** Source channel count (1 = mono → single meter bar). */
+  channels: number;
 }
 
 export interface Send {
@@ -186,6 +206,9 @@ export interface AudioManagerActions {
 
   setInputGain: (id: string, gain: number) => void;
   setInputMuted: (id: string, muted: boolean) => void;
+  /** Toggle monitor preview (#feature1): hear the input on the monitor bus (A1)
+   *  without enabling its speaker send. */
+  setInputMonitor: (id: string, enabled: boolean) => void;
   /** Update the per-input DSP chain (#32). Live, no restart. */
   setInputDsp: (id: string, dsp: DspConfig) => void;
   /**
@@ -200,6 +223,12 @@ export interface AudioManagerActions {
    * source devices another way may invoke this directly.
    */
   addInput: (deviceId: string) => void;
+  /** Swap an input's device, preserving gain/sends/dsp/monitor/label
+   *  (#feature7). A failed swap leaves the original input untouched. */
+  replaceInput: (oldDeviceId: string, newDeviceId: string) => void;
+  /** Set or clear an input's display label (#feature8). null reverts to the
+   *  device-derived name. */
+  renameInput: (deviceId: string, label: string | null) => void;
 
   toggleSend: (inputId: string, busId: BusId) => void;
   setSendGain: (inputId: string, busId: BusId, gain: number) => void;

@@ -17,6 +17,7 @@ import { AutomixPanel } from "./AutomixPanel";
 import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
 import { PhonePairingSheet } from "./PhonePairingSheet";
+import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
@@ -90,6 +91,7 @@ export function AudioManager() {
 
   const [inputPickerOpen, setInputPickerOpen] = useState(false);
   const [phonePairingOpen, setPhonePairingOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
   // Preset dialog: "save" mode collects a new name; "rename" mode
@@ -383,6 +385,7 @@ export function AudioManager() {
         onSetDefaultPreset={am.setDefaultPreset}
         onDensityChange={am.setDensity}
         onOpenStreamSetup={am.openStreamSetup}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       {/* Slot order A1/A2/B1/B2 is the sync-plan contract — don't trust
@@ -434,6 +437,11 @@ export function AudioManager() {
               if (!input) return;
               am.setInputMuted(id, !input.muted);
             }}
+            onMonitorInput={(id) => {
+              const input = state.inputs.find((i) => i.id === id);
+              if (!input) return;
+              am.setInputMonitor(id, !(input.monitor ?? false));
+            }}
             onInputGainChange={am.setInputGain}
             onAddInput={() => setInputPickerOpen(true)}
           />
@@ -459,8 +467,11 @@ export function AudioManager() {
           onInputGainChange={am.setInputGain}
           onBusVolumeChange={am.setBusVolume}
           onInputDsp={am.setInputDsp}
-          onBusEq={am.setBusEq}
-          onBusLimiter={am.setBusLimiter}
+          onToggleInputMute={(id) => {
+            const input = state.inputs.find((i) => i.id === id);
+            if (!input) return;
+            am.setInputMuted(id, !input.muted);
+          }}
         />
 
         {/* Detail panel: always present in matrix/flow; in the nodes canvas it
@@ -479,6 +490,11 @@ export function AudioManager() {
               const input = state.inputs.find((i) => i.id === id);
               if (!input) return;
               am.setInputMuted(id, !input.muted);
+            }}
+            onInputMonitor={(id) => {
+              const input = state.inputs.find((i) => i.id === id);
+              if (!input) return;
+              am.setInputMonitor(id, !(input.monitor ?? false));
             }}
             onInputDsp={am.setInputDsp}
             onApplyStreamVoice={am.applyStreamVoice}
@@ -507,7 +523,9 @@ export function AudioManager() {
             }
             onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
             onStopRecording={(id: string) => void am.stopRecording(id)}
-            inputOnly={state.routingView === "nodes"}
+            inputDevices={inputDevicesCache.filter((d) => !usedInputIds.has(d.id))}
+            onInputRename={am.renameInput}
+            onInputReplaceSource={am.replaceInput}
           />
           </EqSampleRateContext.Provider>
         )}
@@ -591,6 +609,15 @@ export function AudioManager() {
       <PhonePairingSheet
         open={phonePairingOpen}
         onClose={() => setPhonePairingOpen(false)}
+      />
+
+      <SettingsSheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        density={state.density}
+        onDensityChange={am.setDensity}
+        inputDevices={inputDevicesCache}
+        outputDevices={outputDevicesCache}
       />
 
       <PresetSaveDialog

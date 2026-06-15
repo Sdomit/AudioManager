@@ -1,5 +1,5 @@
-import { MeterCanvas } from "./MeterCanvas";
-import { MuteIcon, iconForKind } from "./Icon";
+import { StereoMeter } from "./StereoMeter";
+import { MuteIcon, HeadphonesIcon, iconForKind } from "./Icon";
 import type { AudioInput } from "./types";
 import styles from "./InputRow.module.css";
 
@@ -8,6 +8,7 @@ interface InputRowProps {
   selected: boolean;
   onSelect: () => void;
   onToggleMute: () => void;
+  onToggleMonitor: () => void;
   onGainChange: (v: number) => void;
 }
 
@@ -23,6 +24,7 @@ export function InputRow({
   selected,
   onSelect,
   onToggleMute,
+  onToggleMonitor,
   onGainChange,
 }: InputRowProps) {
   return (
@@ -45,9 +47,27 @@ export function InputRow({
       }
       data-input-id={input.id}
     >
-      <span className={styles.kindIcon} aria-hidden>
+      {/* Clicking the source icon toggles mute (#feature6). */}
+      <button
+        type="button"
+        className={styles.kindIcon}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleMute();
+        }}
+        aria-pressed={input.muted}
+        aria-label={input.muted ? `Unmute ${input.name}` : `Mute ${input.name}`}
+        title={input.muted ? "Muted — click to unmute" : "Click to mute"}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          opacity: input.muted ? 0.4 : 1,
+        }}
+      >
         {iconForKind(input.kind)}
-      </span>
+      </button>
 
       <div className={styles.main}>
         <div className={styles.nameRow}>
@@ -57,7 +77,16 @@ export function InputRow({
           </span>
         </div>
         <div className={styles.meterRow}>
-          <MeterCanvas level={input.level} width={170} height={6} variant="input" peakHold={false} />
+          <StereoMeter
+            levelL={input.levelL}
+            levelR={input.levelR}
+            level={input.level}
+            channels={input.channels}
+            width={170}
+            height={10}
+            variant="input"
+            peakHold={false}
+          />
           <div className={styles.gainContainer}>
             <input
               type="range"
@@ -74,6 +103,21 @@ export function InputRow({
           </div>
         </div>
       </div>
+
+      <button
+        className={`${styles.muteBtn} ${input.monitor ? styles.muteBtnActive : ""}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleMonitor();
+        }}
+        aria-pressed={!!input.monitor}
+        aria-label={
+          input.monitor ? `Stop monitoring ${input.name}` : `Monitor ${input.name}`
+        }
+        title={input.monitor ? "Monitoring (headphones)" : "Monitor in headphones"}
+      >
+        <HeadphonesIcon size={14} />
+      </button>
 
       <button
         className={`${styles.muteBtn} ${input.muted ? styles.muteBtnActive : ""}`}

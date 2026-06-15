@@ -13,6 +13,7 @@ import type {
   Send,
   TapSpec,
 } from "./types";
+import type { DeviceInfo } from "../../types/engine";
 import styles from "./DetailPanel.module.css";
 
 interface DetailPanelProps {
@@ -23,6 +24,7 @@ interface DetailPanelProps {
   activeRecordings: ActiveRecording[];
   onInputGainChange: (id: string, v: number) => void;
   onInputMuted: (id: string) => void;
+  onInputMonitor: (id: string) => void;
   onInputDsp: (id: string, dsp: DspConfig) => void;
   onApplyStreamVoice: (id: string) => void;
   onRemoveInput: (id: string) => void;
@@ -40,9 +42,12 @@ interface DetailPanelProps {
   onSelectInputContext: (id: string) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
-  /** True when shown in node view — hide the input's in-panel DSP chain so
-   *  the canvas is the single place to edit effects. */
-  inputOnly?: boolean;
+  /** Capture devices for the input "Change source" picker (#feature7). */
+  inputDevices: DeviceInfo[];
+  /** Rename an input (#feature8); null reverts to the device-derived name. */
+  onInputRename: (id: string, label: string | null) => void;
+  /** Swap an input's device (#feature7). */
+  onInputReplaceSource: (id: string, newDeviceId: string) => void;
 }
 
 /**
@@ -72,6 +77,7 @@ export function DetailPanel(props: DetailPanelProps) {
           activeRecordings={props.activeRecordings}
           onGainChange={(v) => props.onInputGainChange(input.id, v)}
           onMuteToggle={() => props.onInputMuted(input.id)}
+          onMonitorToggle={() => props.onInputMonitor(input.id)}
           onRemove={() => props.onRemoveInput(input.id)}
           onToggleSend={(busId) => props.onToggleSend(input.id, busId)}
           onSendGainChange={(busId, v) => props.onSendGainChange(input.id, busId, v)}
@@ -80,7 +86,9 @@ export function DetailPanel(props: DetailPanelProps) {
           onApplyStreamVoice={() => props.onApplyStreamVoice(input.id)}
           onStartRecording={props.onStartRecording}
           onStopRecording={props.onStopRecording}
-          inputOnly={props.inputOnly}
+          inputDevices={props.inputDevices}
+          onRename={(label) => props.onInputRename(input.id, label)}
+          onReplaceSource={(newId) => props.onInputReplaceSource(input.id, newId)}
         />
       </aside>
     );
