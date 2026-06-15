@@ -100,6 +100,21 @@ export const addInput = (deviceId: string): Promise<InputChannel[]> =>
 export const removeInput = (deviceId: string): Promise<InputChannel[]> =>
   invoke<InputChannel[]>("remove_input", { deviceId });
 
+/** Swap an input's device, preserving gain/sends/dsp/monitor/label (#feature7).
+ *  A failed swap leaves the original input untouched (validated backend-side). */
+export const replaceInput = (
+  oldDeviceId: string,
+  newDeviceId: string,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("replace_input", { oldDeviceId, newDeviceId });
+
+/** Set or clear an input's display label (#feature8). Pass null to revert. */
+export const renameInput = (
+  deviceId: string,
+  label: string | null,
+): Promise<InputChannel[]> =>
+  invoke<InputChannel[]>("rename_input", { deviceId, label });
+
 export const setInputGain = (
   deviceId: string,
   gain: number,

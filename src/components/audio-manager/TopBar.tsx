@@ -42,6 +42,8 @@ interface TopBarProps {
   onStopAllRecordings: () => void;
   /** Open the recordings drawer. */
   onOpenRecordings: () => void;
+  /** Open the settings sheet (#feature9). */
+  onOpenSettings: () => void;
 }
 
 /**
@@ -68,6 +70,7 @@ export function TopBar({
   onStartMasterRecording,
   onStopAllRecordings,
   onOpenRecordings,
+  onOpenSettings,
 }: TopBarProps) {
   const loaded = presets.find((p) => p.id === loadedPresetId);
   const streamHealth = computeStreamHealth(streamSetupSteps);
@@ -168,7 +171,12 @@ export function TopBar({
 
         <DensityToggle density={density} onChange={onDensityChange} />
 
-        <button className={styles.iconBtn} aria-label="Settings">
+        <button
+          className={styles.iconBtn}
+          aria-label="Settings"
+          title="Settings"
+          onClick={onOpenSettings}
+        >
           <SettingsIcon size={16} />
         </button>
       </div>

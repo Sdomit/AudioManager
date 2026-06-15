@@ -50,6 +50,12 @@ pub struct InputChannel {
     /// `serde(default)` so pre-#feature1 graphs/presets load as monitor-off.
     #[serde(default)]
     pub monitor: bool,
+    /// Optional user-facing display name (#feature8). `None` → the frontend
+    /// derives a name from `device_id`. Phone inputs are auto-labelled with the
+    /// paired device's hostname; any input can be renamed. `serde(default)` so
+    /// older graphs/presets load with no custom label.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 impl InputChannel {
@@ -61,6 +67,7 @@ impl InputChannel {
             sends: BusId::ALL.into_iter().map(InputSend::default_for).collect(),
             dsp: DspConfig::default(),
             monitor: false,
+            label: None,
         }
     }
 
@@ -119,6 +126,42 @@ impl AudioGraph {
         };
         input.gain = InputChannel::clamp_gain(gain);
         input.muted = muted;
+        true
+    }
+
+    /// Set (or clear, with `None`) an input's display label (#feature8). Blank
+    /// strings are normalised to `None`. Returns false if no input matches.
+    pub fn set_label(&mut self, device_id: &str, label: Option<String>) -> bool {
+        let Some(input) = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.device_id == device_id)
+        else {
+            return false;
+        };
+        input.label = label.filter(|s| !s.trim().is_empty());
+        true
+    }
+
+    /// Swap an input's underlying device, preserving gain / mute / sends / DSP /
+    /// monitor / label (#feature7). Returns false if `old_id` is absent or
+    /// `new_id` already exists (caller treats false as "input unchanged"); the
+    /// graph is left untouched in both failure cases.
+    pub fn replace_input_device(&mut self, old_id: &str, new_id: &str) -> bool {
+        if old_id == new_id {
+            return self.has_input(old_id);
+        }
+        if self.has_input(new_id) {
+            return false;
+        }
+        let Some(input) = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.device_id == old_id)
+        else {
+            return false;
+        };
+        input.device_id = new_id.to_string();
         true
     }
 
@@ -401,5 +444,51 @@ mod tests {
         // Exactly one contribution, using the configured send volume (not unity).
         assert_eq!(a1.len(), 1);
         assert!((a1[0].1 - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn replace_input_device_preserves_config() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("old_mic");
+        graph.set_input_gain("old_mic", 0.5, true);
+        graph.set_send("old_mic", BusId::B1, true);
+        graph.set_monitor("old_mic", true);
+        graph.set_label("old_mic", Some("Studio Mic".into()));
+
+        assert!(graph.replace_input_device("old_mic", "new_mic"));
+
+        // Old id gone, new id present, all per-input state carried over.
+        assert!(!graph.has_input("old_mic"));
+        let input = graph.get_input("new_mic").expect("new id present");
+        assert_eq!(input.device_id, "new_mic");
+        assert!((input.gain - 0.5).abs() < f32::EPSILON);
+        assert!(input.muted);
+        assert!(input.monitor);
+        assert_eq!(input.label.as_deref(), Some("Studio Mic"));
+        assert!(graph.get_send("new_mic", BusId::B1).unwrap().enabled);
+    }
+
+    #[test]
+    fn replace_input_device_rejects_collision_and_missing() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("a");
+        graph.add_input("b");
+        // Target id already exists → reject, leaving both inputs intact.
+        assert!(!graph.replace_input_device("a", "b"));
+        assert!(graph.has_input("a"));
+        assert!(graph.has_input("b"));
+        // Unknown source id → reject.
+        assert!(!graph.replace_input_device("ghost", "c"));
+        assert!(!graph.has_input("c"));
+    }
+
+    #[test]
+    fn set_label_blank_clears_to_none() {
+        let mut graph = AudioGraph::new();
+        graph.add_input("mic");
+        graph.set_label("mic", Some("Name".into()));
+        assert_eq!(graph.get_input("mic").unwrap().label.as_deref(), Some("Name"));
+        graph.set_label("mic", Some("   ".into()));
+        assert_eq!(graph.get_input("mic").unwrap().label, None);
     }
 }

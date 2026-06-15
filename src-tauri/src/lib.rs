@@ -747,6 +747,96 @@ fn remove_input(
     Ok(inner.graph.list_inputs())
 }
 
+/// Swap an input's underlying device, preserving gain / mute / sends / DSP /
+/// monitor / label (#feature7). The new source is validated before any graph
+/// mutation, and an engine-rebuild failure rolls the device id back, so a
+/// failed replacement leaves the original input exactly as it was.
+#[tauri::command]
+fn replace_input(
+    state: tauri::State<AppState>,
+    old_device_id: String,
+    new_device_id: String,
+) -> Result<Vec<InputChannel>, EngineError> {
+    if old_device_id == new_device_id {
+        let inner = state.inner.lock().unwrap();
+        return Ok(inner.graph.list_inputs());
+    }
+    // Validate the replacement source BEFORE mutating the graph.
+    ensure_input_source(&new_device_id)?;
+
+    let mut inner = state.inner.lock().unwrap();
+    // Buses to rebuild: the input's enabled sends, plus A1 if it is monitored
+    // (monitor routes to A1 without an enabled send — see #feature1).
+    let mut affected: Vec<BusId> = BusId::ALL
+        .into_iter()
+        .filter(|bus_id| {
+            inner
+                .graph
+                .get_send(&old_device_id, *bus_id)
+                .map(|send| send.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+    let monitored = inner
+        .graph
+        .get_input(&old_device_id)
+        .map(|i| i.monitor)
+        .unwrap_or(false);
+    if monitored && !affected.contains(&BusId::A1) {
+        affected.push(BusId::A1);
+    }
+
+    if !inner.graph.replace_input_device(&old_device_id, &new_device_id) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Cannot replace input '{old_device_id}' with '{new_device_id}'"),
+        ));
+    }
+
+    for bus_id in &affected {
+        if let Err(err) = rebuild_bus(&mut inner, *bus_id) {
+            // Roll the device id back and restore the original engines so the
+            // failed replacement leaves the input untouched.
+            inner
+                .graph
+                .replace_input_device(&new_device_id, &old_device_id);
+            for b in &affected {
+                let _ = rebuild_bus(&mut inner, *b);
+            }
+            return Err(store_last_error(&mut inner, err));
+        }
+    }
+
+    // If the replaced source was a connected phone, end its session too (mirror
+    // remove_input) so the handset stops streaming rather than lingering as an
+    // orphaned, still-"connected" background source.
+    if let InputSourceSpec::RemotePhone { session_id } = InputSourceSpec::parse(&old_device_id) {
+        net::session::remove(&session_id, "disconnected");
+    }
+
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
+/// Set or clear an input's display label (#feature8). Metadata only — no engine
+/// rebuild. Pass `None`/blank to revert to the device-derived name.
+#[tauri::command]
+fn rename_input(
+    state: tauri::State<AppState>,
+    device_id: String,
+    label: Option<String>,
+) -> Result<Vec<InputChannel>, EngineError> {
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.graph.set_label(&device_id, label) {
+        return Err(new_last_error(
+            &mut inner,
+            format!("Input not found: {device_id}"),
+        ));
+    }
+    inner.last_error = None;
+    Ok(inner.graph.list_inputs())
+}
+
 #[tauri::command]
 fn set_input_gain(
     state: tauri::State<AppState>,
@@ -1826,6 +1916,13 @@ fn phone_accept_client(
         let mut inner = state.inner.lock().unwrap();
         if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
             inner.graph.add_input(&device_id);
+            // Auto-name the phone input with its hostname (#feature8). Only on
+            // first add, so a user rename survives a later reconnect.
+            if let Some(status) = net::session::status(&session_id) {
+                if !status.label.trim().is_empty() {
+                    inner.graph.set_label(&device_id, Some(status.label));
+                }
+            }
         }
     }
     // Trust could not be saved (corrupt store / disk error): the phone works now
@@ -2000,6 +2097,13 @@ pub fn run() {
                     .any(|c| c.device_id == device_id)
                 {
                     inner.graph.add_input(&device_id);
+                    // Auto-name the resumed phone with its stored hostname so the
+                    // label is consistent with the live-accept path (#feature8).
+                    if let Some(label) = net::paired::label_of(session_id) {
+                        if !label.trim().is_empty() {
+                            inner.graph.set_label(&device_id, Some(label));
+                        }
+                    }
                 }
             }));
 
@@ -2052,6 +2156,8 @@ pub fn run() {
             list_inputs,
             add_input,
             remove_input,
+            replace_input,
+            rename_input,
             set_input_gain,
             set_input_monitor,
             set_send,

@@ -47,9 +47,27 @@ export function InputRow({
       }
       data-input-id={input.id}
     >
-      <span className={styles.kindIcon} aria-hidden>
+      {/* Clicking the source icon toggles mute (#feature6). */}
+      <button
+        type="button"
+        className={styles.kindIcon}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleMute();
+        }}
+        aria-pressed={input.muted}
+        aria-label={input.muted ? `Unmute ${input.name}` : `Mute ${input.name}`}
+        title={input.muted ? "Muted — click to unmute" : "Click to mute"}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          opacity: input.muted ? 0.4 : 1,
+        }}
+      >
         {iconForKind(input.kind)}
-      </span>
+      </button>
 
       <div className={styles.main}>
         <div className={styles.nameRow}>

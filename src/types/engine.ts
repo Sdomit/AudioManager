@@ -250,6 +250,9 @@ export interface InputChannel {
   /** Monitor preview (#feature1): force-routed to the monitor bus (A1) for
    *  headphone listening. Optional for back-compat with pre-#feature1 payloads. */
   monitor?: boolean;
+  /** User/auto display label (#feature8). null/absent → name derived from id.
+   *  Phone inputs are auto-labelled with the paired device's hostname. */
+  label?: string | null;
 }
 
 export interface InputPeakStatus {

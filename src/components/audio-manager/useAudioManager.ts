@@ -1068,6 +1068,40 @@ export function useAudioManager(): UseAudioManager {
     [refresh],
   );
 
+  // Swap an input's device, preserving its config (#feature7). Backend-validated
+  // and atomic — a failed swap leaves the original untouched, so we just refresh
+  // from the graph either way (no optimistic dispatch to roll back).
+  const replaceInput = useCallback(
+    (oldDeviceId: string, newDeviceId: string) => {
+      if (oldDeviceId === newDeviceId) return;
+      recordHistory();
+      ipc
+        .replaceInput(oldDeviceId, newDeviceId)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("replaceInput failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
+  // Set or clear an input's display label (#feature8). Pass null/blank to revert
+  // to the device-derived name. Metadata only — refresh to pick up the new name.
+  const renameInput = useCallback(
+    (deviceId: string, label: string | null) => {
+      const trimmed = label?.trim() ? label.trim() : null;
+      ipc
+        .renameInput(deviceId, trimmed)
+        .then(() => refresh())
+        .catch((e) => {
+          console.error("renameInput failed:", e);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
   const toggleSend = useCallback(
     (inputId: string, busId: BusId) => {
       const before = !!getSend(inputId, busId);
@@ -1457,6 +1491,8 @@ export function useAudioManager(): UseAudioManager {
     applyStreamVoice,
     removeInput,
     addInput,
+    replaceInput,
+    renameInput,
     toggleSend,
     setSendGain,
     setSendMuted,

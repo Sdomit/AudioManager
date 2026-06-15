@@ -40,6 +40,7 @@ interface RoutingViewProps {
   onInputGainChange: (id: string, v: number) => void;
   onBusVolumeChange: (id: BusId, v: number) => void;
   onInputDsp: (id: string, dsp: DspConfig) => void;
+  onToggleInputMute: (id: string) => void;
 }
 
 /**
@@ -68,6 +69,7 @@ export function RoutingView({
   onInputGainChange,
   onBusVolumeChange,
   onInputDsp,
+  onToggleInputMute,
 }: RoutingViewProps) {
   return (
     <section className={styles.routing} aria-label="Routing">
@@ -129,6 +131,7 @@ export function RoutingView({
             onInputGainChange={onInputGainChange}
             onBusVolumeChange={onBusVolumeChange}
             onInputDsp={onInputDsp}
+            onToggleInputMute={onToggleInputMute}
           />
         )}
       </div>

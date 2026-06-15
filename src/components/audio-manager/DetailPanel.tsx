@@ -13,6 +13,7 @@ import type {
   Send,
   TapSpec,
 } from "./types";
+import type { DeviceInfo } from "../../types/engine";
 import styles from "./DetailPanel.module.css";
 
 interface DetailPanelProps {
@@ -41,6 +42,12 @@ interface DetailPanelProps {
   onSelectInputContext: (id: string) => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
+  /** Capture devices for the input "Change source" picker (#feature7). */
+  inputDevices: DeviceInfo[];
+  /** Rename an input (#feature8); null reverts to the device-derived name. */
+  onInputRename: (id: string, label: string | null) => void;
+  /** Swap an input's device (#feature7). */
+  onInputReplaceSource: (id: string, newDeviceId: string) => void;
 }
 
 /**
@@ -79,6 +86,9 @@ export function DetailPanel(props: DetailPanelProps) {
           onApplyStreamVoice={() => props.onApplyStreamVoice(input.id)}
           onStartRecording={props.onStartRecording}
           onStopRecording={props.onStopRecording}
+          inputDevices={props.inputDevices}
+          onRename={(label) => props.onInputRename(input.id, label)}
+          onReplaceSource={(newId) => props.onInputReplaceSource(input.id, newId)}
         />
       </aside>
     );

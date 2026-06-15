@@ -223,6 +223,12 @@ export interface AudioManagerActions {
    * source devices another way may invoke this directly.
    */
   addInput: (deviceId: string) => void;
+  /** Swap an input's device, preserving gain/sends/dsp/monitor/label
+   *  (#feature7). A failed swap leaves the original input untouched. */
+  replaceInput: (oldDeviceId: string, newDeviceId: string) => void;
+  /** Set or clear an input's display label (#feature8). null reverts to the
+   *  device-derived name. */
+  renameInput: (deviceId: string, label: string | null) => void;
 
   toggleSend: (inputId: string, busId: BusId) => void;
   setSendGain: (inputId: string, busId: BusId, gain: number) => void;

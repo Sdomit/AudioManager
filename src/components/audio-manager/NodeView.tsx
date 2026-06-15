@@ -96,6 +96,8 @@ interface NodeViewProps {
   /** Per-input DSP chain edit (denoise/HPF/gate/EQ/comp/limiter). Used for
    *  on-canvas fx toggle/reorder; full editing happens in the detail panel. */
   onInputDsp: (id: string, dsp: DspConfig) => void;
+  /** Toggle an input's mute by clicking its node icon (#feature6). */
+  onToggleInputMute: (id: string) => void;
 }
 
 interface MarqueeState {
@@ -440,6 +442,7 @@ export function NodeView({
   onInputGainChange,
   onBusVolumeChange,
   onInputDsp,
+  onToggleInputMute,
 }: NodeViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   // The Routing header renders `<div id="am-node-toolbar-slot" />` when in node
@@ -2061,6 +2064,7 @@ export function NodeView({
               onAddFxRequest={(id, e) =>
                 setAddFxMenu({ inputId: id, x: e.clientX, y: e.clientY })
               }
+              onToggleMute={onToggleInputMute}
             />
           );
         })}
@@ -2575,6 +2579,8 @@ interface InputNodeProps {
   onFxOpen: (id: string, e: React.MouseEvent) => void;
   /** Right-click on the input body opens the add-effect menu (#37 phase 2). */
   onAddFxRequest: (id: string, e: React.MouseEvent) => void;
+  /** Clicking the source icon toggles mute (#feature6). */
+  onToggleMute: (id: string) => void;
 }
 
 const InputNode = memo(function InputNode({
@@ -2599,6 +2605,7 @@ const InputNode = memo(function InputNode({
   fxCount,
   onFxOpen,
   onAddFxRequest,
+  onToggleMute,
 }: InputNodeProps) {
   const id = input.id;
   return (
@@ -2622,9 +2629,21 @@ const InputNode = memo(function InputNode({
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={() => onMouseLeave(id)}
     >
-      <span className={styles.nodeIcon} aria-hidden>
+      <button
+        type="button"
+        className={styles.nodeIcon}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleMute(id);
+        }}
+        aria-pressed={input.muted}
+        aria-label={input.muted ? `Unmute ${input.name}` : `Mute ${input.name}`}
+        title={input.muted ? "Muted — click to unmute" : "Click to mute"}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+      >
         {iconForKind(input.kind)}
-      </span>
+      </button>
       <div className={styles.nodeText}>
         <div className={styles.nodeName}>{input.name}</div>
         <div className={styles.nodeSub}>

@@ -121,7 +121,9 @@ function inputNameFor(deviceId: string): string {
 export function adaptInput(ch: InputChannel, meter?: InputPeakStatus): AudioInput {
   return {
     id: ch.device_id,
-    name: inputNameFor(ch.device_id),
+    // Prefer the explicit label (#feature8 — phone hostname / user rename),
+    // falling back to the device-id-derived name.
+    name: ch.label?.trim() ? ch.label.trim() : inputNameFor(ch.device_id),
     kind: inputKindFor(ch.device_id),
     device: ch.device_id,
     gain: backendVolumeToUi(ch.gain),

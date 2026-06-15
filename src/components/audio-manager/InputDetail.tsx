@@ -19,6 +19,7 @@ import type {
   TapSpec,
 } from "./types";
 import { gainToDb } from "./units";
+import type { DeviceInfo } from "../../types/engine";
 import styles from "./InputDetail.module.css";
 
 interface InputDetailProps {
@@ -37,6 +38,12 @@ interface InputDetailProps {
   onApplyStreamVoice: () => void;
   onStartRecording: (spec: TapSpec) => void;
   onStopRecording: (id: string) => void;
+  /** Available capture devices for the "Change source" picker (#feature7). */
+  inputDevices: DeviceInfo[];
+  /** Set/clear this input's display label (#feature8); null reverts. */
+  onRename: (label: string | null) => void;
+  /** Swap this input's device, preserving its config (#feature7). */
+  onReplaceSource: (newDeviceId: string) => void;
 }
 
 /**
@@ -64,6 +71,9 @@ export function InputDetail({
   onApplyStreamVoice,
   onStartRecording,
   onStopRecording,
+  inputDevices,
+  onRename,
+  onReplaceSource,
 }: InputDetailProps) {
   const sendMap = new Map<BusId, Send>();
   sends.forEach((s) => sendMap.set(s.busId, s));
@@ -106,6 +116,69 @@ export function InputDetail({
           {input.device}
         </span>
       </div>
+
+      {/* Source: rename (#feature8) + swap device (#feature7). */}
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Source</div>
+        <div className={styles.gainRow}>
+          <span className={styles.gainLabel}>Name</span>
+          <input
+            // Remount per input so defaultValue tracks the selected input.
+            key={input.id}
+            type="text"
+            defaultValue={input.name}
+            placeholder="Display name"
+            aria-label="Rename input"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== input.name) onRename(v.length ? v : null);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--am-border, rgba(255,255,255,0.14))",
+              background: "var(--am-surface-2, rgba(255,255,255,0.06))",
+              color: "inherit",
+              fontSize: 12,
+            }}
+          />
+        </div>
+        <div className={styles.gainRow}>
+          <span className={styles.gainLabel}>Change</span>
+          <select
+            value=""
+            aria-label="Change source device"
+            onChange={(e) => {
+              if (e.target.value) onReplaceSource(e.target.value);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--am-border, rgba(255,255,255,0.14))",
+              background: "var(--am-surface-2, rgba(255,255,255,0.06))",
+              color: "inherit",
+              fontSize: 12,
+            }}
+          >
+            <option value="">Change source…</option>
+            {inputDevices
+              .filter((d) => d.id !== input.id)
+              .map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+          </select>
+        </div>
+      </section>
 
       {/* Meter */}
       <div className={styles.meterBlock}>
