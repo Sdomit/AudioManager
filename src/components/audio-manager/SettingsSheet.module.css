@@ -12,9 +12,9 @@
   width: min(560px, 92vw);
   max-height: 82vh;
   overflow: auto;
-  background: var(--am-surface, #1b1d23);
-  color: var(--am-text, #e8e8ea);
-  border: 1px solid var(--am-border, rgba(255, 255, 255, 0.12));
+  background: var(--am-surface-2);
+  color: var(--am-text-primary);
+  border: 1px solid var(--am-border-default);
   border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
@@ -24,7 +24,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--am-border, rgba(255, 255, 255, 0.1));
+  border-bottom: 1px solid var(--am-border-default);
 }
 
 .title {
@@ -115,7 +115,7 @@
 .densityBtn {
   padding: 6px 14px;
   border-radius: 8px;
-  border: 1px solid var(--am-border, rgba(255, 255, 255, 0.14));
+  border: 1px solid var(--am-border-default);
   background: var(--am-surface-2, rgba(255, 255, 255, 0.06));
   color: inherit;
   text-transform: capitalize;

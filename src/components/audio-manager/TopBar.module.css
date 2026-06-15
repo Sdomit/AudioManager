@@ -357,8 +357,8 @@
   position: fixed;
   z-index: 101;
   min-width: 200px;
-  background: var(--am-bg-elev, #1c2027);
-  border: 1px solid var(--am-border, #2e333a);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
   border-radius: 8px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   padding: 4px;
@@ -397,6 +397,6 @@
 
 .ctxDivider {
   height: 1px;
-  background: var(--am-border, #2e333a);
+  background: var(--am-border-default);
   margin: 4px 0;
 }

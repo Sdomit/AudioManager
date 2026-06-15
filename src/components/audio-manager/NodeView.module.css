@@ -850,7 +850,7 @@
   position: fixed;
   z-index: 111;
   min-width: 200px;
-  background: var(--am-bg-elev, #1c2027);
+  background: var(--am-surface-2);
   border: 1px solid var(--am-border-default, #2e333a);
   border-radius: 8px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);

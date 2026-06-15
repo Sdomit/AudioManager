@@ -10,8 +10,8 @@
 }
 
 .dialog {
-  background: var(--am-bg-elev, #1c2027);
-  border: 1px solid var(--am-border, #2e333a);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
   border-radius: 12px;
   width: min(640px, 92vw);
   max-height: 82vh;
@@ -27,20 +27,20 @@
   justify-content: space-between;
   gap: 12px;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--am-border, #2e333a);
+  border-bottom: 1px solid var(--am-border-default);
 }
 
 .title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--am-fg, #e6e8ea);
+  color: var(--am-text-primary);
   margin: 0;
 }
 
 .closeBtn {
   background: transparent;
   border: 0;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
@@ -50,7 +50,7 @@
 
 .closeBtn:hover {
   background: rgba(255, 255, 255, 0.05);
-  color: var(--am-fg, #e6e8ea);
+  color: var(--am-text-primary);
 }
 
 .body {
@@ -71,7 +71,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
   margin: 0 0 2px;
   font-weight: 600;
 }
@@ -101,11 +101,11 @@
   display: inline-block;
   min-width: 22px;
   padding: 2px 7px;
-  border: 1px solid var(--am-border, #2e333a);
+  border: 1px solid var(--am-border-default);
   border-bottom-width: 2px;
   border-radius: 4px;
-  background: var(--am-bg, #0e1116);
-  color: var(--am-fg, #e6e8ea);
+  background: var(--am-surface-0);
+  color: var(--am-text-primary);
   font-family: var(--am-font-mono, ui-monospace, "JetBrains Mono", Menlo, monospace);
   font-size: 11px;
   font-weight: 600;
@@ -115,13 +115,13 @@
 
 .description {
   margin: 0;
-  color: var(--am-fg, #e6e8ea);
+  color: var(--am-text-primary);
   font-size: 13px;
 }
 
 .footer {
   padding: 12px 18px;
-  border-top: 1px solid var(--am-border, #2e333a);
+  border-top: 1px solid var(--am-border-default);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -129,7 +129,7 @@
 
 .footerHint {
   font-size: 11px;
-  color: var(--am-fg-dim, #9aa3ad);
+  color: var(--am-text-secondary);
 }
 
 @keyframes fade {
