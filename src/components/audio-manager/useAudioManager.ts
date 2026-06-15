@@ -1074,10 +1074,15 @@ export function useAudioManager(): UseAudioManager {
   const replaceInput = useCallback(
     (oldDeviceId: string, newDeviceId: string) => {
       if (oldDeviceId === newDeviceId) return;
-      recordHistory();
       ipc
         .replaceInput(oldDeviceId, newDeviceId)
-        .then(() => refresh())
+        .then(() => {
+          // Record the pre-swap snapshot only after the backend accepts the
+          // swap — on rejection the graph is unchanged, so a history entry
+          // would duplicate the current state and make one undo a no-op.
+          recordHistory();
+          refresh();
+        })
         .catch((e) => {
           console.error("replaceInput failed:", e);
           refresh();

@@ -520,7 +520,7 @@ export function AudioManager() {
             }
             onStartRecording={(spec: TapSpec) => void am.startRecording(spec)}
             onStopRecording={(id: string) => void am.stopRecording(id)}
-            inputDevices={inputDevicesCache}
+            inputDevices={inputDevicesCache.filter((d) => !usedInputIds.has(d.id))}
             onInputRename={am.renameInput}
             onInputReplaceSource={am.replaceInput}
           />
@@ -607,6 +607,8 @@ export function AudioManager() {
         onClose={() => setSettingsOpen(false)}
         density={state.density}
         onDensityChange={am.setDensity}
+        inputDevices={inputDevicesCache}
+        outputDevices={outputDevicesCache}
       />
 
       <PresetSaveDialog

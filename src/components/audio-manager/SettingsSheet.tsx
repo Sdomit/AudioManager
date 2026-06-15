@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
 
-import * as ipc from "../../ipc/commands";
 import type { DeviceInfo } from "../../types/engine";
 import type { Density } from "./types";
+import styles from "./SettingsSheet.module.css";
 
 interface SettingsSheetProps {
   open: boolean;
   onClose: () => void;
   density: Density;
   onDensityChange: (d: Density) => void;
+  /** Cached capture devices from AudioManager's device poll (#feature9). */
+  inputDevices: DeviceInfo[];
+  /** Cached playback devices from AudioManager's device poll. */
+  outputDevices: DeviceInfo[];
 }
 
 type Tab = "devices" | "cable" | "appearance" | "about";
@@ -28,21 +32,20 @@ const CABLE_RE = /(cable|vb-audio|voicemeeter|audiomanager|virtual)/i;
  * with a tabbed sheet: Audio devices, Virtual cable, Appearance, About.
  *
  * v1 is intentionally lean — device selection still happens per bus/input in
- * the mixer; this surface lists what the engine sees, gathers the virtual-cable
- * status, exposes the density preference, and shows build info. Rendered as a
- * modal overlay (same affordance as the phone pairing sheet).
+ * the mixer; this surface lists what the engine sees (from AudioManager's
+ * already-cached device poll, so opening the sheet costs no extra IPC), gathers
+ * the virtual-cable status, exposes the density preference, and shows build
+ * info. Rendered as a modal overlay (same affordance as the phone pairing sheet).
  */
 export function SettingsSheet({
   open,
   onClose,
   density,
   onDensityChange,
+  inputDevices,
+  outputDevices,
 }: SettingsSheetProps) {
   const [tab, setTab] = useState<Tab>("devices");
-  const [inputs, setInputs] = useState<DeviceInfo[]>([]);
-  const [outputs, setOutputs] = useState<DeviceInfo[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Close on Escape.
   useEffect(() => {
@@ -54,159 +57,79 @@ export function SettingsSheet({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // Refresh device lists whenever the sheet opens.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    Promise.all([ipc.listInputDevices(), ipc.listOutputDevices()])
-      .then(([ins, outs]) => {
-        if (cancelled) return;
-        setInputs(ins);
-        setOutputs(outs);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
   if (!open) return null;
 
-  const cables = [...inputs, ...outputs].filter((d) => CABLE_RE.test(d.name));
+  const cables = [...inputDevices, ...outputDevices].filter((d) =>
+    CABLE_RE.test(d.name),
+  );
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 60,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.45)",
-      }}
+      className={styles.overlay}
       onMouseDown={onClose}
     >
-      <div
-        onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          width: "min(560px, 92vw)",
-          maxHeight: "82vh",
-          overflow: "auto",
-          background: "var(--am-surface, #1b1d23)",
-          color: "var(--am-text, #e8e8ea)",
-          border: "1px solid var(--am-border, rgba(255,255,255,0.12))",
-          borderRadius: 12,
-          boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
-        }}
-      >
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "14px 18px",
-            borderBottom: "1px solid var(--am-border, rgba(255,255,255,0.1))",
-          }}
-        >
-          <strong style={{ fontSize: 15 }}>Settings</strong>
+      <div className={styles.sheet} onMouseDown={(e) => e.stopPropagation()}>
+        <header className={styles.header}>
+          <strong className={styles.title}>Settings</strong>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close settings"
-            style={{
-              background: "none",
-              border: "none",
-              color: "inherit",
-              fontSize: 20,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            className={styles.close}
           >
             ×
           </button>
         </header>
 
-        <nav
-          role="tablist"
-          aria-label="Settings sections"
-          style={{
-            display: "flex",
-            gap: 4,
-            padding: "10px 14px 0",
-            flexWrap: "wrap",
-          }}
-        >
+        <nav role="tablist" aria-label="Settings sections" className={styles.tabs}>
           {TABS.map((t) => (
             <button
               key={t.id}
               role="tab"
               aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 8,
-                border: "1px solid transparent",
-                background:
-                  tab === t.id
-                    ? "var(--am-accent, #4f8cff)"
-                    : "var(--am-surface-2, rgba(255,255,255,0.06))",
-                color: tab === t.id ? "#000" : "inherit",
-                cursor: "pointer",
-                fontSize: 12,
-              }}
+              className={`${styles.tab} ${tab === t.id ? styles.tabActive : ""}`}
             >
               {t.label}
             </button>
           ))}
         </nav>
 
-        <div role="tabpanel" style={{ padding: 18, fontSize: 13, lineHeight: 1.5 }}>
+        <div role="tabpanel" className={styles.panel}>
           {tab === "devices" && (
             <section>
-              {loading && <p>Loading devices…</p>}
-              {error && (
-                <p style={{ color: "var(--am-meter-clip, #ef4444)" }}>
-                  Could not list devices: {error}
-                </p>
-              )}
-              {!loading && !error && (
-                <>
-                  <DeviceList title={`Inputs (${inputs.length})`} devices={inputs} />
-                  <DeviceList title={`Outputs (${outputs.length})`} devices={outputs} />
-                  <p style={{ opacity: 0.6, marginTop: 12 }}>
-                    Pick the device for a bus or input directly in the mixer —
-                    this list shows everything the audio engine can see.
-                  </p>
-                </>
-              )}
+              <DeviceList
+                title={`Inputs (${inputDevices.length})`}
+                devices={inputDevices}
+              />
+              <DeviceList
+                title={`Outputs (${outputDevices.length})`}
+                devices={outputDevices}
+              />
+              <p className={`${styles.muted} ${styles.spaced}`}>
+                Pick the device for a bus or input directly in the mixer — this
+                list shows everything the audio engine can see.
+              </p>
             </section>
           )}
 
           {tab === "cable" && (
             <section>
-              <h3 style={{ margin: "0 0 8px", fontSize: 13 }}>Virtual audio cable</h3>
+              <h3 className={styles.sectionTitle}>Virtual audio cable</h3>
               {cables.length > 0 ? (
                 <>
-                  <p style={{ opacity: 0.8 }}>Detected virtual cable endpoints:</p>
-                  <ul style={{ margin: "6px 0", paddingLeft: 18 }}>
+                  <p className={styles.subtle}>Detected virtual cable endpoints:</p>
+                  <ul className={styles.list}>
                     {cables.map((c) => (
                       <li key={c.id}>{c.name}</li>
                     ))}
                   </ul>
                 </>
               ) : (
-                <p style={{ opacity: 0.8 }}>
+                <p className={styles.subtle}>
                   No virtual cable detected. Install one (e.g. the bundled
                   AudioManager Virtual Cable / VB-CABLE) to route a bus into other
                   apps, then assign it to a bus output in the mixer.
@@ -217,31 +140,20 @@ export function SettingsSheet({
 
           {tab === "appearance" && (
             <section>
-              <h3 style={{ margin: "0 0 8px", fontSize: 13 }}>Density</h3>
-              <div style={{ display: "flex", gap: 8 }}>
+              <h3 className={styles.sectionTitle}>Density</h3>
+              <div className={styles.densityRow}>
                 {(["comfortable", "compact"] as Density[]).map((d) => (
                   <button
                     key={d}
                     onClick={() => onDensityChange(d)}
                     aria-pressed={density === d}
-                    style={{
-                      padding: "6px 14px",
-                      borderRadius: 8,
-                      border: `1px solid ${density === d ? "var(--am-accent, #4f8cff)" : "var(--am-border, rgba(255,255,255,0.14))"}`,
-                      background:
-                        density === d
-                          ? "var(--am-accent, #4f8cff)"
-                          : "var(--am-surface-2, rgba(255,255,255,0.06))",
-                      color: density === d ? "#000" : "inherit",
-                      cursor: "pointer",
-                      textTransform: "capitalize",
-                    }}
+                    className={`${styles.densityBtn} ${density === d ? styles.densityBtnActive : ""}`}
                   >
                     {d}
                   </button>
                 ))}
               </div>
-              <p style={{ opacity: 0.6, marginTop: 12 }}>
+              <p className={`${styles.muted} ${styles.spaced}`}>
                 Meter colors and theme follow the app's CSS variables.
               </p>
             </section>
@@ -249,17 +161,17 @@ export function SettingsSheet({
 
           {tab === "about" && (
             <section>
-              <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>AudioManager</h3>
-              <p style={{ opacity: 0.85 }}>
+              <h3 className={styles.sectionTitle}>AudioManager</h3>
+              <p className={styles.subtle}>
                 A flexible audio router and mixer — route mics, system audio, and
                 phones through buses with per-input DSP, monitoring, and recording.
               </p>
-              <p style={{ opacity: 0.6, marginTop: 12 }}>
+              <p className={`${styles.muted} ${styles.spaced}`}>
                 <a
                   href="https://github.com/Sdomit/AudioManager"
                   target="_blank"
                   rel="noreferrer"
-                  style={{ color: "var(--am-accent, #4f8cff)" }}
+                  className={styles.link}
                 >
                   github.com/Sdomit/AudioManager
                 </a>
@@ -274,19 +186,17 @@ export function SettingsSheet({
 
 function DeviceList({ title, devices }: { title: string; devices: DeviceInfo[] }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      <h3 style={{ margin: "0 0 6px", fontSize: 13 }}>{title}</h3>
+    <div className={styles.deviceGroup}>
+      <h3 className={styles.sectionTitle}>{title}</h3>
       {devices.length === 0 ? (
-        <p style={{ opacity: 0.6 }}>None found.</p>
+        <p className={styles.muted}>None found.</p>
       ) : (
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
+        <ul className={styles.deviceList}>
           {devices.map((d) => (
             <li key={d.id}>
               {d.name}
-              {d.is_default && (
-                <span style={{ opacity: 0.55 }}> · default</span>
-              )}
-              <span style={{ opacity: 0.45 }}>
+              {d.is_default && <span className={styles.dim}> · default</span>}
+              <span className={styles.dimmer}>
                 {" "}
                 · {d.channels}ch · {Math.round(d.default_sample_rate / 1000)} kHz
               </span>

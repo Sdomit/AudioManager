@@ -461,16 +461,7 @@ export function NodeView({
   }, []);
   // Clicking a node's FX badge/box selects the node so its effect chain opens
   // in the right-hand DetailPanel (#feature4). The old floating popover is gone;
-  // editing lives in one place. The optional event arg is unused but kept so the
-  // node components can pass their click event without a signature change.
-  const openInputFx = useCallback(
-    (id: string, _e?: React.MouseEvent) => onSelectInput(id),
-    [onSelectInput],
-  );
-  const openBusFx = useCallback(
-    (id: BusId, _e?: React.MouseEvent) => onSelectBus(id),
-    [onSelectBus],
-  );
+  // editing lives in one place, so the badge just reuses the node's onSelect.
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
   const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
     w: MIN_CANVAS_W,
@@ -2060,7 +2051,6 @@ export function NodeView({
               onRecToggle={onInputRecToggle}
               onGainChange={(v) => onInputGainChange(input.id, v)}
               fxCount={countInputFx(input.dsp)}
-              onFxOpen={openInputFx}
               onAddFxRequest={(id, e) =>
                 setAddFxMenu({ inputId: id, x: e.clientX, y: e.clientY })
               }
@@ -2091,9 +2081,9 @@ export function NodeView({
                     onMouseDown={(e) => onFxNodeMouseDown(fxNid, e)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      openInputFx(input.id, e);
+                      onInputSelect(input.id);
                     }}
-                    title={`${b.label} — click to edit, drag the box to reposition, drag the right dot to reorder`}
+                    title={`${b.label} — click to edit in the panel, drag the box to reposition, drag the right dot to reorder`}
                   >
                     <span className={styles.fxPortIn} aria-hidden>
                       <span className={styles.fxPortDot} />
@@ -2164,7 +2154,6 @@ export function NodeView({
               onRecToggle={onBusRecToggle}
               onVolumeChange={(v) => onBusVolumeChange(bus.id, v)}
               fxCount={countBusFx(bus)}
-              onFxOpen={openBusFx}
             />
           );
         })}
@@ -2576,7 +2565,6 @@ interface InputNodeProps {
   onRecToggle: (id: string) => void;
   onGainChange: (v: number) => void;
   fxCount: number;
-  onFxOpen: (id: string, e: React.MouseEvent) => void;
   /** Right-click on the input body opens the add-effect menu (#37 phase 2). */
   onAddFxRequest: (id: string, e: React.MouseEvent) => void;
   /** Clicking the source icon toggles mute (#feature6). */
@@ -2603,7 +2591,6 @@ const InputNode = memo(function InputNode({
   onRecToggle,
   onGainChange,
   fxCount,
-  onFxOpen,
   onAddFxRequest,
   onToggleMute,
 }: InputNodeProps) {
@@ -2689,7 +2676,7 @@ const InputNode = memo(function InputNode({
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
-          onFxOpen(id, e);
+          onSelect(id);
         }}
         title={fxCount > 0 ? `${fxCount} effect(s) — click to edit` : "Add effects"}
         aria-label={`Effects for ${input.name}`}
@@ -2735,7 +2722,6 @@ interface BusNodeProps {
   onRecToggle: (id: BusId) => void;
   onVolumeChange: (v: number) => void;
   fxCount: number;
-  onFxOpen: (id: BusId, e: React.MouseEvent) => void;
 }
 
 const BusNode = memo(function BusNode({
@@ -2756,7 +2742,6 @@ const BusNode = memo(function BusNode({
   onRecToggle,
   onVolumeChange,
   fxCount,
-  onFxOpen,
 }: BusNodeProps) {
   const id = bus.id;
   return (
@@ -2834,7 +2819,7 @@ const BusNode = memo(function BusNode({
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
-          onFxOpen(bus.id, e);
+          onSelect(bus.id);
         }}
         title={fxCount > 0 ? `${fxCount} effect(s) — click to edit` : "Add effects"}
         aria-label={`Effects for ${bus.label}`}

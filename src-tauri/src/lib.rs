@@ -880,15 +880,20 @@ fn set_input_monitor(
     enabled: bool,
 ) -> Result<Vec<InputChannel>, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    if !inner.graph.set_monitor(&device_id, enabled) {
+    let Some(prev) = inner.graph.get_input(&device_id).map(|i| i.monitor) else {
         return Err(new_last_error(
             &mut inner,
             format!("Input not found: {device_id}"),
         ));
-    }
+    };
+    inner.graph.set_monitor(&device_id, enabled);
     // Monitor changes which inputs the A1 engine carries, so rebuild A1 to add
     // or drop the preview tap. Persisted routing for every bus is left as-is.
     if let Err(err) = rebuild_bus(&mut inner, BusId::A1) {
+        // Roll the flag back so the graph matches the frontend's optimistic
+        // revert — otherwise a later hydrate would re-show the input monitored
+        // and re-route it to A1 even though the rebuild failed.
+        inner.graph.set_monitor(&device_id, prev);
         return Err(store_last_error(&mut inner, err));
     }
 
