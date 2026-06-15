@@ -9,7 +9,8 @@ import {
 } from "../../ipc/commands";
 import type { AutomixConfig, AutomixGroupDef } from "../../types/engine";
 import { suggestPhoneGroups } from "./automixSuggest";
-import type { AudioInput } from "./types";
+import { groupGateCoverage } from "./automixCoverage";
+import type { AudioInput, Bus, Send } from "./types";
 import styles from "./AutomixPanel.module.css";
 
 /** Rolling level-history depth per phone input (~6 s at the 150 ms sample tick). */
@@ -21,6 +22,10 @@ interface AutomixPanelProps {
   /** Current inputs, used as the member-picker source. `id` is the device id
    *  the backend resolves to engine slots; `name` is the friendly label. */
   inputs: AudioInput[];
+  /** Routing + buses, used to warn when a group's members don't share an
+   *  output bus — automix only gates within a single bus engine. */
+  sends: Send[];
+  buses: Bus[];
   onClose: () => void;
 }
 
@@ -49,7 +54,7 @@ const PARAMS: {
  * are pushed fire-and-forget; the backend re-resolves member device ids to each
  * running engine's input slots.
  */
-export function AutomixPanel({ open, inputs, onClose }: AutomixPanelProps) {
+export function AutomixPanel({ open, inputs, sends, buses, onClose }: AutomixPanelProps) {
   const [groups, setGroups] = useState<AutomixGroupDef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[][]>([]);
@@ -207,7 +212,11 @@ export function AutomixPanel({ open, inputs, onClose }: AutomixPanelProps) {
           </div>
         ) : (
           <ul className={styles.groupList}>
-            {groups.map((group) => (
+            {groups.map((group) => {
+              const wontGate =
+                group.members.length >= 2 &&
+                !groupGateCoverage(group.members, sends, buses).gates;
+              return (
               <li key={group.id} className={styles.group}>
                 <div className={styles.groupHead}>
                   <label className={styles.enableToggle}>
@@ -232,6 +241,14 @@ export function AutomixPanel({ open, inputs, onClose }: AutomixPanelProps) {
                     <XIcon size={12} />
                   </button>
                 </div>
+
+                {wontGate && (
+                  <div className={styles.gateWarn} role="status">
+                    These members aren&rsquo;t routed to a shared output bus, so
+                    this group won&rsquo;t gate. Route at least two members to
+                    the same enabled bus.
+                  </div>
+                )}
 
                 <div className={styles.subTitle}>Members</div>
                 {inputs.length === 0 ? (
@@ -292,7 +309,8 @@ export function AutomixPanel({ open, inputs, onClose }: AutomixPanelProps) {
                   </div>
                 ))}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </aside>

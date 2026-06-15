@@ -108,6 +108,14 @@ fn app_local_dir(app: &tauri::AppHandle) -> Result<PathBuf, EngineError> {
 /// present in this engine are dropped (they don't affect it); the realtime layer
 /// caps at [`MAX_AUTOMIX_GROUPS`]. Input slots ≥ 32 can't be masked, but the
 /// engine enforces ≤ 8 inputs so that never bites.
+///
+/// Gating is therefore *per bus*: each bus runs its own engine over only the
+/// inputs routed to it, so only members routed to THIS bus enter its mask. A
+/// group split across buses gates within each bus independently, and a member
+/// sitting alone on a bus stays at unity — there is no cross-bus sharing. The
+/// frontend warns when a group's members don't share a common bus (see
+/// `automixCoverage.ts`); true cross-engine gating is intentionally not
+/// attempted (independent device clocks make it ill-defined).
 fn automix_updates_for_engine(
     groups: &[AutomixGroupDef],
     engine: &MixerEngine,
