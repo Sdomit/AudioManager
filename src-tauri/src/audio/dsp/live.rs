@@ -21,6 +21,7 @@
 
 use std::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 
+use super::binaural::{BinauralCoeffs, BinauralState, EarCoeffs};
 use super::config::{
     BandKind, BusDspConfig, DenoiseBackend, DspConfig, DspStage, EqBand, StereoConfig, MAX_EQ_BANDS,
 };
@@ -231,6 +232,81 @@ impl AtomicStereo {
     }
 }
 
+/// One ear's binaural coefficients (delay + two biquads + gain), delivered by
+/// value through the seqlock. Coefficients are precomputed on the IPC thread
+/// ([`BinauralCoeffs::compute`]) so the callback runs no transcendentals.
+struct AtomicEar {
+    delay_samples: AtomicF32,
+    shelf: [AtomicF32; 5],
+    cue: [AtomicF32; 5],
+    gain: AtomicF32,
+}
+
+impl AtomicEar {
+    fn new() -> Self {
+        // Flat passthrough until the first `write_fields` (which always has the
+        // engine sample rate). Biquad passthrough is `[1, 0, 0, 0, 0]`.
+        let passthrough = || std::array::from_fn(|i| AtomicF32::new(if i == 0 { 1.0 } else { 0.0 }));
+        Self {
+            delay_samples: AtomicF32::new(0.0),
+            shelf: passthrough(),
+            cue: passthrough(),
+            gain: AtomicF32::new(1.0),
+        }
+    }
+    fn store(&self, e: EarCoeffs) {
+        self.delay_samples.store(e.delay_samples);
+        for (a, v) in self.shelf.iter().zip(e.shelf) {
+            a.store(v);
+        }
+        for (a, v) in self.cue.iter().zip(e.cue) {
+            a.store(v);
+        }
+        self.gain.store(e.gain);
+    }
+    fn load(&self) -> EarCoeffs {
+        EarCoeffs {
+            delay_samples: self.delay_samples.load(),
+            shelf: std::array::from_fn(|i| self.shelf[i].load()),
+            cue: std::array::from_fn(|i| self.cue[i].load()),
+            gain: self.gain.load(),
+        }
+    }
+}
+
+/// Binaural 3D position (#binaural): an enable flag plus both ears' precomputed
+/// coefficients. Like the other blocks, the processor ([`BinauralState`]) is
+/// retuned from these on reload — no coefficient math on the audio thread.
+struct AtomicSpatial {
+    enabled: AtomicBool,
+    left: AtomicEar,
+    right: AtomicEar,
+}
+
+impl AtomicSpatial {
+    fn new() -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            left: AtomicEar::new(),
+            right: AtomicEar::new(),
+        }
+    }
+    fn store(&self, enabled: bool, c: BinauralCoeffs) {
+        self.enabled.store(enabled, RELAXED);
+        self.left.store(c.left);
+        self.right.store(c.right);
+    }
+    fn load(&self) -> (bool, BinauralCoeffs) {
+        (
+            self.enabled.load(RELAXED),
+            BinauralCoeffs {
+                left: self.left.load(),
+                right: self.right.load(),
+            },
+        )
+    }
+}
+
 struct AtomicComp {
     enabled: AtomicBool,
     threshold_db: AtomicF32,
@@ -329,6 +405,7 @@ pub struct InputDspSnapshot {
     pub comp: (bool, CompressorCoeffs),
     pub limiter: (bool, LimiterCoeffs),
     pub stereo: StereoConfig,
+    pub spatial: (bool, BinauralCoeffs),
 }
 
 /// Stack copy of one bus's effect parameter set.
@@ -353,6 +430,7 @@ pub struct InputDspShared {
     comp: AtomicComp,
     limiter: AtomicLimiter,
     stereo: AtomicStereo,
+    spatial: AtomicSpatial,
 }
 
 impl InputDspShared {
@@ -370,6 +448,7 @@ impl InputDspShared {
             comp: AtomicComp::new(),
             limiter: AtomicLimiter::new(),
             stereo: AtomicStereo::new(),
+            spatial: AtomicSpatial::new(),
         };
         s.write_fields(cfg, sample_rate);
         s
@@ -433,6 +512,8 @@ impl InputDspShared {
             ),
         );
         self.stereo.store(cfg.stereo);
+        self.spatial
+            .store(cfg.spatial.enabled, BinauralCoeffs::compute(&cfg.spatial, sr));
     }
 
     fn read_fields(&self) -> InputDspSnapshot {
@@ -446,6 +527,7 @@ impl InputDspShared {
             comp: self.comp.load(),
             limiter: self.limiter.load(),
             stereo: self.stereo.load(),
+            spatial: self.spatial.load(),
         }
     }
 
@@ -759,6 +841,11 @@ pub struct InputDspSlots {
     comp: Compressor,
     limiter: Limiter,
     stereo: StereoConfig,
+    /// Binaural spatialiser (#binaural). Runs in the mixer's stereo mix loop
+    /// (mono→L/R), not here; `process_block` only suppresses the stereo `pan`
+    /// stage while it is active so the two don't fight over left/right.
+    binaural: BinauralState,
+    spatial_enabled: bool,
 }
 
 impl InputDspSlots {
@@ -810,6 +897,8 @@ impl InputDspSlots {
             comp,
             limiter,
             stereo: StereoConfig::default(),
+            binaural: BinauralState::new(sample_rate),
+            spatial_enabled: false,
         }
     }
 
@@ -847,6 +936,26 @@ impl InputDspSlots {
             self.limiter.reset();
         }
         self.stereo = s.stereo;
+        // Binaural: enable flag + precomputed per-ear coeffs (set_enabled resets
+        // the delay lines on an off→on transition so there's no stale pop).
+        self.spatial_enabled = s.spatial.0;
+        self.binaural.set_enabled(s.spatial.0);
+        self.binaural.set_coeffs(s.spatial.1);
+    }
+
+    /// Whether the binaural spatialiser is active for this input — queried by the
+    /// mixer's stereo mix loop, which feeds it the folded mono sample.
+    #[inline]
+    pub fn binaural_active(&self) -> bool {
+        self.spatial_enabled
+    }
+
+    /// Spatialise one (already DSP-processed) frame into an `(L, R)` pair. The
+    /// source is folded to mono first — binaural positions a point source.
+    /// Caller must check [`Self::binaural_active`].
+    #[inline]
+    pub fn binaural_frame(&mut self, l: f32, r: f32) -> (f32, f32) {
+        self.binaural.process((l + r) * 0.5)
     }
 
     /// Process one stereo frame through the enabled effects in chain order.
@@ -874,7 +983,7 @@ impl InputDspSlots {
         }
         // Stereo image stage (#34): after the tonal chain, pre-gain. Stateless
         // per-frame; only meaningful when both channels are present.
-        if channels == 2 && self.stereo.is_active() {
+        if channels == 2 && !self.spatial_enabled && self.stereo.is_active() {
             self.stereo.process_frame(buf);
         }
     }
@@ -934,8 +1043,9 @@ impl InputDspSlots {
             }
         }
         // Stereo image stage (#34): after the ordered tonal chain, pre-gain.
-        // Stateless per-frame; skipped on mono (needs both channels).
-        if channels == 2 && self.stereo.is_active() {
+        // Stateless per-frame; skipped on mono (needs both channels) and when
+        // binaural is active (the mixer's mix loop owns L/R placement then).
+        if channels == 2 && !self.spatial_enabled && self.stereo.is_active() {
             for frame in interleaved.chunks_exact_mut(2) {
                 let mut b = [frame[0], frame[1]];
                 self.stereo.process_frame(&mut b);

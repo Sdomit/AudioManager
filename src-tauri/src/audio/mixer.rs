@@ -1039,16 +1039,27 @@ pub fn start(
                                 // DSP already applied block-wide above (process_block).
                                 // s0/s1 read from the processed scratch buffer.
 
-                                // Track post-stereo per-channel peak (#feature10).
-                                // Pre-fader: `g` is applied at mix time below, so
-                                // this mirrors `input_peak`'s pre-gain semantics and
-                                // reflects pan / mono-fold / width. Mono inputs mirror
-                                // ch0 into s1, so both legs read equal.
-                                let al = s0.abs();
+                                // Binaural 3D (#binaural): when active on a stereo
+                                // bus, fold to mono and place the source into L/R
+                                // (ITD/ILD/front-back). This supersedes the stereo
+                                // pan stage, which process_block skipped. Otherwise
+                                // the legs pass through unchanged (cl/cr == s0/s1).
+                                let (cl, cr) = if out_channels == 2 && dsp_slots[i].binaural_active() {
+                                    dsp_slots[i].binaural_frame(s0, s1)
+                                } else {
+                                    (s0, s1)
+                                };
+
+                                // Track post-stereo/post-binaural per-channel peak
+                                // (#feature10). Pre-fader: `g` is applied at mix time
+                                // below, so this mirrors `input_peak`'s pre-gain
+                                // semantics and reflects pan / mono-fold / width /
+                                // 3D position. Mono inputs mirror ch0 into s1.
+                                let al = cl.abs();
                                 if al > block_in_peak_l[i] {
                                     block_in_peak_l[i] = al;
                                 }
-                                let ar = s1.abs();
+                                let ar = cr.abs();
                                 if ar > block_in_peak_r[i] {
                                     block_in_peak_r[i] = ar;
                                 }
@@ -1080,16 +1091,18 @@ pub fn start(
                                     }
                                 }
 
+                                // Stereo-bus paths use the (possibly binaural)
+                                // L/R contribution; mono-bus paths sum the source.
                                 match (in_ch, out_channels) {
                                     (1, 1) => mix[0] += s0 * g,
                                     (1, 2) => {
-                                        mix[0] += s0 * g;
-                                        mix[1] += s0 * g;
+                                        mix[0] += cl * g;
+                                        mix[1] += cr * g;
                                     }
                                     (2, 1) => mix[0] += (s0 + s1) * 0.5 * g,
                                     (2, 2) => {
-                                        mix[0] += s0 * g;
-                                        mix[1] += s1 * g;
+                                        mix[0] += cl * g;
+                                        mix[1] += cr * g;
                                     }
                                     _ => {} // unreachable — validated above
                                 }

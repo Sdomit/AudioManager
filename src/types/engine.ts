@@ -161,6 +161,17 @@ export interface StereoConfig {
   width: number;
 }
 
+/** Binaural 3D position (mirrors Rust `SpatialConfig`). Places a mono-folded
+ *  source around the head for headphone playback. When `enabled`, it supersedes
+ *  `StereoConfig.pan` (azimuth owns left/right). */
+export interface SpatialConfig {
+  enabled: boolean;
+  /** Azimuth in degrees, -180 .. 180. 0 = front, +90 = right, ±180 = behind. */
+  azimuth_deg: number;
+  /** Distance, 0 (at the head) .. 1 (far). */
+  distance: number;
+}
+
 /** Per-input effect chain. `order` is the wired processing order; default
  *  Denoise -> HPF -> Gate -> EQ -> Compressor -> Limiter. The stereo stage runs
  *  after the ordered chain. */
@@ -176,6 +187,8 @@ export interface DspConfig {
   limiter: LimiterConfig;
   order: DspStage[];
   stereo: StereoConfig;
+  /** Binaural 3D position. Optional for back-compat with pre-binaural payloads. */
+  spatial?: SpatialConfig;
 }
 
 /** Per-bus effect chain, processed post-sum/pre-clip: EQ -> Limiter. */

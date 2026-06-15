@@ -511,6 +511,52 @@ impl StereoConfig {
     }
 }
 
+/// Binaural 3D position (HRTF-style). Places a (mono-folded) source around the
+/// listener's head for **headphone** playback: `azimuth_deg` 0 = front, +90 =
+/// hard right, ±180 = directly behind; `distance` 0 = at the head, 1 = far.
+/// When `enabled`, it supersedes [`StereoConfig::pan`] (azimuth owns left/right).
+/// The realtime cues (ITD/ILD/front-back) live in `dsp/binaural.rs`; this is the
+/// serialized control surface only. On loudspeakers it degrades to a level/tone
+/// shift rather than true 3D (there is no rear speaker — output is stereo-only).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SpatialConfig {
+    pub enabled: bool,
+    /// Azimuth in degrees, `-180.0` .. `180.0`. 0 = front, +90 = right.
+    pub azimuth_deg: f32,
+    /// Distance, `0.0` (at the head) .. `1.0` (far).
+    pub distance: f32,
+}
+
+impl Default for SpatialConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            azimuth_deg: 0.0,
+            distance: 0.0,
+        }
+    }
+}
+
+impl SpatialConfig {
+    pub fn clamp(&mut self) {
+        // Wrap azimuth into [-180, 180] (a full circle is meaningful); non-finite
+        // → front.
+        let a = if self.azimuth_deg.is_finite() {
+            self.azimuth_deg
+        } else {
+            0.0
+        };
+        self.azimuth_deg = ((a + 180.0).rem_euclid(360.0)) - 180.0;
+        self.distance = clamp_finite(self.distance, 0.0, 0.0, 1.0);
+    }
+
+    /// The realtime path runs the spatialiser only when enabled; off = bypass.
+    pub fn is_active(&self) -> bool {
+        self.enabled
+    }
+}
+
 /// Current DSP-config schema version. Bump when a field's meaning changes in a
 /// way `#[serde(default)]` cannot transparently handle, and add a migration arm
 /// in [`DspConfig::migrate`].
@@ -550,6 +596,10 @@ pub struct DspConfig {
     /// so pre-#34 configs load transparent.
     #[serde(default)]
     pub stereo: StereoConfig,
+    /// Binaural 3D position. `serde(default)` so pre-binaural configs load
+    /// disabled. When enabled it supersedes `stereo.pan` (azimuth owns L/R).
+    #[serde(default)]
+    pub spatial: SpatialConfig,
 }
 
 impl Default for DspConfig {
@@ -564,6 +614,7 @@ impl Default for DspConfig {
             limiter: LimiterConfig::default(),
             order: default_dsp_order(),
             stereo: StereoConfig::default(),
+            spatial: SpatialConfig::default(),
         }
     }
 }
@@ -582,6 +633,7 @@ impl DspConfig {
         self.limiter.clamp();
         normalize_order(&mut self.order);
         self.stereo.clamp();
+        self.spatial.clamp();
     }
 
     /// Upgrade an older-schema config to the current version in place. Every
