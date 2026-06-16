@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio::bus::{BusId, BusRuntime};
 use crate::audio::dsp::AutomixConfig;
 use crate::audio::graph::AudioGraph;
+use crate::audio::metering_tap::MeteringTap;
 use crate::audio::recorder::RecorderHandle;
 
 /// A live-sound-gate automix group (Feature B): a set of co-located inputs
@@ -38,6 +39,11 @@ pub struct AppInner {
     /// Live-sound-gate automix groups (Feature B). Resolved to per-engine slot
     /// bitmasks and published whenever a group changes or an engine rebuilds.
     pub automix_groups: Vec<AutomixGroupDef>,
+    /// Per-device metering taps (#feature-idle-meter), keyed by input device id.
+    /// One lightweight capture per real `Device` input so its level meter moves
+    /// even while the input is unrouted. Reconciled to `graph` whenever the
+    /// input set changes; merged into per-device peaks in `get_system_status`.
+    pub metering_taps: BTreeMap<String, MeteringTap>,
     /// Global last-error string for operations not tied to a single bus.
     /// Per-bus errors live on `BusRuntime.last_error`.
     pub last_error: Option<String>,
@@ -55,6 +61,7 @@ impl AppState {
                 graph: AudioGraph::new(),
                 recorders: BTreeMap::new(),
                 automix_groups: Vec::new(),
+                metering_taps: BTreeMap::new(),
                 last_error: None,
             }),
         }

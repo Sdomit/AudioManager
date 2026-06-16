@@ -619,6 +619,7 @@ fn load_preset(
             .to_string(),
     });
 
+    sync_metering_taps(&mut inner);
     inner.last_error = None;
     Ok(PresetLoadResult {
         preset: loaded.summary,
@@ -746,6 +747,45 @@ fn set_route_gain(
 
 // ── Phase 8B matrix commands ──────────────────────────────────────────────────
 
+/// Reconcile per-device metering taps to the current input set
+/// (#feature-idle-meter). Every real cpal-`Device` input gets a lightweight
+/// capture so its level meter moves while unrouted; taps for removed inputs are
+/// dropped (which stops their capture thread). Loopback / process / phone
+/// sources use other backends and are skipped. A tap that fails to open (device
+/// absent or non-f32) is logged and left absent — the input just shows no idle
+/// level until it is routed or the device returns. Cheap when unchanged: only a
+/// genuine add/remove starts or stops a stream.
+fn sync_metering_taps(inner: &mut AppInner) {
+    let desired: BTreeSet<String> = inner
+        .graph
+        .list_inputs()
+        .into_iter()
+        .filter(|ch| {
+            matches!(
+                InputSourceSpec::parse(&ch.device_id),
+                InputSourceSpec::Device { .. }
+            )
+        })
+        .map(|ch| ch.device_id)
+        .collect();
+
+    inner.metering_taps.retain(|id, _| desired.contains(id));
+
+    for id in desired {
+        if inner.metering_taps.contains_key(&id) {
+            continue;
+        }
+        match crate::audio::metering_tap::start(&id) {
+            Ok(tap) => {
+                inner.metering_taps.insert(id, tap);
+            }
+            Err(e) => {
+                eprintln!("[audio] metering tap for '{id}' not started: {}", e.message);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn list_inputs(state: tauri::State<AppState>) -> Vec<InputChannel> {
     state.inner.lock().unwrap().graph.list_inputs()
@@ -759,6 +799,7 @@ fn add_input(
     ensure_input_source(&device_id)?;
     let mut inner = state.inner.lock().unwrap();
     inner.graph.add_input(&device_id);
+    sync_metering_taps(&mut inner);
     inner.last_error = None;
     Ok(inner.graph.list_inputs())
 }
@@ -810,6 +851,7 @@ fn remove_input(
         net::session::remove(&session_id, "disconnected");
     }
 
+    sync_metering_taps(&mut inner);
     inner.last_error = None;
     Ok(inner.graph.list_inputs())
 }
@@ -881,6 +923,7 @@ fn replace_input(
         net::session::remove(&session_id, "disconnected");
     }
 
+    sync_metering_taps(&mut inner);
     inner.last_error = None;
     Ok(inner.graph.list_inputs())
 }
@@ -1114,6 +1157,23 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
         status.overruns = overruns;
         status.loudness = loudness;
         buses.push(status);
+    }
+
+    // Idle-input metering taps (#feature-idle-meter): give an unrouted input a
+    // real level. A device already live in an engine keeps that engine's
+    // post-DSP meters (authoritative), so the tap only fills in for inputs no
+    // running engine is capturing. The tap is drained either way so it never
+    // surfaces a stale peak the moment the input goes idle.
+    for (device_id, tap) in inner.metering_taps.iter() {
+        let m = tap.read_and_reset();
+        if input_peaks_by_device.contains_key(device_id) {
+            continue;
+        }
+        let agg = input_peaks_by_device.entry(device_id.clone()).or_default();
+        agg.capture = m.capture;
+        agg.peak_l = m.peak_l;
+        agg.peak_r = m.peak_r;
+        agg.channels = m.channels;
     }
 
     let input_peaks = input_peaks_by_device
@@ -1784,6 +1844,7 @@ mod tests {
             graph: AudioGraph::new(),
             recorders: BTreeMap::new(),
             automix_groups: Vec::new(),
+            metering_taps: BTreeMap::new(),
             last_error: Some("stale".to_string()),
         };
 
@@ -1805,6 +1866,7 @@ mod tests {
             graph: AudioGraph::new(),
             recorders: BTreeMap::new(),
             automix_groups: Vec::new(),
+            metering_taps: BTreeMap::new(),
             last_error: None,
         }
     }
@@ -1965,6 +2027,9 @@ fn handle_device_diff(inner: &mut AppInner, diff: &DeviceDiff, available_inputs:
     }
 
     for removed in &diff.removed_inputs {
+        // Drop the device's metering tap so a later reconnect restarts it fresh
+        // (#feature-idle-meter); the dead stream would otherwise never recover.
+        inner.metering_taps.remove(removed);
         let affected: Vec<BusId> = inner
             .buses
             .iter()
@@ -2040,6 +2105,10 @@ fn handle_device_diff(inner: &mut AppInner, diff: &DeviceDiff, available_inputs:
             }
         }
     }
+
+    // Reconcile idle-input metering taps to the post-hotplug device set: start
+    // taps for inputs whose device just (re)appeared (#feature-idle-meter).
+    sync_metering_taps(inner);
 }
 
 /// Background polling loop. Diffs device snapshots every
