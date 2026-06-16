@@ -756,32 +756,25 @@ fn set_route_gain(
 /// level until it is routed or the device returns. Cheap when unchanged: only a
 /// genuine add/remove starts or stops a stream.
 fn sync_metering_taps(inner: &mut AppInner) {
-    let desired: BTreeSet<String> = inner
+    let all_inputs: Vec<String> = inner
         .graph
         .list_inputs()
         .into_iter()
-        .filter(|ch| {
-            matches!(
-                InputSourceSpec::parse(&ch.device_id),
-                InputSourceSpec::Device { .. }
-            )
-        })
         .map(|ch| ch.device_id)
         .collect();
-
+    let desired: BTreeSet<String> = all_inputs
+        .iter()
+        .filter(|id| matches!(InputSourceSpec::parse(id), InputSourceSpec::Device { .. }))
+        .cloned()
+        .collect();
     inner.metering_taps.retain(|id, _| desired.contains(id));
 
     for id in desired {
         if inner.metering_taps.contains_key(&id) {
             continue;
         }
-        match crate::audio::metering_tap::start(&id) {
-            Ok(tap) => {
-                inner.metering_taps.insert(id, tap);
-            }
-            Err(e) => {
-                eprintln!("[audio] metering tap for '{id}' not started: {}", e.message);
-            }
+        if let Ok(tap) = crate::audio::metering_tap::start(&id) {
+            inner.metering_taps.insert(id, tap);
         }
     }
 }
@@ -2134,6 +2127,13 @@ fn device_watch_loop(app: tauri::AppHandle) {
                 handle_device_diff(&mut inner, &diff, &next.inputs);
             }
             let _ = app.emit("devices-changed", &diff);
+        } else {
+            // Even with no device change, reconcile metering taps so an input
+            // added through any path (boot restore, legacy A1 monitor commands)
+            // gets its idle-level tap within one poll (#feature-idle-meter).
+            let state = app.state::<AppState>();
+            let mut inner = state.inner.lock().unwrap();
+            sync_metering_taps(&mut inner);
         }
         prev = Some(next);
     }

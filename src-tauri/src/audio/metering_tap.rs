@@ -153,14 +153,6 @@ pub fn start(device_name: &str) -> Result<MeteringTap, EngineError> {
             let cfg = device.default_input_config().map_err(|e| EngineError {
                 message: e.to_string(),
             })?;
-            if cfg.sample_format() != cpal::SampleFormat::F32 {
-                return Err(EngineError {
-                    message: format!(
-                        "Metering tap supports f32 capture only; '{name_for_thread}' is {:?}",
-                        cfg.sample_format()
-                    ),
-                });
-            }
             let channels = cfg.channels();
             let stream_cfg: StreamConfig = cfg.into();
             let meters = Arc::clone(&meters_for_thread);
