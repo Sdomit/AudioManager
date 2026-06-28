@@ -206,6 +206,8 @@ export function AudioManager() {
   const [hotkeyOverlayOpen, setHotkeyOverlayOpen] = useState(false);
   const [busViewMode, setBusViewMode] = useState<"card" | "console">("card");
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
+  const preSoloMutesRef = useRef<Record<string, boolean>>({});
 
   // Hotkeys. Pause whenever a text field is focused (so typing in the
   // preset save dialog or the device-picker search doesn't trip Space
@@ -226,6 +228,32 @@ export function AudioManager() {
     hotkeyOverlayOpen;
   const dialogOpenRef = useRef(dialogOpen);
   dialogOpenRef.current = dialogOpen;
+
+  const handleSoloInput = useCallback((id: string) => {
+    if (soloedInputId === id) {
+      // Unsolo: restore pre-solo mute states
+      const saved = preSoloMutesRef.current;
+      for (const input of am.state.inputs) {
+        const wasMuted = saved[input.id] ?? false;
+        if (input.muted !== wasMuted) am.setInputMuted(input.id, wasMuted);
+      }
+      preSoloMutesRef.current = {};
+      setSoloedInputId(null);
+    } else {
+      // Solo: snapshot mutes, mute all except id
+      const snapshot: Record<string, boolean> = {};
+      for (const input of am.state.inputs) snapshot[input.id] = input.muted;
+      preSoloMutesRef.current = snapshot;
+      setSoloedInputId(id);
+      for (const input of am.state.inputs) {
+        const target = input.id !== id;
+        if (input.muted !== target) am.setInputMuted(input.id, target);
+      }
+      // Ensure the soloed input is unmuted
+      const soloing = am.state.inputs.find((i) => i.id === id);
+      if (soloing?.muted) am.setInputMuted(id, false);
+    }
+  }, [soloedInputId, am]);
 
   useEffect(() => {
     const isTextEntryTarget = (el: EventTarget | null): boolean => {
@@ -334,6 +362,14 @@ export function AudioManager() {
             }
           });
         }
+        return;
+      }
+
+      // S → solo selected input (mute all others); press again to unsolo.
+      if (e.key === "s" || e.key === "S") {
+        if (sel.kind !== "input") return;
+        e.preventDefault();
+        handleSoloInput(sel.inputId);
         return;
       }
 
@@ -468,6 +504,8 @@ export function AudioManager() {
             }}
             onInputGainChange={am.setInputGain}
             onAddInput={() => setInputPickerOpen(true)}
+            onSoloInput={handleSoloInput}
+            soloedInputId={soloedInputId}
           />
         )}
 

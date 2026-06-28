@@ -38,6 +38,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
     entries: [
       { keys: ["Space"], description: "Enable / disable selected bus" },
       { keys: ["M"], description: "Mute / unmute selected bus or input" },
+      { keys: ["S"], description: "Solo selected input (mute all others); press again to unsolo" },
       { keys: ["↑", "↓"], description: "Nudge volume ±1% (when a bus is selected)" },
       { keys: ["Shift", "↑", "↓"], description: "Nudge volume ±5% (coarse)" },
     ],

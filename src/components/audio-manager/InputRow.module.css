@@ -140,3 +140,26 @@
   background: rgba(239, 68, 68, 0.22);
   color: var(--am-meter-clip);
 }
+
+.soloBtn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--am-text-tertiary);
+  border-radius: var(--am-radius-md);
+  flex-shrink: 0;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast);
+}
+.soloBtn:hover { background: var(--am-surface-3); color: var(--am-text-primary); }
+.soloBtnActive {
+  background: rgba(234, 179, 8, 0.18);
+  color: #ca8a04;
+}
+.soloBtnActive:hover { background: rgba(234, 179, 8, 0.28); }
+
+/* Row dimmed when another input is soloed */
+.soloedOut { opacity: 0.35; }

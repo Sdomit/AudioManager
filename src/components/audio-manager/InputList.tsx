@@ -12,6 +12,8 @@ interface InputListProps {
   onMonitorInput: (id: string) => void;
   onInputGainChange: (id: string, v: number) => void;
   onAddInput: () => void;
+  onSoloInput?: (id: string) => void;
+  soloedInputId?: string | null;
 }
 
 /**
@@ -26,6 +28,8 @@ export function InputList({
   onMonitorInput,
   onInputGainChange,
   onAddInput,
+  onSoloInput,
+  soloedInputId,
 }: InputListProps) {
   const [filter, setFilter] = useState("");
 
@@ -76,6 +80,9 @@ export function InputList({
               onToggleMute={() => onMuteInput(input.id)}
               onToggleMonitor={() => onMonitorInput(input.id)}
               onGainChange={(v) => onInputGainChange(input.id, v)}
+              onSolo={onSoloInput ? () => onSoloInput(input.id) : undefined}
+              soloed={soloedInputId === input.id}
+              soloActive={soloedInputId !== null}
             />
           ))
         )}
