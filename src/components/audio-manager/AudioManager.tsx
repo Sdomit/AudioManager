@@ -19,6 +19,8 @@ import { StreamSetupSheet } from "./StreamSetupSheet";
 import { PhonePairingSheet } from "./PhonePairingSheet";
 import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
+import { TemplateDialog } from "./TemplateDialog";
+import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
@@ -203,6 +205,7 @@ export function AudioManager() {
 
   const [hotkeyOverlayOpen, setHotkeyOverlayOpen] = useState(false);
   const [busViewMode, setBusViewMode] = useState<"card" | "console">("card");
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
 
   // Hotkeys. Pause whenever a text field is focused (so typing in the
   // preset save dialog or the device-picker search doesn't trip Space
@@ -404,6 +407,7 @@ export function AudioManager() {
         onDensityChange={am.setDensity}
         onOpenStreamSetup={am.openStreamSetup}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenTemplates={() => setTemplateDialogOpen(true)}
       />
 
       {/* Slot order A1/A2/B1/B2 is the sync-plan contract — don't trust
@@ -658,6 +662,18 @@ export function AudioManager() {
       <HotkeyOverlay
         open={hotkeyOverlayOpen}
         onClose={() => setHotkeyOverlayOpen(false)}
+      />
+
+      <TemplateDialog
+        open={templateDialogOpen}
+        onClose={() => setTemplateDialogOpen(false)}
+        onApply={async (t: DeviceTemplate) => {
+          for (const b of t.buses) {
+            await am.renameBus(b.id, b.name);
+            await am.setBusVolume(b.id, b.volume);
+            await am.setBusEnabled(b.id, b.enabled);
+          }
+        }}
       />
 
       <PresetSaveDialog
