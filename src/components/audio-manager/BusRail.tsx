@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { BusCard } from "./BusCard";
 import { ConsoleView } from "./ConsoleView";
 import type { Bus, BusId, DetailSelection } from "./types";
@@ -15,6 +14,8 @@ interface BusRailProps {
   onSelectDevice: (id: BusId, deviceId: string | null) => void;
   /** Open the right-click context menu for a bus card. */
   onContextMenu?: (id: BusId, x: number, y: number) => void;
+  viewMode: "card" | "console";
+  onToggleViewMode: () => void;
 }
 
 /**
@@ -31,8 +32,9 @@ export function BusRail({
   onVolumeChange,
   onSelectDevice,
   onContextMenu,
+  viewMode,
+  onToggleViewMode,
 }: BusRailProps) {
-  const [viewMode, setViewMode] = useState<"card" | "console">("card");
   const a = buses.filter((b) => b.id.startsWith("A"));
   const b = buses.filter((b) => b.id.startsWith("B"));
 
@@ -97,8 +99,8 @@ export function BusRail({
       )}
       <button
         className={styles.viewToggle}
-        onClick={() => setViewMode((m) => (m === "card" ? "console" : "card"))}
-        title={viewMode === "card" ? "Switch to console view" : "Switch to card view"}
+        onClick={onToggleViewMode}
+        title={viewMode === "card" ? "Switch to console view (V)" : "Switch to card view (V)"}
         aria-pressed={viewMode === "console"}
       >
         {viewMode === "card" ? "Console" : "Cards"}

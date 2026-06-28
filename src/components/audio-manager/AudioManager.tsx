@@ -202,6 +202,7 @@ export function AudioManager() {
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
 
   const [hotkeyOverlayOpen, setHotkeyOverlayOpen] = useState(false);
+  const [busViewMode, setBusViewMode] = useState<"card" | "console">("card");
 
   // Hotkeys. Pause whenever a text field is focused (so typing in the
   // preset save dialog or the device-picker search doesn't trip Space
@@ -333,6 +334,23 @@ export function AudioManager() {
         return;
       }
 
+      // V → toggle bus rail view mode (card ↔ console).
+      if (e.key === "v" || e.key === "V") {
+        e.preventDefault();
+        setBusViewMode((m) => (m === "card" ? "console" : "card"));
+        return;
+      }
+
+      // Up/Down + bus selected → nudge volume. Shift = coarse (5 %), bare = fine (1 %).
+      if (sel.kind === "bus" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const bus = cur.state.buses.find((b) => b.id === sel.busId);
+        if (!bus) return;
+        e.preventDefault();
+        const delta = (e.shiftKey ? 0.05 : 0.01) * (e.key === "ArrowUp" ? 1 : -1);
+        cur.setBusVolume(sel.busId, Math.min(1, Math.max(0, bus.volume + delta)));
+        return;
+      }
+
       // Up/Down → move selection in the input list.
       if (sel.kind === "input" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const inputs = cur.state.inputs;
@@ -424,6 +442,8 @@ export function AudioManager() {
         onVolumeChange={am.setBusVolume}
         onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
+        viewMode={busViewMode}
+        onToggleViewMode={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
       />
 
       <main className={styles.main}>
