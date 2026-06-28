@@ -42,6 +42,9 @@ import styles from "./AudioManager.module.css";
  * etc.) without taking focus. The region is created lazily on first use
  * and reused for the rest of the session.
  */
+/** localStorage key for the persisted bus-rail view mode (card vs console). */
+const LS_BUS_VIEW_MODE = "am-bus-view-mode";
+
 function announce(message: string) {
   if (typeof document === "undefined") return;
   let region = document.getElementById("am-aria-live");
@@ -204,7 +207,17 @@ export function AudioManager() {
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
 
   const [hotkeyOverlayOpen, setHotkeyOverlayOpen] = useState(false);
-  const [busViewMode, setBusViewMode] = useState<"card" | "console">("card");
+  const [busViewMode, setBusViewMode] = useState<"card" | "console">(() => {
+    const saved = localStorage.getItem(LS_BUS_VIEW_MODE);
+    return saved === "console" ? "console" : "card";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_BUS_VIEW_MODE, busViewMode);
+    } catch {
+      /* private mode / quota — view mode just won't persist */
+    }
+  }, [busViewMode]);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
   const preSoloMutesRef = useRef<Record<string, boolean>>({});
