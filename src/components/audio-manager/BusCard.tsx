@@ -2,6 +2,7 @@ import { BusDeviceDropdown } from "./BusDeviceDropdown";
 import { iconForBusRole, AlertIcon, MuteIcon, MoreIcon, PowerIcon } from "./Icon";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
+import { SpectrumAnalyzer } from "./SpectrumAnalyzer";
 import type { Bus } from "./types";
 import styles from "./BusCard.module.css";
 
@@ -94,6 +95,25 @@ export function BusCard({
             : "—"}
         </div>
       </div>
+
+      {/* RMS + LUFS-M — only when loudness data is flowing */}
+      {bus.loudness && (bus.state === "running" || bus.state === "clipping") && (
+        <div className={styles.loudnessRow}>
+          <span>
+            <span className={styles.loudnessLabel}>RMS</span>
+            {fmtLoudnessDb(bus.loudness.rms_db)}
+          </span>
+          <span>
+            <span className={styles.loudnessLabel}>LUFS-M</span>
+            {bus.loudness.lufs_momentary.toFixed(1)}
+          </span>
+        </div>
+      )}
+
+      {/* Spectrum analyzer — only when audio is flowing */}
+      {(bus.state === "running" || bus.state === "clipping") && (
+        <SpectrumAnalyzer busId={bus.id} width={meterWidth} />
+      )}
 
       {/* Error message (only if errored) */}
       {bus.state === "error" && (
@@ -231,6 +251,11 @@ function ariaLabelForBus(bus: Bus): string {
     parts.push(`level ${levelToDb(bus.level)}`);
   }
   return parts.join(", ");
+}
+
+function fmtLoudnessDb(db: number): string {
+  if (db <= -70) return "-∞";
+  return `${db.toFixed(0)} dB`;
 }
 
 function levelToDb(level: number): string {

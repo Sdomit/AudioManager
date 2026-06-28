@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { BusCard } from "./BusCard";
+import { ConsoleView } from "./ConsoleView";
 import type { Bus, BusId, DetailSelection } from "./types";
 import styles from "./BusRail.module.css";
 
@@ -30,56 +32,77 @@ export function BusRail({
   onSelectDevice,
   onContextMenu,
 }: BusRailProps) {
+  const [viewMode, setViewMode] = useState<"card" | "console">("card");
   const a = buses.filter((b) => b.id.startsWith("A"));
   const b = buses.filter((b) => b.id.startsWith("B"));
 
   return (
     <div className={styles.rail} role="region" aria-label="Output buses">
-      <BusGroup label="Monitoring">
-        {a.map((bus) => (
-          <BusCard
-            key={bus.id}
-            bus={bus}
-            selected={selection.kind === "bus" && selection.busId === bus.id}
-            onSelect={() => onSelectBus(bus.id)}
-            onToggleEnabled={() => onToggleEnabled(bus.id)}
-            onToggleMuted={() => onToggleMuted(bus.id)}
-            onVolumeChange={(v) => onVolumeChange(bus.id, v)}
-            onSelectDevice={(deviceId) => onSelectDevice(bus.id, deviceId)}
-            onContextMenu={
-              onContextMenu
-                ? (e) => {
-                    e.preventDefault();
-                    onContextMenu(bus.id, e.clientX, e.clientY);
-                  }
-                : undefined
-            }
-          />
-        ))}
-      </BusGroup>
-      <div className={styles.divider} aria-hidden />
-      <BusGroup label="Broadcast">
-        {b.map((bus) => (
-          <BusCard
-            key={bus.id}
-            bus={bus}
-            selected={selection.kind === "bus" && selection.busId === bus.id}
-            onSelect={() => onSelectBus(bus.id)}
-            onToggleEnabled={() => onToggleEnabled(bus.id)}
-            onToggleMuted={() => onToggleMuted(bus.id)}
-            onVolumeChange={(v) => onVolumeChange(bus.id, v)}
-            onSelectDevice={(deviceId) => onSelectDevice(bus.id, deviceId)}
-            onContextMenu={
-              onContextMenu
-                ? (e) => {
-                    e.preventDefault();
-                    onContextMenu(bus.id, e.clientX, e.clientY);
-                  }
-                : undefined
-            }
-          />
-        ))}
-      </BusGroup>
+      {viewMode === "console" ? (
+        <ConsoleView
+          buses={buses}
+          selection={selection}
+          onSelectBus={onSelectBus}
+          onToggleMuted={onToggleMuted}
+          onVolumeChange={onVolumeChange}
+        />
+      ) : (
+        <>
+          <BusGroup label="Monitoring">
+            {a.map((bus) => (
+              <BusCard
+                key={bus.id}
+                bus={bus}
+                selected={selection.kind === "bus" && selection.busId === bus.id}
+                onSelect={() => onSelectBus(bus.id)}
+                onToggleEnabled={() => onToggleEnabled(bus.id)}
+                onToggleMuted={() => onToggleMuted(bus.id)}
+                onVolumeChange={(v) => onVolumeChange(bus.id, v)}
+                onSelectDevice={(deviceId) => onSelectDevice(bus.id, deviceId)}
+                onContextMenu={
+                  onContextMenu
+                    ? (e) => {
+                        e.preventDefault();
+                        onContextMenu(bus.id, e.clientX, e.clientY);
+                      }
+                    : undefined
+                }
+              />
+            ))}
+          </BusGroup>
+          <div className={styles.divider} aria-hidden />
+          <BusGroup label="Broadcast">
+            {b.map((bus) => (
+              <BusCard
+                key={bus.id}
+                bus={bus}
+                selected={selection.kind === "bus" && selection.busId === bus.id}
+                onSelect={() => onSelectBus(bus.id)}
+                onToggleEnabled={() => onToggleEnabled(bus.id)}
+                onToggleMuted={() => onToggleMuted(bus.id)}
+                onVolumeChange={(v) => onVolumeChange(bus.id, v)}
+                onSelectDevice={(deviceId) => onSelectDevice(bus.id, deviceId)}
+                onContextMenu={
+                  onContextMenu
+                    ? (e) => {
+                        e.preventDefault();
+                        onContextMenu(bus.id, e.clientX, e.clientY);
+                      }
+                    : undefined
+                }
+              />
+            ))}
+          </BusGroup>
+        </>
+      )}
+      <button
+        className={styles.viewToggle}
+        onClick={() => setViewMode((m) => (m === "card" ? "console" : "card"))}
+        title={viewMode === "card" ? "Switch to console view" : "Switch to card view"}
+        aria-pressed={viewMode === "console"}
+      >
+        {viewMode === "card" ? "Console" : "Cards"}
+      </button>
     </div>
   );
 }

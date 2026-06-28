@@ -14,3 +14,4 @@ pub mod resampler;
 pub mod routing;
 pub mod session;
 pub mod source;
+pub mod spectrum;
