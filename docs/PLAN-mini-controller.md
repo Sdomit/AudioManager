@@ -15,15 +15,25 @@ global shortcut, and mirrored to a phone as a remote control surface.
 | MC-5 | Phone remote (endpoint volume/mute, accepted-gated) | 87ad926 |
 | — | MiniPanel polling hardening (drag race + hidden window) | e5a6960 |
 
-**Verification done:** `tsc --noEmit`, `cargo check`, `pnpm build:phone` all green;
-MiniPanel + `#mini` route render-verified in a bare-Vite preview (IPC unavailable
-there → knobs disabled "—", graceful).
+**Verification — static:** `tsc --noEmit`, `cargo check`, `pnpm build:phone` all
+green; MiniPanel + `#mini` route render-verified in a bare-Vite preview.
 
-**Verification still REQUIRED (cannot run in this env):** `pnpm tauri dev` on
-Windows to exercise the actual COM (default-device switch, endpoint volume/mute),
-the always-on-top window, the global hotkey, and the phone remote (needs a paired
-phone + inbound firewall rule 47800-47809). The IPolicyConfig vtable in particular
-only proves *compiled* — its runtime behavior is unverified until tested live.
+**Verification — LIVE on Windows 11 (`pnpm tauri dev` + real hardware):**
+- ✅ Full app builds (1m42s) + launches; capability config valid, no startup crash.
+- ✅ COM layer verified non-destructively via the extended `endpoint_ctl_smoke`
+  (`cargo test -- --ignored`): enumerated 7 render + 4 capture endpoints with
+  correct names/IDs/defaults, read real volumes, and every write path returned
+  `Ok` — including **`IPolicyConfig::SetDefaultEndpoint`** (the undocumented vtable;
+  called with the already-default id, so no system change). The feature's #1 risk
+  is cleared.
+- ✅ Global hotkey: the fallback chain registered live (Ctrl+Alt+M was taken on
+  this machine → fell back to **Ctrl+Shift+F10**).
+
+**Still needs an eyeball / interactive pass (the dev build isn't resolvable by the
+computer-use name resolver, so I couldn't click it):** a knob drag audibly moving
+system volume, the pop-out window floating always-on-top, and the phone remote
+end-to-end (pair a phone, firewall 47800-47809). The data + COM paths underneath
+all three are verified; what's unconfirmed is the on-screen interaction.
 
 ## Decision: knobs are hybrid-target
 
@@ -186,13 +196,15 @@ Honest weaknesses found reviewing the finished feature:
    "mini controller = OS endpoints, mixer stays in the main app." Kept hybrid
    because it was explicitly requested, but it earns its complexity in 1 of 3
    surfaces.
-3. **IPolicyConfig is undocumented + live-unverified.** The default-device switch
-   rests on a hand-declared COM vtable. `cargo check` proves layout compiles, not
-   that offsets match the real object. Highest-risk line; must be device-tested.
+3. ~~**IPolicyConfig is undocumented + live-unverified.**~~ RESOLVED — the
+   hand-declared vtable was exercised against real hardware (no-op `SetDefaultEndpoint`
+   returned `Ok` on Windows 11). No longer a risk.
 4. **Phone can change volume/mute but NOT switch the default device** — a
    deliberate conservative choice (no `set-default-device` in the phone protocol),
-   and control is strictly gated on an accepted session.
-5. **Global hotkey is fixed (Ctrl+Alt+M), no rebind, silent on registration
-   conflict** (logs to stderr only). Acceptable; rebind UI is a follow-up.
+   and control is strictly gated on an accepted session (gate confirmed by review).
+5. ~~**Global hotkey is fixed (Ctrl+Alt+M), silent on conflict.**~~ FIXED — found
+   live (Ctrl+Alt+M was taken), replaced with a fallback chain + `get_mini_hotkey`
+   so the overlay shows the real combo. A full rebind UI is still a follow-up.
 
-None of these block a v1; (1) and (3) are the ones to revisit after live testing.
+After live testing, (1) polling-vs-push is the only substantive item left to
+revisit; it does not block a v1.
