@@ -6,6 +6,22 @@ export interface DeviceInfo {
   is_default: boolean;
 }
 
+/** OS audio endpoint direction (Mini Controller). */
+export type EndpointDirection = "render" | "capture";
+
+/** One OS render/capture endpoint, keyed by its real MMDevice id. */
+export interface EndpointInfo {
+  id: string;
+  name: string;
+  is_default: boolean;
+}
+
+/** Live master volume (0..1 scalar) + mute of one OS endpoint. */
+export interface EndpointVolume {
+  volume: number;
+  muted: boolean;
+}
+
 export interface DeviceListError {
   message: string;
 }

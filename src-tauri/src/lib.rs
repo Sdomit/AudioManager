@@ -14,6 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::device_watch::{self, DeviceDiff, DeviceSnapshot};
 use audio::devices::{DeviceInfo, DeviceListError};
+use audio::endpoint_ctl;
 use audio::dsp::{AutomixConfig, AutomixGroupUpdate, BusDspConfig, DspConfig, MAX_AUTOMIX_GROUPS};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerEngine, MixerInput};
@@ -36,6 +37,46 @@ fn list_input_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 #[tauri::command]
 fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
     audio::devices::list_output_devices()
+}
+
+// ── OS audio endpoint control (Mini Controller) ───────────────────────────────
+// COM-backed: real MMDevice ids, per-endpoint volume/mute, and OS default
+// switching. Separate from the cpal enumeration above (cpal ids are names).
+
+#[tauri::command]
+fn audio_list_endpoints(
+    direction: endpoint_ctl::Direction,
+) -> Result<Vec<endpoint_ctl::EndpointInfo>, endpoint_ctl::EndpointError> {
+    endpoint_ctl::list_endpoints(direction)
+}
+
+#[tauri::command]
+fn audio_default_endpoint(
+    direction: endpoint_ctl::Direction,
+) -> Result<Option<String>, endpoint_ctl::EndpointError> {
+    endpoint_ctl::default_endpoint_id(direction)
+}
+
+#[tauri::command]
+fn audio_set_default_endpoint(id: String) -> Result<(), endpoint_ctl::EndpointError> {
+    endpoint_ctl::set_default_endpoint(&id)
+}
+
+#[tauri::command]
+fn audio_get_endpoint_volume(
+    id: String,
+) -> Result<endpoint_ctl::EndpointVolume, endpoint_ctl::EndpointError> {
+    endpoint_ctl::get_endpoint_volume(&id)
+}
+
+#[tauri::command]
+fn audio_set_endpoint_volume(id: String, level: f32) -> Result<(), endpoint_ctl::EndpointError> {
+    endpoint_ctl::set_endpoint_volume(&id, level)
+}
+
+#[tauri::command]
+fn audio_set_endpoint_mute(id: String, muted: bool) -> Result<(), endpoint_ctl::EndpointError> {
+    endpoint_ctl::set_endpoint_mute(&id, muted)
 }
 
 /// List applications currently holding a session on the default render
@@ -2441,6 +2482,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_input_devices,
             list_output_devices,
+            audio_list_endpoints,
+            audio_default_endpoint,
+            audio_set_default_endpoint,
+            audio_get_endpoint_volume,
+            audio_set_endpoint_volume,
+            audio_set_endpoint_mute,
             list_audio_sessions,
             start_passthrough,
             stop_passthrough,

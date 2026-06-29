@@ -382,6 +382,7 @@ dependencies = [
  "wasapi",
  "webrtc",
  "windows 0.62.2",
+ "windows-core 0.62.2",
  "winreg 0.52.0",
 ]
 
