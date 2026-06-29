@@ -33,40 +33,6 @@
   flex: 1;
 }
 
-.knobRow {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--am-space-2);
-}
-
-.muteBtn {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--am-text-tertiary);
-  border-radius: var(--am-radius-md);
-  flex-shrink: 0;
-  transition: background var(--am-dur-fast), color var(--am-dur-fast);
-}
-.muteBtn:hover:not(:disabled) {
-  background: var(--am-surface-3);
-  color: var(--am-text-primary);
-}
-.muteBtn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.muteBtnActive {
-  color: var(--am-meter-clip);
-  background: var(--am-danger-muted);
-}
-.muteBtnActive:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.22);
-  color: var(--am-meter-clip);
-}
-
 .targetSelect,
 .deviceSelect {
   width: 100%;
@@ -114,7 +80,7 @@
   padding: 7px 8px;
 }
 
-/* ── In-window launcher + dock (MC-2; MC-3 adds a pop-out window) ──────────── */
+/* ── Floating launcher button (opens the always-on-top window) ───────────── */
 .launcher {
   position: fixed;
   right: 20px;
@@ -141,34 +107,5 @@
 }
 .toggle:hover {
   background: var(--am-accent-hover);
-}
-
-.dock {
-  position: relative;
-  width: 300px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-  border-radius: var(--am-radius-lg);
-}
-
-.popOut {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 1;
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  color: var(--am-text-tertiary);
-  background: var(--am-surface-2);
-  border: 1px solid var(--am-border-default);
-  border-radius: var(--am-radius-sm);
-  transition: background var(--am-dur-fast), color var(--am-dur-fast);
-}
-.popOut:hover {
-  background: var(--am-surface-3);
-  color: var(--am-text-primary);
 }
 
