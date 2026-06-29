@@ -66,12 +66,38 @@ export interface ClientBye {
   reason: string;
 }
 
+/** OS endpoint the phone remote controls (MC-5). */
+export type EndpointTarget = "speaker" | "mic";
+
+export interface ClientSetEndpointVolume {
+  v: typeof PROTOCOL_VERSION;
+  type: "set-endpoint-volume";
+  target: EndpointTarget;
+  /** 0..1 scalar. */
+  value: number;
+}
+
+export interface ClientSetEndpointMute {
+  v: typeof PROTOCOL_VERSION;
+  type: "set-endpoint-mute";
+  target: EndpointTarget;
+  muted: boolean;
+}
+
+export interface ClientRequestEndpointState {
+  v: typeof PROTOCOL_VERSION;
+  type: "request-endpoint-state";
+}
+
 export type ClientMessage =
   | ClientHello
   | ClientOffer
   | ClientCandidate
   | ClientStats
-  | ClientBye;
+  | ClientBye
+  | ClientSetEndpointVolume
+  | ClientSetEndpointMute
+  | ClientRequestEndpointState;
 
 export function helloMessage(
   pairing: PairingParams,
@@ -123,6 +149,24 @@ export function byeMessage(reason: string): ClientBye {
   return { v: PROTOCOL_VERSION, type: "bye", reason };
 }
 
+export function setEndpointVolumeMessage(
+  target: EndpointTarget,
+  value: number,
+): ClientSetEndpointVolume {
+  return { v: PROTOCOL_VERSION, type: "set-endpoint-volume", target, value };
+}
+
+export function setEndpointMuteMessage(
+  target: EndpointTarget,
+  muted: boolean,
+): ClientSetEndpointMute {
+  return { v: PROTOCOL_VERSION, type: "set-endpoint-mute", target, muted };
+}
+
+export function requestEndpointStateMessage(): ClientRequestEndpointState {
+  return { v: PROTOCOL_VERSION, type: "request-endpoint-state" };
+}
+
 // ── Server → client ───────────────────────────────────────────────────────────
 
 export type ServerMessage =
@@ -142,8 +186,18 @@ export type ServerMessage =
       sdpMLineIndex: number | null;
     }
   | { type: "latency"; mode: "fastest" | "balanced" | "stable" }
+  | { type: "endpoint-state"; endpoints: EndpointStateView[] }
   | { type: "error"; code: string; message: string; supported?: number[] }
   | { type: "bye"; reason: string };
+
+/** One endpoint's live state pushed to the phone remote (MC-5). */
+export interface EndpointStateView {
+  target: EndpointTarget;
+  name: string;
+  volume: number;
+  muted: boolean;
+  available: boolean;
+}
 
 /**
  * Parse a server frame. Returns null for malformed frames or unknown
@@ -168,6 +222,7 @@ export function parseServerMessage(text: string): ServerMessage | null {
     "answer",
     "candidate",
     "latency",
+    "endpoint-state",
     "error",
     "bye",
   ];
