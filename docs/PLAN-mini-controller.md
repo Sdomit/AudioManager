@@ -4,6 +4,27 @@ A small, always-on-top "desk knob" panel: two rotary knobs (sound + mic),
 mute toggles, quick-switch of the Windows default speaker/mic, summoned by a
 global shortcut, and mirrored to a phone as a remote control surface.
 
+## Status — all phases implemented (feat/mini-controller)
+
+| Phase | What | Commit |
+|-------|------|--------|
+| MC-1 | OS endpoint control (Core Audio: IPolicyConfig + IAudioEndpointVolume) | d727e6b |
+| MC-2 | Knob + MiniPanel hybrid-target dock | (Knob/MiniPanel/knobTarget) |
+| MC-3 | Always-on-top pop-out window (#mini route, runtime WebviewWindow) | (MiniWindow) |
+| MC-4 | Global shortcut Ctrl+Alt+M → toggle window | e968775 |
+| MC-5 | Phone remote (endpoint volume/mute, accepted-gated) | 87ad926 |
+| — | MiniPanel polling hardening (drag race + hidden window) | e5a6960 |
+
+**Verification done:** `tsc --noEmit`, `cargo check`, `pnpm build:phone` all green;
+MiniPanel + `#mini` route render-verified in a bare-Vite preview (IPC unavailable
+there → knobs disabled "—", graceful).
+
+**Verification still REQUIRED (cannot run in this env):** `pnpm tauri dev` on
+Windows to exercise the actual COM (default-device switch, endpoint volume/mute),
+the always-on-top window, the global hotkey, and the phone remote (needs a paired
+phone + inbound firewall rule 47800-47809). The IPolicyConfig vtable in particular
+only proves *compiled* — its runtime behavior is unverified until tested live.
+
 ## Decision: knobs are hybrid-target
 
 Each knob points at a **configurable target** — either a Windows OS audio
@@ -149,3 +170,29 @@ Rides the existing phone stack — no new transport/pairing/TLS.
 - Per-app volume (mixer-style app sessions) — endpoint-level only.
 - Knob rebinding of the global shortcut UI — fixed default first.
 - Multi-monitor mini-window position memory.
+
+## Critical review — known limitations (thinking differently)
+
+Honest weaknesses found reviewing the finished feature:
+
+1. **Polling, not push (biggest architectural smell).** Every open surface polls
+   `IAudioEndpointVolume` ~4×/s, each call spinning up a fresh `IMMDeviceEnumerator`
+   + `Activate`. Correct but wasteful, and four surfaces (dock, window, phone,
+   Windows itself) can disagree transiently. The right design is an
+   `IAudioEndpointVolumeCallback` push + a cached enumerator. Deferred — the
+   hidden-window guard + 250 ms cadence keep it acceptable for v1.
+2. **Hybrid target is over-built for its reach.** Only the dock uses bus/input
+   targets; the pop-out and phone are endpoint-only. A leaner product is
+   "mini controller = OS endpoints, mixer stays in the main app." Kept hybrid
+   because it was explicitly requested, but it earns its complexity in 1 of 3
+   surfaces.
+3. **IPolicyConfig is undocumented + live-unverified.** The default-device switch
+   rests on a hand-declared COM vtable. `cargo check` proves layout compiles, not
+   that offsets match the real object. Highest-risk line; must be device-tested.
+4. **Phone can change volume/mute but NOT switch the default device** — a
+   deliberate conservative choice (no `set-default-device` in the phone protocol),
+   and control is strictly gated on an accepted session.
+5. **Global hotkey is fixed (Ctrl+Alt+M), no rebind, silent on registration
+   conflict** (logs to stderr only). Acceptable; rebind UI is a follow-up.
+
+None of these block a v1; (1) and (3) are the ones to revisit after live testing.

@@ -18,7 +18,14 @@ export function MiniWindow() {
         <button
           type="button"
           className={styles.close}
-          onClick={() => void getCurrentWebviewWindow().hide()}
+          onClick={() => {
+            // Guard both a sync throw (not in a Tauri window) and an async reject.
+            try {
+              void getCurrentWebviewWindow().hide().catch(() => {});
+            } catch {
+              /* not running inside a Tauri webview */
+            }
+          }}
           aria-label="Close mini controller"
           title="Close (reopen from the app or hotkey)"
         >
