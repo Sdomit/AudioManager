@@ -5,24 +5,28 @@ interface KnobProps {
   /** Current value, 0..1. */
   value: number;
   onChange: (v: number) => void;
-  /** Caption under the knob. */
+  /** Caption under the knob (device name). */
   label: string;
-  /** Right-hand readout, e.g. "72%" or "-6 dB". */
+  /** Big readout above the label, e.g. "72%". */
   valueLabel: string;
   ariaLabel?: string;
   /** CSS color for the arc + indicator. Defaults to the app accent. */
   accent?: string;
+  /** Muted state — dims the arc and lights the center mute glyph. */
+  muted?: boolean;
+  /** Press the center of the knob to toggle mute. */
+  onMuteToggle?: () => void;
   disabled?: boolean;
-  /** Diameter in px. Default 72. */
+  /** Dial diameter in px. Default 104. */
   size?: number;
 }
 
 // 270° sweep with the 90° gap centred at the bottom (6 o'clock).
-const R = 40;
-const C = 2 * Math.PI * R; // circumference
-const ARC = 0.75; // fraction of the circle that is live (270°)
+const R = 42;
+const C = 2 * Math.PI * R;
+const ARC = 0.75;
 const ARC_LEN = ARC * C;
-const START_DEG = 135; // value 0 sits at 7:30
+const START_DEG = 135;
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
@@ -32,9 +36,9 @@ function indicator(value: number): { x: number; y: number } {
 }
 
 /**
- * A rotary knob that behaves like a slider: vertical drag, wheel, and arrow
- * keys all change the value, and it exposes `role="slider"` for a11y / touch.
- * Visual only — mute and target-picking live in the parent panel.
+ * Rotary knob: drag the ring (or wheel / arrow keys) to set volume; press the
+ * center to mute. Visual is a knob, behavior is a slider (`role="slider"`), so
+ * it stays precise + accessible + touch-friendly.
  */
 export function Knob({
   value,
@@ -43,13 +47,15 @@ export function Knob({
   valueLabel,
   ariaLabel,
   accent,
+  muted = false,
+  onMuteToggle,
   disabled = false,
-  size = 72,
+  size = 104,
 }: KnobProps) {
   const drag = useRef<{ startY: number; startValue: number } | null>(null);
   const v = clamp01(value);
   const ind = indicator(v);
-  const color = accent ?? "var(--am-accent)";
+  const color = muted ? "var(--am-text-tertiary)" : accent ?? "var(--am-accent)";
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -65,8 +71,7 @@ export function Knob({
     (e: React.PointerEvent) => {
       const d = drag.current;
       if (!d) return;
-      // Up = louder. Full travel over ~160px; Shift = fine.
-      const span = e.shiftKey ? 480 : 160;
+      const span = e.shiftKey ? 480 : 160; // px for full travel; Shift = fine
       onChange(clamp01(d.startValue + (d.startY - e.clientY) / span));
     },
     [onChange],
@@ -89,6 +94,13 @@ export function Knob({
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (disabled) return;
+      if (e.key === "Enter" || e.key === " ") {
+        if (onMuteToggle) {
+          e.preventDefault();
+          onMuteToggle();
+        }
+        return;
+      }
       const fine = e.shiftKey ? 0.05 : 0.01;
       let next: number | null = null;
       if (e.key === "ArrowUp" || e.key === "ArrowRight") next = v + fine;
@@ -99,7 +111,7 @@ export function Knob({
       e.preventDefault();
       onChange(clamp01(next));
     },
-    [disabled, onChange, v],
+    [disabled, onChange, onMuteToggle, v],
   );
 
   return (
@@ -113,7 +125,7 @@ export function Knob({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(v * 100)}
-        aria-valuetext={valueLabel}
+        aria-valuetext={muted ? `muted, ${valueLabel}` : valueLabel}
         aria-disabled={disabled}
         data-disabled={disabled || undefined}
         onPointerDown={onPointerDown}
@@ -124,7 +136,6 @@ export function Knob({
         onKeyDown={onKeyDown}
       >
         <svg viewBox="0 0 100 100" className={styles.dial} aria-hidden>
-          {/* track */}
           <circle
             cx={50}
             cy={50}
@@ -133,23 +144,44 @@ export function Knob({
             strokeDasharray={`${ARC_LEN} ${C}`}
             transform="rotate(135 50 50)"
           />
-          {/* value arc */}
-          <circle
-            cx={50}
-            cy={50}
-            r={R}
-            fill="none"
-            stroke={color}
-            strokeWidth={8}
-            strokeLinecap="round"
-            strokeDasharray={`${v * ARC_LEN} ${C}`}
-            transform="rotate(135 50 50)"
-          />
-          {/* indicator dot */}
-          <circle cx={ind.x} cy={ind.y} r={5} fill={color} />
+          {!muted && (
+            <circle
+              cx={50}
+              cy={50}
+              r={R}
+              fill="none"
+              stroke={color}
+              strokeWidth={7}
+              strokeLinecap="round"
+              strokeDasharray={`${v * ARC_LEN} ${C}`}
+              transform="rotate(135 50 50)"
+            />
+          )}
+          <circle cx={ind.x} cy={ind.y} r={4.5} fill={color} />
         </svg>
-        <span className={styles.readout}>{valueLabel}</span>
+
+        {/* Center mute zone — press to mute; stops the ring drag from starting. */}
+        <button
+          type="button"
+          className={`${styles.muteZone} ${muted ? styles.muted : ""}`}
+          style={{ width: size * 0.52, height: size * 0.52 }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!disabled) onMuteToggle?.();
+          }}
+          disabled={disabled || !onMuteToggle}
+          aria-pressed={muted}
+          aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
+          title={muted ? "Muted — press to unmute" : "Press to mute"}
+        >
+          <span className={styles.muteGlyph}>{muted ? "🔇" : "🔊"}</span>
+        </button>
       </div>
+
+      <span className={`${styles.readout} ${muted ? styles.readoutMuted : ""}`}>
+        {muted ? "Muted" : valueLabel}
+      </span>
       <span className={styles.label} title={label}>
         {label}
       </span>

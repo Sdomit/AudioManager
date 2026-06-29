@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Knob } from "./Knob";
-import { MuteIcon } from "./Icon";
 import {
   audioListEndpoints,
   audioSetDefaultEndpoint,
@@ -281,27 +280,16 @@ function KnobSlot({
 }) {
   return (
     <div className={styles.slot}>
-      <div className={styles.knobRow}>
-        <Knob
-          value={v.value}
-          onChange={v.setValue}
-          label={v.label}
-          valueLabel={v.available ? pct(v.value) : "—"}
-          ariaLabel={`${v.label} volume`}
-          disabled={!v.available}
-        />
-        <button
-          type="button"
-          className={`${styles.muteBtn} ${v.muted ? styles.muteBtnActive : ""}`}
-          onClick={v.toggleMute}
-          disabled={!v.available}
-          aria-pressed={v.muted}
-          aria-label={v.muted ? `Unmute ${v.label}` : `Mute ${v.label}`}
-          title={v.muted ? "Muted — click to unmute" : "Mute"}
-        >
-          <MuteIcon size={14} />
-        </button>
-      </div>
+      <Knob
+        value={v.value}
+        onChange={v.setValue}
+        label={v.label}
+        valueLabel={v.available ? pct(v.value) : "—"}
+        ariaLabel={`${v.label} volume`}
+        muted={v.muted}
+        onMuteToggle={v.available ? v.toggleMute : undefined}
+        disabled={!v.available}
+      />
       {showPicker && (
         <TargetSelect
           slotLabel={slotLabel}

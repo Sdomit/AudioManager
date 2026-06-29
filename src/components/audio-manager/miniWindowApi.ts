@@ -7,7 +7,7 @@ const MINI_OPTIONS = {
   url: "index.html#mini",
   title: "Mini Controller",
   width: 320,
-  height: 380,
+  height: 432,
   resizable: false,
   decorations: false,
   alwaysOnTop: true,

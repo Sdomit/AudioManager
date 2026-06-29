@@ -20,7 +20,6 @@ import { PhonePairingSheet } from "./PhonePairingSheet";
 import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
-import { MiniPanel } from "./MiniPanel";
 import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
 import { listen } from "@tauri-apps/api/event";
 import miniStyles from "./MiniPanel.module.css";
@@ -234,7 +233,6 @@ export function AudioManager() {
     };
   }, []);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
-  const [miniOpen, setMiniOpen] = useState(false);
   const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
   const preSoloMutesRef = useRef<Record<string, boolean>>({});
 
@@ -805,39 +803,14 @@ export function AudioManager() {
         onClose={() => setBusRenameFor(null)}
       />
 
-      {/* Mini Controller — in-window dock (MC-2). MC-3 adds a pop-out window. */}
+      {/* Mini Controller launcher — opens the always-on-top pop-out window. */}
       <div className={miniStyles.launcher}>
-        {miniOpen && (
-          <div className={miniStyles.dock} role="dialog" aria-label="Mini controller">
-            <button
-              type="button"
-              className={miniStyles.popOut}
-              onClick={() => {
-                void openMiniWindow();
-                setMiniOpen(false);
-              }}
-              aria-label="Pop out as always-on-top window"
-              title="Pop out (always-on-top)"
-            >
-              ⧉
-            </button>
-            <MiniPanel
-              buses={state.buses}
-              inputs={state.inputs}
-              setBusVolume={am.setBusVolume}
-              setBusMuted={am.setBusMuted}
-              setInputGain={am.setInputGain}
-              setInputMuted={am.setInputMuted}
-            />
-          </div>
-        )}
         <button
           type="button"
           className={miniStyles.toggle}
-          onClick={() => setMiniOpen((v) => !v)}
-          aria-pressed={miniOpen}
-          aria-label={miniOpen ? "Close mini controller" : "Open mini controller"}
-          title="Mini controller"
+          onClick={() => void openMiniWindow()}
+          aria-label="Open mini controller window"
+          title="Mini controller (Ctrl+Shift+F10)"
         >
           🎛
         </button>
