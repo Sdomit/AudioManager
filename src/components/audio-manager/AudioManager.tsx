@@ -20,6 +20,8 @@ import { PhonePairingSheet } from "./PhonePairingSheet";
 import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
+import { MiniPanel } from "./MiniPanel";
+import miniStyles from "./MiniPanel.module.css";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
@@ -219,6 +221,7 @@ export function AudioManager() {
     }
   }, [busViewMode]);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [miniOpen, setMiniOpen] = useState(false);
   const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
   const preSoloMutesRef = useRef<Record<string, boolean>>({});
 
@@ -788,6 +791,32 @@ export function AudioManager() {
         }}
         onClose={() => setBusRenameFor(null)}
       />
+
+      {/* Mini Controller — in-window dock (MC-2). MC-3 adds a pop-out window. */}
+      <div className={miniStyles.launcher}>
+        {miniOpen && (
+          <div className={miniStyles.dock} role="dialog" aria-label="Mini controller">
+            <MiniPanel
+              buses={state.buses}
+              inputs={state.inputs}
+              setBusVolume={am.setBusVolume}
+              setBusMuted={am.setBusMuted}
+              setInputGain={am.setInputGain}
+              setInputMuted={am.setInputMuted}
+            />
+          </div>
+        )}
+        <button
+          type="button"
+          className={miniStyles.toggle}
+          onClick={() => setMiniOpen((v) => !v)}
+          aria-pressed={miniOpen}
+          aria-label={miniOpen ? "Close mini controller" : "Open mini controller"}
+          title="Mini controller"
+        >
+          🎛
+        </button>
+      </div>
     </div>
   );
 }
