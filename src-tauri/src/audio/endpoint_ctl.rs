@@ -50,6 +50,9 @@ pub enum Direction {
 
 #[cfg(windows)]
 mod imp {
+    // COM vtable method names (GetMixFormat, SetDefaultEndpoint, …) must stay
+    // PascalCase to match the interface; allow it for this whole module.
+    #![allow(non_snake_case)]
     use super::*;
     use std::ffi::c_void;
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
@@ -72,7 +75,6 @@ mod imp {
     /// i32 / i64), not semantically exact, since they are never called. This is
     /// the same interface EarTrumpet / AudioDeviceCmdlets use to set defaults.
     #[interface("f8679f50-850a-41cf-9c72-430f290290c8")]
-    #[allow(non_snake_case)] // COM vtable method names must stay PascalCase.
     unsafe trait IPolicyConfig: IUnknown {
         unsafe fn GetMixFormat(&self, name: PCWSTR, fmt: *mut *mut c_void) -> HRESULT;
         unsafe fn GetDeviceFormat(&self, name: PCWSTR, def: i32, fmt: *mut *mut c_void) -> HRESULT;

@@ -21,6 +21,7 @@ import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
 import { MiniPanel } from "./MiniPanel";
+import { openMiniWindow } from "./miniWindowApi";
 import miniStyles from "./MiniPanel.module.css";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
@@ -796,6 +797,18 @@ export function AudioManager() {
       <div className={miniStyles.launcher}>
         {miniOpen && (
           <div className={miniStyles.dock} role="dialog" aria-label="Mini controller">
+            <button
+              type="button"
+              className={miniStyles.popOut}
+              onClick={() => {
+                void openMiniWindow();
+                setMiniOpen(false);
+              }}
+              aria-label="Pop out as always-on-top window"
+              title="Pop out (always-on-top)"
+            >
+              ⧉
+            </button>
             <MiniPanel
               buses={state.buses}
               inputs={state.inputs}

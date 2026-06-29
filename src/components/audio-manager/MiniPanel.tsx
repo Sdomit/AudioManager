@@ -30,6 +30,9 @@ interface MiniPanelProps {
   setInputMuted: (id: string, muted: boolean) => void;
   /** Compact chrome for the always-on-top window (MC-3). */
   variant?: "dock" | "window";
+  /** Pop-out window mode: endpoint knobs only (default speaker/mic), no mixer
+   *  target picker — so it needs no app state and runs no second mixer poll. */
+  endpointOnly?: boolean;
 }
 
 interface Endpoints {
@@ -65,12 +68,13 @@ export function MiniPanel({
   setInputGain,
   setInputMuted,
   variant = "dock",
+  endpointOnly = false,
 }: MiniPanelProps) {
   const [knobA, setKnobA] = useState<KnobTarget>(() =>
-    loadKnobTarget("a", DEFAULT_KNOB_A),
+    endpointOnly ? DEFAULT_KNOB_A : loadKnobTarget("a", DEFAULT_KNOB_A),
   );
   const [knobB, setKnobB] = useState<KnobTarget>(() =>
-    loadKnobTarget("b", DEFAULT_KNOB_B),
+    endpointOnly ? DEFAULT_KNOB_B : loadKnobTarget("b", DEFAULT_KNOB_B),
   );
   const [eps, setEps] = useState<Endpoints>(EMPTY_ENDPOINTS);
   // Polled endpoint volumes, keyed by device id.
@@ -205,6 +209,7 @@ export function MiniPanel({
           v={a}
           buses={buses}
           inputs={inputs}
+          showPicker={!endpointOnly}
           onPick={(t) => onPickTarget("a", t)}
         />
         <KnobSlot
@@ -213,6 +218,7 @@ export function MiniPanel({
           v={b}
           buses={buses}
           inputs={inputs}
+          showPicker={!endpointOnly}
           onPick={(t) => onPickTarget("b", t)}
         />
       </div>
@@ -248,6 +254,7 @@ function KnobSlot({
   v,
   buses,
   inputs,
+  showPicker,
   onPick,
 }: {
   slotLabel: string;
@@ -255,6 +262,7 @@ function KnobSlot({
   v: SlotView;
   buses: Bus[];
   inputs: AudioInput[];
+  showPicker: boolean;
   onPick: (t: KnobTarget) => void;
 }) {
   return (
@@ -280,13 +288,15 @@ function KnobSlot({
           <MuteIcon size={14} />
         </button>
       </div>
-      <TargetSelect
-        slotLabel={slotLabel}
-        target={target}
-        buses={buses}
-        inputs={inputs}
-        onPick={onPick}
-      />
+      {showPicker && (
+        <TargetSelect
+          slotLabel={slotLabel}
+          target={target}
+          buses={buses}
+          inputs={inputs}
+          onPick={onPick}
+        />
+      )}
     </div>
   );
 }

@@ -138,8 +138,31 @@
 }
 
 .dock {
+  position: relative;
   width: 300px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   border-radius: var(--am-radius-lg);
+}
+
+.popOut {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--am-text-tertiary);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm);
+  transition: background var(--am-dur-fast), color var(--am-dur-fast);
+}
+.popOut:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
 }
 
