@@ -241,13 +241,27 @@ mod imp {
         #[test]
         #[ignore]
         fn endpoint_ctl_smoke() {
-            let outs = list_endpoints(Direction::Render).expect("list render");
-            assert!(!outs.is_empty(), "expected at least one render endpoint");
-            let def = outs.iter().find(|e| e.is_default).expect("a default render endpoint");
-            let v = get_endpoint_volume(&def.id).expect("read volume");
-            println!("default render: {} vol={:.2} muted={}", def.name, v.volume, v.muted);
-            // Round-trip the volume (restore after).
-            set_endpoint_volume(&def.id, v.volume).expect("set volume");
+            for dir in [Direction::Render, Direction::Capture] {
+                let list = list_endpoints(dir).expect("list endpoints");
+                println!("== {:?}: {} endpoint(s) ==", dir, list.len());
+                for e in &list {
+                    println!("  {}{} [{}]", if e.is_default { "* " } else { "  " }, e.name, e.id);
+                }
+                if let Some(def) = list.iter().find(|e| e.is_default) {
+                    let v = get_endpoint_volume(&def.id).expect("get volume");
+                    println!("  default vol={:.3} muted={}", v.volume, v.muted);
+                    // No-op round-trips: re-apply the CURRENT values so nothing
+                    // changes, but every COM write path — including the
+                    // undocumented IPolicyConfig::SetDefaultEndpoint — is
+                    // exercised against real hardware.
+                    set_endpoint_volume(&def.id, v.volume).expect("set volume (no-op)");
+                    set_endpoint_mute(&def.id, v.muted).expect("set mute (no-op)");
+                    set_default_endpoint(&def.id).expect("set default (no-op, IPolicyConfig)");
+                    println!("  no-op round-trip OK (vol get/set, mute set, IPolicyConfig set-default)");
+                }
+                let dflt = default_endpoint_id(dir).expect("default id");
+                println!("  default_endpoint_id = {dflt:?}");
+            }
         }
     }
 }

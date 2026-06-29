@@ -79,6 +79,16 @@ fn audio_set_endpoint_mute(id: String, muted: bool) -> Result<(), endpoint_ctl::
     endpoint_ctl::set_endpoint_mute(&id, muted)
 }
 
+/// The global shortcut the mini controller actually registered after the
+/// fallback chain (e.g. "Ctrl+Alt+M"), or None if every candidate was taken.
+static MINI_HOTKEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Label of the active mini-controller global shortcut, for the hotkey overlay.
+#[tauri::command]
+fn get_mini_hotkey() -> Option<String> {
+    MINI_HOTKEY.lock().unwrap().clone()
+}
+
 /// List applications currently holding a session on the default render
 /// endpoint. Each entry carries a ready `proc:<pid>` source id for `add_input`.
 #[tauri::command]
@@ -2485,21 +2495,39 @@ pub fn run() {
                 use tauri_plugin_global_shortcut::{
                     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
                 };
-                let toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
-                let toggle_for_handler = toggle.clone();
+                // Only ever one shortcut is registered (the first free candidate),
+                // so the handler emits on any Pressed event — no need to match.
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(move |app, sc, event| {
-                            if sc == &toggle_for_handler
-                                && event.state() == ShortcutState::Pressed
-                            {
+                        .with_handler(move |app, _sc, event| {
+                            if event.state() == ShortcutState::Pressed {
                                 let _ = app.emit("mini:toggle", ());
                             }
                         })
                         .build(),
                 )?;
-                if let Err(e) = app.global_shortcut().register(toggle) {
-                    eprintln!("[mini] global shortcut register failed: {e}");
+                // Ctrl+Alt+M is the documented default but is commonly taken by
+                // other apps, so fall back to the first candidate that registers.
+                let candidates: [(Shortcut, &str); 4] = [
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM), "Ctrl+Alt+M"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F10), "Ctrl+Shift+F10"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F9), "Ctrl+Alt+F9"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT), Code::KeyM), "Ctrl+Shift+Alt+M"),
+                ];
+                let gs = app.global_shortcut();
+                let mut chosen: Option<&str> = None;
+                for (sc, label) in candidates {
+                    if gs.register(sc).is_ok() {
+                        chosen = Some(label);
+                        break;
+                    }
+                }
+                match chosen {
+                    Some(label) => {
+                        println!("[mini] global shortcut registered: {label}");
+                        *MINI_HOTKEY.lock().unwrap() = Some(label.to_string());
+                    }
+                    None => eprintln!("[mini] no global shortcut available (all candidates taken)"),
                 }
             }
 
@@ -2516,6 +2544,7 @@ pub fn run() {
             audio_get_endpoint_volume,
             audio_set_endpoint_volume,
             audio_set_endpoint_mute,
+            get_mini_hotkey,
             list_audio_sessions,
             start_passthrough,
             stop_passthrough,

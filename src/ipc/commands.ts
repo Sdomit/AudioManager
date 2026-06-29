@@ -65,6 +65,10 @@ export const audioSetEndpointVolume = (id: string, level: number): Promise<void>
 export const audioSetEndpointMute = (id: string, muted: boolean): Promise<void> =>
   invoke<void>("audio_set_endpoint_mute", { id, muted });
 
+/** The global shortcut the mini controller registered (after its fallback chain). */
+export const getMiniHotkey = (): Promise<string | null> =>
+  invoke<string | null>("get_mini_hotkey");
+
 // ── Phase 1 passthrough (kept for compatibility) ──────────────────────────────
 
 export const startPassthrough = (inputId: string, outputId: string): Promise<void> =>
