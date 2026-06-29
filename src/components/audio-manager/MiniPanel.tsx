@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Knob } from "./Knob";
 import { MuteIcon } from "./Icon";
 import {
@@ -79,6 +79,9 @@ export function MiniPanel({
   const [eps, setEps] = useState<Endpoints>(EMPTY_ENDPOINTS);
   // Polled endpoint volumes, keyed by device id.
   const [epVol, setEpVol] = useState<Record<string, { volume: number; muted: boolean }>>({});
+  // deviceId -> last local-set timestamp; the poll skips these briefly so a
+  // drag or mute toggle isn't snapped back by a stale read still in flight.
+  const recentlySetRef = useRef<Record<string, number>>({});
 
   const refreshEndpoints = useCallback(async () => {
     try {
@@ -100,6 +103,9 @@ export function MiniPanel({
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
+      // Don't burn COM cycles polling a hidden window (e.g. the mini window
+      // closed-to-hidden, or a backgrounded tab).
+      if (typeof document !== "undefined" && document.hidden) return;
       const ids = new Set<string>();
       for (const t of [knobA, knobB]) {
         const id = resolveEndpointId(t, eps);
@@ -111,9 +117,15 @@ export function MiniPanel({
           [...ids].map(async (id) => [id, await audioGetEndpointVolume(id)] as const),
         );
         if (cancelled) return;
+        const now = Date.now();
         setEpVol((prev) => {
           const next = { ...prev };
-          for (const [id, v] of entries) next[id] = { volume: v.volume, muted: v.muted };
+          for (const [id, v] of entries) {
+            // Skip ids the user touched in the last 700ms so a live drag/toggle
+            // wins over an in-flight stale read.
+            if (now - (recentlySetRef.current[id] ?? 0) < 700) continue;
+            next[id] = { volume: v.volume, muted: v.muted };
+          }
           return next;
         });
       } catch {
@@ -144,11 +156,13 @@ export function MiniPanel({
           available: id !== null,
           setValue: (v: number) => {
             if (!id) return;
+            recentlySetRef.current[id] = Date.now();
             setEpVol((p) => ({ ...p, [id]: { volume: v, muted: p[id]?.muted ?? false } }));
             void audioSetEndpointVolume(id, v);
           },
           toggleMute: () => {
             if (!id) return;
+            recentlySetRef.current[id] = Date.now();
             const next = !(cur?.muted ?? false);
             setEpVol((p) => ({ ...p, [id]: { volume: p[id]?.volume ?? 0, muted: next } }));
             void audioSetEndpointMute(id, next);
