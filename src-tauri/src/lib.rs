@@ -2475,6 +2475,34 @@ pub fn run() {
                 }
             }
 
+            // Global shortcut (MC-4): Ctrl+Alt+M toggles the always-on-top mini
+            // controller window even when the app is unfocused. The handler only
+            // emits an event; the frontend owns the window create/show/hide logic
+            // (miniWindowApi.ts), keeping one source of truth.
+            #[cfg(desktop)]
+            {
+                use tauri::Emitter;
+                use tauri_plugin_global_shortcut::{
+                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                };
+                let toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
+                let toggle_for_handler = toggle.clone();
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(move |app, sc, event| {
+                            if sc == &toggle_for_handler
+                                && event.state() == ShortcutState::Pressed
+                            {
+                                let _ = app.emit("mini:toggle", ());
+                            }
+                        })
+                        .build(),
+                )?;
+                if let Err(e) = app.global_shortcut().register(toggle) {
+                    eprintln!("[mini] global shortcut register failed: {e}");
+                }
+            }
+
             let handle = app.handle().clone();
             std::thread::spawn(move || device_watch_loop(handle));
             Ok(())

@@ -31,6 +31,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
       { keys: ["4"], description: "Focus bus B2 (Record)" },
       { keys: ["↑", "↓"], description: "Navigate inputs (when an input is selected)" },
       { keys: ["V"], description: "Toggle console / card view" },
+      { keys: ["Ctrl", "Alt", "M"], description: "Open / hide the mini controller (global — works from any app)" },
     ],
   },
   {

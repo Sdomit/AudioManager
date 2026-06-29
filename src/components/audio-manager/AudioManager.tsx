@@ -21,7 +21,8 @@ import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
 import { MiniPanel } from "./MiniPanel";
-import { openMiniWindow } from "./miniWindowApi";
+import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
+import { listen } from "@tauri-apps/api/event";
 import miniStyles from "./MiniPanel.module.css";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
@@ -221,6 +222,17 @@ export function AudioManager() {
       /* private mode / quota — view mode just won't persist */
     }
   }, [busViewMode]);
+
+  // MC-4: the Rust global shortcut (Ctrl+Alt+M) emits "mini:toggle"; the main
+  // window owns the window toggle so there is one source of truth.
+  useEffect(() => {
+    const un = listen("mini:toggle", () => {
+      void toggleMiniWindow();
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [miniOpen, setMiniOpen] = useState(false);
   const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
