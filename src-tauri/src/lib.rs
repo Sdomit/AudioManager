@@ -2508,7 +2508,8 @@ pub fn run() {
                 )?;
                 // Ctrl+Alt+M is the documented default but is commonly taken by
                 // other apps, so fall back to the first candidate that registers.
-                let candidates: [(Shortcut, &str); 4] = [
+                let candidates: [(Shortcut, &str); 5] = [
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyP), "Ctrl+Shift+P"),
                     (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM), "Ctrl+Alt+M"),
                     (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F10), "Ctrl+Shift+F10"),
                     (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F9), "Ctrl+Alt+F9"),

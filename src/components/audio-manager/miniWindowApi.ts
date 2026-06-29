@@ -6,8 +6,8 @@ export const MINI_LABEL = "mini";
 const MINI_OPTIONS = {
   url: "index.html#mini",
   title: "Mini Controller",
-  width: 320,
-  height: 432,
+  width: 312,
+  height: 384,
   resizable: false,
   decorations: false,
   alwaysOnTop: true,

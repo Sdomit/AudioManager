@@ -810,7 +810,7 @@ export function AudioManager() {
           className={miniStyles.toggle}
           onClick={() => void openMiniWindow()}
           aria-label="Open mini controller window"
-          title="Mini controller (Ctrl+Shift+F10)"
+          title="Open mini controller (Ctrl+Shift+P)"
         >
           🎛
         </button>
