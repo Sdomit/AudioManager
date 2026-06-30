@@ -368,6 +368,7 @@ dependencies = [
  "rcgen 0.14.8",
  "ringbuf",
  "rust-embed",
+ "rustfft",
  "rustls",
  "serde",
  "serde_json",

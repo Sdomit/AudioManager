@@ -1188,6 +1188,19 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     }
 }
 
+/// Return the current spectrum magnitude bins (dBFS) for a bus.
+/// Returns N_BINS = 1024 values, dc..nyquist. Empty vec when bus not running.
+#[tauri::command]
+fn get_spectrum_data(state: tauri::State<AppState>, bus_id: BusId) -> Vec<f32> {
+    let inner = state.inner.lock().unwrap();
+    inner
+        .buses
+        .get(&bus_id)
+        .and_then(|b| b.engine.as_ref())
+        .map(|e| e.read_spectrum())
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 fn set_bus_device(
     state: tauri::State<AppState>,
@@ -2453,6 +2466,7 @@ pub fn run() {
             set_send_gain,
             list_buses,
             get_system_status,
+            get_spectrum_data,
             set_bus_device,
             set_bus_volume,
             set_bus_enabled,

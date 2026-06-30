@@ -10,6 +10,9 @@ interface InputRowProps {
   onToggleMute: () => void;
   onToggleMonitor: () => void;
   onGainChange: (v: number) => void;
+  onSolo?: () => void;
+  soloed?: boolean;
+  soloActive?: boolean;
 }
 
 /**
@@ -26,10 +29,14 @@ export function InputRow({
   onToggleMute,
   onToggleMonitor,
   onGainChange,
+  onSolo,
+  soloed,
+  soloActive,
 }: InputRowProps) {
+  const soloedOut = soloActive && !soloed;
   return (
     <div
-      className={`${styles.row} ${selected ? styles.selected : ""} ${input.muted ? styles.muted : ""}`}
+      className={`${styles.row} ${selected ? styles.selected : ""} ${input.muted ? styles.muted : ""} ${soloedOut ? styles.soloedOut : ""}`}
       onClick={onSelect}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -118,6 +125,21 @@ export function InputRow({
       >
         <HeadphonesIcon size={14} />
       </button>
+
+      {onSolo && (
+        <button
+          className={`${styles.soloBtn} ${soloed ? styles.soloBtnActive : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSolo();
+          }}
+          aria-pressed={!!soloed}
+          aria-label={soloed ? `Unsolo ${input.name}` : `Solo ${input.name}`}
+          title={soloed ? "Soloed — click to unsolo" : "Solo (mute others)"}
+        >
+          S
+        </button>
+      )}
 
       <button
         className={`${styles.muteBtn} ${input.muted ? styles.muteBtnActive : ""}`}

@@ -30,6 +30,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # RNNoise neural denoiser (pure-Rust port). Library only — `default-features
 # = false` drops the CLI `bin`/`dasp` deps (clap, hound, anyhow). #37
 nnnoiseless = { version = "0.5.2", default-features = false }
+# Real-FFT for per-bus spectrum analysis. Pure Rust, no build scripts.
+rustfft = "6"
 
 # DeepFilterNet (phase 2, #37) is NOT wired as a build dep on purpose. A working
 # prototype used:

@@ -132,6 +132,19 @@
   text-align: right;
 }
 
+/* ── Loudness row (RMS + LUFS-M) ───────────────────────────────────── */
+.loudnessRow {
+  display: flex;
+  gap: var(--am-space-5);
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-11, 11px);
+  color: var(--am-text-secondary);
+}
+.loudnessLabel {
+  color: var(--am-text-tertiary, var(--am-text-secondary));
+  margin-right: 2px;
+}
+
 /* ── Error row ──────────────────────────────────────────────────────── */
 .errorRow {
   display: flex;

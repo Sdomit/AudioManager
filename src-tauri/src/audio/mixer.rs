@@ -15,6 +15,7 @@ use crate::audio::dsp::{
 };
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::meters::{verdict_for, LoudnessSnapshot, StreamAnalyzer, SILENCE_FLOOR_DB};
+use crate::audio::spectrum::SpectrumBins;
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::remote::{self, RemoteSubscription};
 use crate::audio::source::InputSourceSpec;
@@ -134,6 +135,9 @@ struct MixerSharedMeters {
     lufs_momentary: AtomicU32, // f32 bits, LUFS
     lufs_short: AtomicU32,     // f32 bits, LUFS
     true_peak: AtomicU32,      // f32 bits, linear
+    /// Spectrum bins (N_BINS = 1024) written by the background FFT thread,
+    /// read by the IPC thread for `get_spectrum_data`.
+    pub spectrum_bins: Arc<SpectrumBins>,
 }
 
 /// Live handle to a running mixer engine.
@@ -265,6 +269,12 @@ impl MixerEngine {
             true_peak_db,
             verdict: verdict_for(lufs_short, true_peak_db),
         }
+    }
+
+    /// Current spectrum magnitude bins (dBFS, N_BINS = 1024 values).
+    /// Pure loads — safe to call from any thread at any time.
+    pub fn read_spectrum(&self) -> Vec<f32> {
+        self.meters.spectrum_bins.read()
     }
 
     /// Publish new DSP parameters for input at `index`. Lock-free: the audio
@@ -481,6 +491,7 @@ pub fn start(
     } else {
         1.0
     };
+    let spectrum_bins = Arc::new(SpectrumBins::new());
     let meters = Arc::new(MixerSharedMeters {
         output_peak: AtomicU32::new(0.0f32.to_bits()),
         clipped: AtomicBool::new(false),
@@ -490,6 +501,7 @@ pub fn start(
         lufs_momentary: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
         lufs_short: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
         true_peak: AtomicU32::new(0.0f32.to_bits()),
+        spectrum_bins: Arc::clone(&spectrum_bins),
     });
 
     let (result_tx, result_rx) = mpsc::channel::<Result<StartInfo, EngineError>>();
@@ -840,6 +852,13 @@ pub fn start(
             // per output block. Constructed at the output stream's rate.
             let mut analyzer = StreamAnalyzer::new(out_sample_rate.0, out_channels);
 
+            // Spectrum analyzer: background FFT thread consumes the ring and
+            // writes N_BINS dB bins into meters_for_thread.spectrum_bins.
+            let mut spectrum_tap = crate::audio::spectrum::spawn_thread(
+                Arc::clone(&meters_for_thread.spectrum_bins),
+                out_sample_rate.0,
+            );
+
             // Per-input scratch for bulk ring reads: one `pop_slice` per input per
             // block instead of one atomic `pop()` per sample. Sized to the ring
             // capacity so a block can never exceed it; reused across callbacks so
@@ -1141,6 +1160,14 @@ pub fn start(
                             };
                             analyzer.process_frame(clamped_frame[0], meter_r);
 
+                            // Spectrum: push mono-mixed post-clamp sample.
+                            let mono = if out_channels > 1 {
+                                (clamped_frame[0] + clamped_frame[1]) * 0.5
+                            } else {
+                                clamped_frame[0]
+                            };
+                            spectrum_tap.push(mono);
+
                             if !active_taps.is_empty() {
                                 for tap in active_taps.iter_mut() {
                                     if matches!(tap.kind, CallbackTapKind::BusOut) {
@@ -1320,6 +1347,7 @@ mod tests {
                 lufs_momentary: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
                 lufs_short: AtomicU32::new(SILENCE_FLOOR_DB.to_bits()),
                 true_peak: AtomicU32::new(0.0f32.to_bits()),
+                spectrum_bins: Arc::new(SpectrumBins::new()),
             }),
             dsp_shared: vec![],
             bus_dsp_shared: Arc::new(BusDspShared::new(&BusDspConfig::default(), 48_000.0)),

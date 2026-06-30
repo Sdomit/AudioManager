@@ -167,6 +167,9 @@ export const listBuses = (): Promise<BusStatus[]> =>
 export const getSystemStatus = (): Promise<SystemStatus> =>
   invoke<SystemStatus>("get_system_status");
 
+export const getSpectrumData = (busId: BusId): Promise<number[]> =>
+  invoke<number[]>("get_spectrum_data", { busId });
+
 /** Assign or unassign the output device for a bus. Pass null to unassign. */
 export const setBusDevice = (
   busId: BusId,

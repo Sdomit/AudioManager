@@ -19,6 +19,8 @@ import { StreamSetupSheet } from "./StreamSetupSheet";
 import { PhonePairingSheet } from "./PhonePairingSheet";
 import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
+import { TemplateDialog } from "./TemplateDialog";
+import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
@@ -40,6 +42,9 @@ import styles from "./AudioManager.module.css";
  * etc.) without taking focus. The region is created lazily on first use
  * and reused for the rest of the session.
  */
+/** localStorage key for the persisted bus-rail view mode (card vs console). */
+const LS_BUS_VIEW_MODE = "am-bus-view-mode";
+
 function announce(message: string) {
   if (typeof document === "undefined") return;
   let region = document.getElementById("am-aria-live");
@@ -202,6 +207,20 @@ export function AudioManager() {
   const loadedPreset = state.presets.find((p) => p.id === state.loadedPresetId);
 
   const [hotkeyOverlayOpen, setHotkeyOverlayOpen] = useState(false);
+  const [busViewMode, setBusViewMode] = useState<"card" | "console">(() => {
+    const saved = localStorage.getItem(LS_BUS_VIEW_MODE);
+    return saved === "console" ? "console" : "card";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_BUS_VIEW_MODE, busViewMode);
+    } catch {
+      /* private mode / quota — view mode just won't persist */
+    }
+  }, [busViewMode]);
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
+  const preSoloMutesRef = useRef<Record<string, boolean>>({});
 
   // Hotkeys. Pause whenever a text field is focused (so typing in the
   // preset save dialog or the device-picker search doesn't trip Space
@@ -222,6 +241,32 @@ export function AudioManager() {
     hotkeyOverlayOpen;
   const dialogOpenRef = useRef(dialogOpen);
   dialogOpenRef.current = dialogOpen;
+
+  const handleSoloInput = useCallback((id: string) => {
+    if (soloedInputId === id) {
+      // Unsolo: restore pre-solo mute states
+      const saved = preSoloMutesRef.current;
+      for (const input of am.state.inputs) {
+        const wasMuted = saved[input.id] ?? false;
+        if (input.muted !== wasMuted) am.setInputMuted(input.id, wasMuted);
+      }
+      preSoloMutesRef.current = {};
+      setSoloedInputId(null);
+    } else {
+      // Solo: snapshot mutes, mute all except id
+      const snapshot: Record<string, boolean> = {};
+      for (const input of am.state.inputs) snapshot[input.id] = input.muted;
+      preSoloMutesRef.current = snapshot;
+      setSoloedInputId(id);
+      for (const input of am.state.inputs) {
+        const target = input.id !== id;
+        if (input.muted !== target) am.setInputMuted(input.id, target);
+      }
+      // Ensure the soloed input is unmuted
+      const soloing = am.state.inputs.find((i) => i.id === id);
+      if (soloing?.muted) am.setInputMuted(id, false);
+    }
+  }, [soloedInputId, am]);
 
   useEffect(() => {
     const isTextEntryTarget = (el: EventTarget | null): boolean => {
@@ -333,6 +378,31 @@ export function AudioManager() {
         return;
       }
 
+      // S → solo selected input (mute all others); press again to unsolo.
+      if (e.key === "s" || e.key === "S") {
+        if (sel.kind !== "input") return;
+        e.preventDefault();
+        handleSoloInput(sel.inputId);
+        return;
+      }
+
+      // V → toggle bus rail view mode (card ↔ console).
+      if (e.key === "v" || e.key === "V") {
+        e.preventDefault();
+        setBusViewMode((m) => (m === "card" ? "console" : "card"));
+        return;
+      }
+
+      // Up/Down + bus selected → nudge volume. Shift = coarse (5 %), bare = fine (1 %).
+      if (sel.kind === "bus" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const bus = cur.state.buses.find((b) => b.id === sel.busId);
+        if (!bus) return;
+        e.preventDefault();
+        const delta = (e.shiftKey ? 0.05 : 0.01) * (e.key === "ArrowUp" ? 1 : -1);
+        cur.setBusVolume(sel.busId, Math.min(1, Math.max(0, bus.volume + delta)));
+        return;
+      }
+
       // Up/Down → move selection in the input list.
       if (sel.kind === "input" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const inputs = cur.state.inputs;
@@ -386,6 +456,7 @@ export function AudioManager() {
         onDensityChange={am.setDensity}
         onOpenStreamSetup={am.openStreamSetup}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenTemplates={() => setTemplateDialogOpen(true)}
       />
 
       {/* Slot order A1/A2/B1/B2 is the sync-plan contract — don't trust
@@ -424,6 +495,8 @@ export function AudioManager() {
         onVolumeChange={am.setBusVolume}
         onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
+        viewMode={busViewMode}
+        onToggleViewMode={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
       />
 
       <main className={styles.main}>
@@ -444,6 +517,8 @@ export function AudioManager() {
             }}
             onInputGainChange={am.setInputGain}
             onAddInput={() => setInputPickerOpen(true)}
+            onSoloInput={handleSoloInput}
+            soloedInputId={soloedInputId}
           />
         )}
 
@@ -638,6 +713,18 @@ export function AudioManager() {
       <HotkeyOverlay
         open={hotkeyOverlayOpen}
         onClose={() => setHotkeyOverlayOpen(false)}
+      />
+
+      <TemplateDialog
+        open={templateDialogOpen}
+        onClose={() => setTemplateDialogOpen(false)}
+        onApply={async (t: DeviceTemplate) => {
+          for (const b of t.buses) {
+            await am.renameBus(b.id, b.name);
+            await am.setBusVolume(b.id, b.volume);
+            await am.setBusEnabled(b.id, b.enabled);
+          }
+        }}
       />
 
       <PresetSaveDialog

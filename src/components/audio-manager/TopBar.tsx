@@ -47,6 +47,8 @@ interface TopBarProps {
   onOpenAutomix: () => void;
   /** Open the settings sheet (#feature9). */
   onOpenSettings: () => void;
+  /** Open the device profile template picker. */
+  onOpenTemplates: () => void;
 }
 
 /**
@@ -75,6 +77,7 @@ export function TopBar({
   onOpenRecordings,
   onOpenAutomix,
   onOpenSettings,
+  onOpenTemplates,
 }: TopBarProps) {
   const loaded = presets.find((p) => p.id === loadedPresetId);
   const streamHealth = computeStreamHealth(streamSetupSteps);
@@ -122,6 +125,7 @@ export function TopBar({
           onRename={onRenamePreset}
           onDelete={onDeletePreset}
           onSetDefault={onSetDefaultPreset}
+          onOpenTemplates={onOpenTemplates}
         />
       </div>
 
@@ -222,6 +226,7 @@ function PresetMenu({
   onRename,
   onDelete,
   onSetDefault,
+  onOpenTemplates,
 }: {
   presets: Preset[];
   loaded?: Preset;
@@ -231,6 +236,7 @@ function PresetMenu({
   onRename: (id: string) => void;
   onDelete: (id: string) => void;
   onSetDefault: (id: string | null) => void;
+  onOpenTemplates: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [ctxFor, setCtxFor] = useState<string | null>(null);
@@ -300,6 +306,16 @@ function PresetMenu({
               ))
             )}
             <div className={styles.menuDivider} />
+            <button
+              role="menuitem"
+              className={styles.menuItem}
+              onClick={() => {
+                onOpenTemplates();
+                setOpen(false);
+              }}
+            >
+              <span className={styles.menuItemName}>Start from template…</span>
+            </button>
             <button
               role="menuitem"
               className={styles.menuItem}
