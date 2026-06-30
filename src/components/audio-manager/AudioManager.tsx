@@ -20,6 +20,9 @@ import { PhonePairingSheet } from "./PhonePairingSheet";
 import { SettingsSheet } from "./SettingsSheet";
 import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
+import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
+import { listen } from "@tauri-apps/api/event";
+import miniStyles from "./MiniPanel.module.css";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
@@ -218,6 +221,17 @@ export function AudioManager() {
       /* private mode / quota — view mode just won't persist */
     }
   }, [busViewMode]);
+
+  // MC-4: the Rust global shortcut (Ctrl+Alt+M) emits "mini:toggle"; the main
+  // window owns the window toggle so there is one source of truth.
+  useEffect(() => {
+    const un = listen("mini:toggle", () => {
+      void toggleMiniWindow();
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [soloedInputId, setSoloedInputId] = useState<string | null>(null);
   const preSoloMutesRef = useRef<Record<string, boolean>>({});
@@ -788,6 +802,19 @@ export function AudioManager() {
         }}
         onClose={() => setBusRenameFor(null)}
       />
+
+      {/* Mini Controller launcher — opens the always-on-top pop-out window. */}
+      <div className={miniStyles.launcher}>
+        <button
+          type="button"
+          className={miniStyles.toggle}
+          onClick={() => void openMiniWindow()}
+          aria-label="Open mini controller window"
+          title="Open mini controller (Ctrl+Shift+P)"
+        >
+          🎛
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,0 +1,91 @@
+.knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--am-space-2);
+}
+
+.dialWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  border-radius: var(--am-radius-pill);
+  touch-action: none; /* vertical drag drives the value, not scroll */
+  outline: none;
+}
+.dialWrap:focus-visible {
+  box-shadow: 0 0 0 2px var(--am-accent-ring);
+}
+.dialWrap[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.dial {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.track {
+  fill: none;
+  stroke: var(--am-meter-track);
+  stroke-width: 7px;
+  stroke-linecap: round;
+}
+
+/* Center mute zone — a real button so it's clickable + focusable. */
+.muteZone {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--am-radius-pill);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  cursor: pointer;
+  transition: background var(--am-dur-fast), border-color var(--am-dur-fast),
+    transform var(--am-dur-fast);
+}
+.muteZone:hover:not(:disabled) {
+  background: var(--am-surface-3);
+}
+.muteZone:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.muteZone:disabled {
+  cursor: not-allowed;
+}
+.muteZone.muted {
+  background: var(--am-danger-muted);
+  border-color: var(--am-accent);
+}
+
+.muteGlyph {
+  font-size: 17px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.readout {
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-16);
+  font-weight: 600;
+  color: var(--am-text-primary);
+}
+.readoutMuted {
+  color: var(--am-meter-clip);
+}
+
+.label {
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

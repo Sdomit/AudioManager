@@ -2,6 +2,7 @@ pub mod bus;
 pub mod device_watch;
 pub mod devices;
 pub mod dsp;
+pub mod endpoint_ctl;
 pub mod graph;
 pub mod loopback;
 pub mod metering_tap;

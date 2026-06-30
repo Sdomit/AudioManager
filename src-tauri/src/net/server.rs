@@ -21,10 +21,11 @@ use tokio::sync::mpsc;
 
 use super::session::{self, HelloOutcome};
 use super::signaling::{
-    encode_server_message, parse_client_message, ClientMessage, ProtocolError, ServerMessage,
-    ServerInfo,
+    encode_server_message, parse_client_message, ClientMessage, EndpointStateView, ProtocolError,
+    ServerInfo, ServerMessage,
 };
 use super::webrtc_peer;
+use crate::audio::endpoint_ctl;
 
 #[derive(RustEmbed)]
 #[folder = "../dist-phone/"]
@@ -345,6 +346,40 @@ async fn handle_socket(socket: WebSocket) {
                                     }
                                 }
                             }
+                            // Mini-controller remote (MC-5). Gated on an accepted
+                            // session so a still-pending phone can never drive the
+                            // desktop's OS audio. Each change echoes a fresh state.
+                            Ok(ClientMessage::SetEndpointVolume { target, value }) => {
+                                if session::is_accepted(&session_id) {
+                                    if let Some(dir) = endpoint_direction(&target) {
+                                        if let Ok(Some(id)) = endpoint_ctl::default_endpoint_id(dir) {
+                                            let _ = endpoint_ctl::set_endpoint_volume(&id, value);
+                                        }
+                                    }
+                                    if send(&mut sink, &endpoint_state_message()).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Ok(ClientMessage::SetEndpointMute { target, muted }) => {
+                                if session::is_accepted(&session_id) {
+                                    if let Some(dir) = endpoint_direction(&target) {
+                                        if let Ok(Some(id)) = endpoint_ctl::default_endpoint_id(dir) {
+                                            let _ = endpoint_ctl::set_endpoint_mute(&id, muted);
+                                        }
+                                    }
+                                    if send(&mut sink, &endpoint_state_message()).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Ok(ClientMessage::RequestEndpointState) => {
+                                if session::is_accepted(&session_id)
+                                    && send(&mut sink, &endpoint_state_message()).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
                             Ok(ClientMessage::Bye { .. }) => break,
                             Err(ProtocolError::Version { got }) => {
                                 let _ = send(&mut sink, &ServerMessage::version_error(got)).await;
@@ -384,4 +419,50 @@ async fn send(
     sink.send(Message::Text(encode_server_message(msg).into()))
         .await
         .map_err(|_| ())
+}
+
+/// Map a remote "speaker"/"mic" target to an endpoint direction (MC-5).
+fn endpoint_direction(target: &str) -> Option<endpoint_ctl::Direction> {
+    match target {
+        "speaker" => Some(endpoint_ctl::Direction::Render),
+        "mic" => Some(endpoint_ctl::Direction::Capture),
+        _ => None,
+    }
+}
+
+/// Snapshot the current OS default speaker + mic for an `EndpointState` push
+/// (MC-5). The COM calls are synchronous but user-driven and infrequent, so
+/// they run inline. ponytail: if a control burst ever stutters the ws task,
+/// wrap these in `tokio::task::spawn_blocking`.
+fn endpoint_state_message() -> ServerMessage {
+    let endpoints = [
+        ("speaker", endpoint_ctl::Direction::Render),
+        ("mic", endpoint_ctl::Direction::Capture),
+    ]
+    .into_iter()
+    .map(|(target, dir)| match endpoint_ctl::default_endpoint_id(dir) {
+        Ok(Some(id)) => {
+            let vol = endpoint_ctl::get_endpoint_volume(&id).ok();
+            let name = endpoint_ctl::list_endpoints(dir)
+                .ok()
+                .and_then(|l| l.into_iter().find(|e| e.id == id).map(|e| e.name))
+                .unwrap_or_default();
+            EndpointStateView {
+                target: target.to_string(),
+                name,
+                volume: vol.as_ref().map(|v| v.volume).unwrap_or(0.0),
+                muted: vol.as_ref().map(|v| v.muted).unwrap_or(false),
+                available: vol.is_some(),
+            }
+        }
+        _ => EndpointStateView {
+            target: target.to_string(),
+            name: String::new(),
+            volume: 0.0,
+            muted: false,
+            available: false,
+        },
+    })
+    .collect();
+    ServerMessage::EndpointState { endpoints }
 }

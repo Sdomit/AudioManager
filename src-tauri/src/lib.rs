@@ -14,6 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 use audio::bus::{BusConfig, BusId, BusStatus};
 use audio::device_watch::{self, DeviceDiff, DeviceSnapshot};
 use audio::devices::{DeviceInfo, DeviceListError};
+use audio::endpoint_ctl;
 use audio::dsp::{AutomixConfig, AutomixGroupUpdate, BusDspConfig, DspConfig, MAX_AUTOMIX_GROUPS};
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerEngine, MixerInput};
@@ -36,6 +37,56 @@ fn list_input_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
 #[tauri::command]
 fn list_output_devices() -> Result<Vec<DeviceInfo>, DeviceListError> {
     audio::devices::list_output_devices()
+}
+
+// ── OS audio endpoint control (Mini Controller) ───────────────────────────────
+// COM-backed: real MMDevice ids, per-endpoint volume/mute, and OS default
+// switching. Separate from the cpal enumeration above (cpal ids are names).
+
+#[tauri::command]
+fn audio_list_endpoints(
+    direction: endpoint_ctl::Direction,
+) -> Result<Vec<endpoint_ctl::EndpointInfo>, endpoint_ctl::EndpointError> {
+    endpoint_ctl::list_endpoints(direction)
+}
+
+#[tauri::command]
+fn audio_default_endpoint(
+    direction: endpoint_ctl::Direction,
+) -> Result<Option<String>, endpoint_ctl::EndpointError> {
+    endpoint_ctl::default_endpoint_id(direction)
+}
+
+#[tauri::command]
+fn audio_set_default_endpoint(id: String) -> Result<(), endpoint_ctl::EndpointError> {
+    endpoint_ctl::set_default_endpoint(&id)
+}
+
+#[tauri::command]
+fn audio_get_endpoint_volume(
+    id: String,
+) -> Result<endpoint_ctl::EndpointVolume, endpoint_ctl::EndpointError> {
+    endpoint_ctl::get_endpoint_volume(&id)
+}
+
+#[tauri::command]
+fn audio_set_endpoint_volume(id: String, level: f32) -> Result<(), endpoint_ctl::EndpointError> {
+    endpoint_ctl::set_endpoint_volume(&id, level)
+}
+
+#[tauri::command]
+fn audio_set_endpoint_mute(id: String, muted: bool) -> Result<(), endpoint_ctl::EndpointError> {
+    endpoint_ctl::set_endpoint_mute(&id, muted)
+}
+
+/// The global shortcut the mini controller actually registered after the
+/// fallback chain (e.g. "Ctrl+Alt+M"), or None if every candidate was taken.
+static MINI_HOTKEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Label of the active mini-controller global shortcut, for the hotkey overlay.
+#[tauri::command]
+fn get_mini_hotkey() -> Option<String> {
+    MINI_HOTKEY.lock().unwrap().clone()
 }
 
 /// List applications currently holding a session on the default render
@@ -2434,6 +2485,53 @@ pub fn run() {
                 }
             }
 
+            // Global shortcut (MC-4): Ctrl+Alt+M toggles the always-on-top mini
+            // controller window even when the app is unfocused. The handler only
+            // emits an event; the frontend owns the window create/show/hide logic
+            // (miniWindowApi.ts), keeping one source of truth.
+            #[cfg(desktop)]
+            {
+                use tauri::Emitter;
+                use tauri_plugin_global_shortcut::{
+                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                };
+                // Only ever one shortcut is registered (the first free candidate),
+                // so the handler emits on any Pressed event — no need to match.
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(move |app, _sc, event| {
+                            if event.state() == ShortcutState::Pressed {
+                                let _ = app.emit("mini:toggle", ());
+                            }
+                        })
+                        .build(),
+                )?;
+                // Ctrl+Alt+M is the documented default but is commonly taken by
+                // other apps, so fall back to the first candidate that registers.
+                let candidates: [(Shortcut, &str); 5] = [
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyP), "Ctrl+Shift+P"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM), "Ctrl+Alt+M"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F10), "Ctrl+Shift+F10"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F9), "Ctrl+Alt+F9"),
+                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT), Code::KeyM), "Ctrl+Shift+Alt+M"),
+                ];
+                let gs = app.global_shortcut();
+                let mut chosen: Option<&str> = None;
+                for (sc, label) in candidates {
+                    if gs.register(sc).is_ok() {
+                        chosen = Some(label);
+                        break;
+                    }
+                }
+                match chosen {
+                    Some(label) => {
+                        println!("[mini] global shortcut registered: {label}");
+                        *MINI_HOTKEY.lock().unwrap() = Some(label.to_string());
+                    }
+                    None => eprintln!("[mini] no global shortcut available (all candidates taken)"),
+                }
+            }
+
             let handle = app.handle().clone();
             std::thread::spawn(move || device_watch_loop(handle));
             Ok(())
@@ -2441,6 +2539,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_input_devices,
             list_output_devices,
+            audio_list_endpoints,
+            audio_default_endpoint,
+            audio_set_default_endpoint,
+            audio_get_endpoint_volume,
+            audio_set_endpoint_volume,
+            audio_set_endpoint_mute,
+            get_mini_hotkey,
             list_audio_sessions,
             start_passthrough,
             stop_passthrough,

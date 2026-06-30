@@ -1,0 +1,51 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--am-surface-0);
+  overflow: hidden;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--am-space-3) var(--am-space-3) var(--am-space-3) var(--am-space-4);
+  background: var(--am-surface-2);
+  border-bottom: 1px solid var(--am-border-subtle);
+  user-select: none;
+  flex-shrink: 0;
+  cursor: grab;
+}
+.titlebar:active {
+  cursor: grabbing;
+}
+
+.title {
+  font-size: var(--am-text-12);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--am-text-secondary);
+  /* Let drags that land on the text fall through to the drag-region bar. */
+  pointer-events: none;
+}
+
+.close {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--am-text-tertiary);
+  background: transparent;
+  border: none;
+  border-radius: var(--am-radius-sm);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast);
+}
+.close:hover {
+  background: var(--am-danger-muted);
+  color: var(--am-meter-clip);
+}

@@ -45,6 +45,16 @@ pub enum ClientMessage {
         #[serde(default)]
         battery_saver: Option<bool>,
     },
+    /// Mini-controller remote (MC-5): set the OS default speaker/mic volume.
+    /// `target` is "speaker" | "mic"; `value` is 0.0..=1.0. Honored only for an
+    /// accepted session.
+    #[serde(rename_all = "camelCase")]
+    SetEndpointVolume { target: String, value: f32 },
+    /// Mini-controller remote: mute/unmute the OS default speaker/mic.
+    #[serde(rename_all = "camelCase")]
+    SetEndpointMute { target: String, muted: bool },
+    /// Mini-controller remote: request a fresh `EndpointState` push.
+    RequestEndpointState,
     #[serde(rename_all = "camelCase")]
     Bye { reason: String },
 }
@@ -75,6 +85,10 @@ pub enum ServerMessage {
     },
     #[serde(rename_all = "camelCase")]
     Latency { mode: String },
+    /// Mini-controller remote (MC-5): current OS default speaker + mic state.
+    /// Pushed in reply to RequestEndpointState and after each remote change.
+    #[serde(rename_all = "camelCase")]
+    EndpointState { endpoints: Vec<EndpointStateView> },
     #[serde(rename_all = "camelCase")]
     Error {
         code: String,
@@ -84,6 +98,18 @@ pub enum ServerMessage {
     },
     #[serde(rename_all = "camelCase")]
     Bye { reason: String },
+}
+
+/// One endpoint's state for the phone remote (MC-5). `target` is "speaker" |
+/// "mic"; `available` is false when no default device exists (or off-Windows).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointStateView {
+    pub target: String,
+    pub name: String,
+    pub volume: f32,
+    pub muted: bool,
+    pub available: bool,
 }
 
 #[allow(dead_code)] // ua/ver logged at debug from Phase 2
@@ -149,7 +175,16 @@ pub fn parse_client_message(text: &str) -> Result<ClientMessage, ProtocolError> 
         // with a bad payload is malformed. serde does not distinguish, so we
         // check the tag against the known set ourselves.
         Err(_) => {
-            const KNOWN: [&str; 5] = ["hello", "offer", "candidate", "stats", "bye"];
+            const KNOWN: [&str; 8] = [
+                "hello",
+                "offer",
+                "candidate",
+                "stats",
+                "bye",
+                "set-endpoint-volume",
+                "set-endpoint-mute",
+                "request-endpoint-state",
+            ];
             if KNOWN.contains(&kind.as_str()) {
                 Err(ProtocolError::Malformed)
             } else {

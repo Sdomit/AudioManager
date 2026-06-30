@@ -558,6 +558,18 @@ pub fn status(session_id: &str) -> Option<PhoneSessionStatus> {
     registry().lock().unwrap().get(session_id).map(snapshot)
 }
 
+/// True only once the user has accepted this session. Gates the MC-5 remote
+/// endpoint controls so a still-pending (un-accepted) phone cannot drive the
+/// desktop's OS audio endpoints. PendingAccept → false; Accepted → true.
+pub fn is_accepted(session_id: &str) -> bool {
+    registry()
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .map(|s| matches!(s.state, SessionState::Accepted))
+        .unwrap_or(false)
+}
+
 fn snapshot(s: &PhoneSession) -> PhoneSessionStatus {
     let expires_in_secs = match s.state {
         SessionState::Created => Some(

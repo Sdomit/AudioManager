@@ -10,6 +10,9 @@ import type {
   BusStatus,
   DeviceInfo,
   DspConfig,
+  EndpointDirection,
+  EndpointInfo,
+  EndpointVolume,
   EngineStatus,
   InputChannel,
   PhonePairedDevice,
@@ -36,6 +39,35 @@ export const listOutputDevices = (): Promise<DeviceInfo[]> =>
 /** Apps currently playing audio (default render endpoint), for the AppPicker. */
 export const listAudioSessions = (): Promise<AudioSessionInfo[]> =>
   invoke<AudioSessionInfo[]>("list_audio_sessions");
+
+// ── OS endpoint control (Mini Controller) ─────────────────────────────────────
+// COM-backed: real MMDevice ids, per-endpoint volume/mute, OS default switching.
+
+export const audioListEndpoints = (
+  direction: EndpointDirection,
+): Promise<EndpointInfo[]> =>
+  invoke<EndpointInfo[]>("audio_list_endpoints", { direction });
+
+export const audioDefaultEndpoint = (
+  direction: EndpointDirection,
+): Promise<string | null> =>
+  invoke<string | null>("audio_default_endpoint", { direction });
+
+export const audioSetDefaultEndpoint = (id: string): Promise<void> =>
+  invoke<void>("audio_set_default_endpoint", { id });
+
+export const audioGetEndpointVolume = (id: string): Promise<EndpointVolume> =>
+  invoke<EndpointVolume>("audio_get_endpoint_volume", { id });
+
+export const audioSetEndpointVolume = (id: string, level: number): Promise<void> =>
+  invoke<void>("audio_set_endpoint_volume", { id, level });
+
+export const audioSetEndpointMute = (id: string, muted: boolean): Promise<void> =>
+  invoke<void>("audio_set_endpoint_mute", { id, muted });
+
+/** The global shortcut the mini controller registered (after its fallback chain). */
+export const getMiniHotkey = (): Promise<string | null> =>
+  invoke<string | null>("get_mini_hotkey");
 
 // ── Phase 1 passthrough (kept for compatibility) ──────────────────────────────
 

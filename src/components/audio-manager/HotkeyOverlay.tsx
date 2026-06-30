@@ -1,6 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { XIcon } from "./Icon";
+import { getMiniHotkey } from "../../ipc/commands";
 import styles from "./HotkeyOverlay.module.css";
+
+const MINI_HOTKEY_PREFIX = "Open / hide the mini controller";
 
 interface HotkeyOverlayProps {
   open: boolean;
@@ -31,6 +34,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
       { keys: ["4"], description: "Focus bus B2 (Record)" },
       { keys: ["↑", "↓"], description: "Navigate inputs (when an input is selected)" },
       { keys: ["V"], description: "Toggle console / card view" },
+      { keys: ["Ctrl", "Alt", "M"], description: "Open / hide the mini controller (global — works from any app)" },
     ],
   },
   {
@@ -65,6 +69,10 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
 ];
 
 export function HotkeyOverlay({ open, onClose }: HotkeyOverlayProps) {
+  // The mini-controller hotkey is resolved at runtime (fallback chain), so fetch
+  // the combo the backend actually registered. null = none could be registered.
+  const [miniKeys, setMiniKeys] = useState<string[] | null>(["Ctrl", "Alt", "M"]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -73,6 +81,19 @@ export function HotkeyOverlay({ open, onClose }: HotkeyOverlayProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    getMiniHotkey()
+      .then((label) => {
+        if (!cancelled) setMiniKeys(label ? label.split("+") : null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -103,10 +124,14 @@ export function HotkeyOverlay({ open, onClose }: HotkeyOverlayProps) {
             <section key={group.title} className={styles.group}>
               <h3 className={styles.groupTitle}>{group.title}</h3>
               <dl className={styles.entries}>
-                {group.entries.map((entry) => (
+                {group.entries.map((entry) => {
+                  const keys = entry.description.startsWith(MINI_HOTKEY_PREFIX)
+                    ? miniKeys ?? ["unavailable"]
+                    : entry.keys;
+                  return (
                   <div key={entry.description} className={styles.entry}>
                     <dt className={styles.keys}>
-                      {entry.keys.map((k, i) => (
+                      {keys.map((k, i) => (
                         <span key={`${k}-${i}`} className={styles.key}>
                           {k}
                         </span>
@@ -114,7 +139,8 @@ export function HotkeyOverlay({ open, onClose }: HotkeyOverlayProps) {
                     </dt>
                     <dd className={styles.description}>{entry.description}</dd>
                   </div>
-                ))}
+                  );
+                })}
               </dl>
             </section>
           ))}

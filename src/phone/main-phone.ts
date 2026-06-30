@@ -15,7 +15,12 @@ import {
   isFatalErrorCode,
   offerMessage,
   pairingFromHash,
+  requestEndpointStateMessage,
+  setEndpointMuteMessage,
+  setEndpointVolumeMessage,
   statsMessage,
+  type EndpointStateView,
+  type EndpointTarget,
 } from "./core/protocol";
 import { SignalingClient } from "./core/signaling";
 import {
@@ -122,6 +127,10 @@ let lowBandwidth = false;
 let deviceUnsub: (() => void) | null = null;
 // "Audio settings" collapsible open state, preserved across re-renders.
 let controlsOpen = false;
+// Mini-controller remote (MC-5): latest desktop speaker/mic state + the
+// "Desktop volume" panel's open state, both preserved across re-renders.
+let endpointState: EndpointStateView[] = [];
+let remoteOpen = false;
 
 /** Phone is in OS data-saver mode (best-effort; absent on some browsers). */
 const batterySaver =
@@ -140,6 +149,8 @@ if (!pairing) {
     onName(name: string) {
       saveName(name.trim() || defaultDeviceName());
     },
+    onRemoteVolume() {},
+    onRemoteMute() {},
   });
 } else {
   const machine = new PhoneMachine();
@@ -166,6 +177,8 @@ if (!pairing) {
           // though this load came from a fresh QR.
           credsArePersisted = true;
           machine.dispatch({ kind: "accepted" });
+          // Now trusted — pull the desktop speaker/mic state for the remote panel.
+          signaling.send(requestEndpointStateMessage());
           break;
         case "rejected":
           if (credsArePersisted) {
@@ -215,6 +228,11 @@ if (!pairing) {
           }
           break;
         case "latency":
+          break;
+        case "endpoint-state":
+          // Mini-controller remote (MC-5): reflect the desktop's speaker/mic.
+          endpointState = msg.endpoints;
+          rerender();
           break;
       }
     },
@@ -399,6 +417,13 @@ if (!pairing) {
         deviceName = name.trim() || defaultDeviceName();
         saveName(deviceName); // takes effect on the next hello; no live re-send
       },
+      onRemoteVolume: (target, value) => {
+        signaling.send(setEndpointVolumeMessage(target, value));
+      },
+      onRemoteMute: (target) => {
+        const cur = endpointState.find((e) => e.target === target);
+        signaling.send(setEndpointMuteMessage(target, !(cur?.muted ?? false)));
+      },
     });
   }
 
@@ -421,6 +446,8 @@ interface Handlers {
   onPickMic(deviceId: string): void;
   onLowBandwidth(): void;
   onName(name: string): void;
+  onRemoteVolume(target: EndpointTarget, value: number): void;
+  onRemoteMute(target: EndpointTarget): void;
 }
 
 function renderShell(state: PhoneState, reason: string | null, handlers?: Handlers) {
@@ -458,6 +485,9 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
   const showStart = state === "negotiating" && !mic && !starting;
   const showMeter = (state === "negotiating" || state === "live") && !!mic;
   const showKeepAwake = state === "live" || (state === "negotiating" && !!mic);
+  // MC-5 remote: the desktop speaker/mic panel shows once accepted. The desktop
+  // also gates server-side, so controls before accept are ignored anyway.
+  const showRemote = state === "live" || state === "negotiating";
   // Editable device name in the pre-live states where it still matters: before
   // pairing (missing-pairing), while waiting for accept, and after accept before
   // the mic starts. Edits apply on the next hello, so hide it once live.
@@ -579,6 +609,7 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
              </details>`
           : ""
       }
+      ${showRemote ? remotePanelHtml() : ""}
       ${showMeter ? `<button id="stopBtn" class="stopBtn">Stop streaming</button>` : ""}
       ${showKeepAwake ? `<p class="hint">Keep this screen on — locking the phone stops the mic in a browser.</p>` : ""}
     </main>`;
@@ -603,8 +634,19 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
       nameInput.oninput = onName;
       nameInput.onchange = onName;
     }
-    const settings = document.querySelector<HTMLDetailsElement>("details.settings");
+    const settings = document.querySelector<HTMLDetailsElement>("details.settings:not(.remotePanel)");
     if (settings) settings.ontoggle = () => (controlsOpen = settings.open);
+    // MC-5 remote controls. Sliders use `change` (fires on release) so an
+    // echoed endpoint-state push can't stomp the thumb mid-drag.
+    for (const s of Array.from(document.querySelectorAll<HTMLInputElement>("input[data-rt]"))) {
+      s.onchange = () =>
+        handlers.onRemoteVolume(s.dataset.rt as EndpointTarget, Number(s.value) / 100);
+    }
+    for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-rm]"))) {
+      b.onclick = () => handlers.onRemoteMute(b.dataset.rm as EndpointTarget);
+    }
+    const remote = document.querySelector<HTMLDetailsElement>("details.remotePanel");
+    if (remote) remote.ontoggle = () => (remoteOpen = remote.open);
   }
 }
 
@@ -628,4 +670,42 @@ function escapeHtml(s: string): string {
 
 function escapeAttr(s: string): string {
   return s.replace(/"/g, "&quot;");
+}
+
+// ── Mini-controller remote panel (MC-5) ───────────────────────────────────────
+
+/** The "Desktop volume" collapsible: a row each for the OS speaker and mic. */
+function remotePanelHtml(): string {
+  return `<details class="settings remotePanel" ${remoteOpen ? "open" : ""}>
+    <summary><span>Desktop volume</span><span class="chev"></span></summary>
+    <div style="padding:4px 0 8px">
+      ${remoteRowHtml("speaker", "Speaker")}
+      ${remoteRowHtml("mic", "Mic")}
+    </div>
+  </details>`;
+}
+
+/** One endpoint row: name + %, a release-fired slider, and a mute toggle. */
+function remoteRowHtml(target: EndpointTarget, fallback: string): string {
+  const v = endpointState.find((e) => e.target === target);
+  const avail = v?.available ?? false;
+  const vol = Math.round((v?.volume ?? 0) * 100);
+  const isMuted = v?.muted ?? false;
+  const name = (v?.name ?? "").trim() || fallback;
+  const dis = avail ? "" : "disabled";
+  return `<div style="padding:8px 13px;display:flex;flex-direction:column;gap:6px">
+    <div style="display:flex;justify-content:space-between;font-size:13px;color:#cdd3dd">
+      <span>${escapeHtml(name)}</span>
+      <span style="font-variant-numeric:tabular-nums;color:#8a93a3">${avail ? `${vol}%` : "—"}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <input type="range" data-rt="${target}" min="0" max="100" value="${vol}" ${dis}
+        aria-label="${escapeAttr(name)} volume" style="flex:1" />
+      <button data-rm="${target}" ${dis} aria-pressed="${isMuted}"
+        aria-label="${isMuted ? "Unmute" : "Mute"} ${escapeAttr(name)}"
+        style="background:none;border:none;font-size:18px;cursor:pointer;line-height:1">${
+          isMuted ? "🔇" : "🔊"
+        }</button>
+    </div>
+  </div>`;
 }
