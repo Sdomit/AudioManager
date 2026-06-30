@@ -14,6 +14,8 @@ import styles from "./PhonePairingSheet.module.css";
 interface PhonePairingSheetProps {
   open: boolean;
   onClose: () => void;
+  /** Add a paired phone to the mixer as a mic input, by its device id. */
+  onAddPhoneInput?: (id: string) => void;
 }
 
 // Fast enough that the "we hear you" level meter looks live, not stepped.
@@ -27,7 +29,7 @@ const POLL_MS = 250;
  * URL carries the pairing token in its fragment — it is rendered, never
  * logged. Closing the sheet discards the session if nothing ever scanned it.
  */
-export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
+export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairingSheetProps) {
   const [created, setCreated] = useState<PhoneSessionCreated | null>(null);
   const [sessions, setSessions] = useState<PhoneSessionStatus[]>([]);
   const [paired, setPaired] = useState<PhonePairedDevice[]>([]);
@@ -290,6 +292,16 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
                     </div>
                   </div>
                   <div className={styles.sessionActions}>
+                    {onAddPhoneInput && (
+                      <button
+                        className={styles.acceptBtn}
+                        aria-label={`Add ${d.label} to the mixer`}
+                        title="Add as a mic input"
+                        onClick={() => onAddPhoneInput(d.id)}
+                      >
+                        Add
+                      </button>
+                    )}
                     <button
                       className={styles.removeBtn}
                       aria-label={`Remove ${d.label}`}

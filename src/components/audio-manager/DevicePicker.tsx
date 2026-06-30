@@ -43,6 +43,10 @@ interface DevicePickerProps {
   onAddPhone?: () => void;
   /** Number of paired phones — tunes the phone entry hint (#phone-manager). */
   phoneCount?: number;
+  /** Currently-connected phones, addable directly as mic inputs. */
+  connectedPhones?: { id: string; label: string }[];
+  /** Add a connected phone to the mixer by its session/device id. */
+  onAddPhoneInput?: (id: string) => void;
 }
 
 const SYS_LOOPBACK_ID = "sys:default";
@@ -67,6 +71,8 @@ export function DevicePicker({
   includeLoopbackSources = false,
   onAddPhone,
   phoneCount = 0,
+  connectedPhones = [],
+  onAddPhoneInput,
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [sessions, setSessions] = useState<AudioSessionInfo[]>([]);
@@ -238,19 +244,34 @@ export function DevicePicker({
         {error && <div className={styles.errorMsg}>Error: {error}</div>}
 
         {!error && kind === "input" && onAddPhone && (
-          <ul className={styles.list} aria-label="Wireless sources">
+          <ul className={styles.list} aria-label="Phone sources">
+            {/* Connected phones — add directly as a mic input. */}
+            {connectedPhones.map((p) => (
+              <li key={p.id}>
+                <button
+                  className={styles.item}
+                  onClick={() => onAddPhoneInput?.(p.id)}
+                >
+                  <div className={styles.itemMain}>
+                    <div className={styles.itemName}>{p.label}</div>
+                    <div className={styles.itemMeta}>Connected phone · add as mic</div>
+                  </div>
+                </button>
+              </li>
+            ))}
+            {/* Pair a new phone / open the phone manager. */}
             <li>
               <button className={styles.item} onClick={onAddPhone}>
                 <div className={styles.itemMain}>
                   <div className={styles.itemName}>
-                    {phoneCount > 0
-                      ? `Phone microphone (${phoneCount} paired)`
-                      : "Phone microphone"}
+                    {connectedPhones.length > 0 ? "Add another phone…" : "Add phone"}
                   </div>
                   <div className={styles.itemMeta}>
-                    {phoneCount > 0
-                      ? "Open the phone manager to use or pair another"
-                      : "No phones connected — open the phone manager to pair by QR"}
+                    {connectedPhones.length > 0
+                      ? "Open the phone manager to pair by QR"
+                      : phoneCount > 0
+                        ? "No phone connected — open the phone manager"
+                        : "No phones connected — open the phone manager to pair by QR"}
                   </div>
                 </div>
               </button>

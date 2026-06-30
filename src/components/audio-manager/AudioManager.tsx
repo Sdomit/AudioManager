@@ -28,7 +28,7 @@ import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onDevicesChanged } from "../../ipc/events";
-import type { DeviceInfo } from "../../types/engine";
+import type { DeviceInfo, PhoneSessionStatus } from "../../types/engine";
 import {
   hasAnyAmvcDevice,
   suggestAmvcBusDevice,
@@ -103,6 +103,7 @@ export function AudioManager() {
   // hint. Refreshes when the phone manager opens/closes (after pair/forget) and
   // on a slow interval. Tolerates the phone server being down (→ 0).
   const [phoneCount, setPhoneCount] = useState(0);
+  const [phoneSessions, setPhoneSessions] = useState<PhoneSessionStatus[]>([]);
   // UI theme (dark default). Persisted locally; also drives the OS title bar.
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try { return localStorage.getItem("am.theme") === "light" ? "light" : "dark"; }
@@ -460,11 +461,30 @@ export function AudioManager() {
         .phoneListPaired()
         .then((list) => { if (!cancelled) setPhoneCount(list.length); })
         .catch(() => { if (!cancelled) setPhoneCount(0); });
+      ipc
+        .phoneListSessions()
+        .then((list) => { if (!cancelled) setPhoneSessions(list); })
+        .catch(() => { if (!cancelled) setPhoneSessions([]); });
     };
     fetchPhones();
     const t = window.setInterval(fetchPhones, 5000);
     return () => { cancelled = true; window.clearInterval(t); };
   }, [phonePairingOpen]);
+
+  // Phones whose audio is (re)connectable right now — addable to the mixer.
+  const connectedPhones = useMemo(
+    () =>
+      phoneSessions
+        .filter((s) => s.state === "accepted" || s.state === "reconnecting")
+        .map((s) => ({ id: s.id, label: s.label })),
+    [phoneSessions],
+  );
+
+  // Add a phone (by session/device id) as a mixer input: `phone:<id>`.
+  const addPhoneInput = useCallback(
+    (id: string) => { am.addInput(`phone:${id}`); },
+    [am],
+  );
 
   return (
     <div
@@ -720,6 +740,11 @@ export function AudioManager() {
           includeLoopbackSources
           recommendedDeviceId={recommendedInputDevice}
           phoneCount={phoneCount}
+          connectedPhones={connectedPhones}
+          onAddPhoneInput={(id) => {
+            setInputPickerOpen(false);
+            addPhoneInput(id);
+          }}
           onAddPhone={() => {
             setInputPickerOpen(false);
             setPhonePairingOpen(true);
@@ -735,6 +760,10 @@ export function AudioManager() {
       <PhonePairingSheet
         open={phonePairingOpen}
         onClose={() => setPhonePairingOpen(false)}
+        onAddPhoneInput={(id) => {
+          setPhonePairingOpen(false);
+          addPhoneInput(id);
+        }}
       />
 
       <SettingsSheet
