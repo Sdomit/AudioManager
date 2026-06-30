@@ -64,24 +64,24 @@
   border: 1px solid transparent;
   background: var(--am-surface-2, rgba(255, 255, 255, 0.06));
   color: inherit;
-  font-size: 12px;
+  font-size: var(--am-text-12);
   cursor: pointer;
 }
 
 .tabActive {
   background: var(--am-accent, #4f8cff);
-  color: #000;
+  color: var(--am-text-on-accent);
 }
 
 .panel {
   padding: 18px;
-  font-size: 13px;
+  font-size: var(--am-text-13);
   line-height: 1.5;
 }
 
 .sectionTitle {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--am-text-13);
 }
 
 .muted {
@@ -136,7 +136,7 @@
 .densityBtnActive {
   border-color: var(--am-accent, #4f8cff);
   background: var(--am-accent, #4f8cff);
-  color: #000;
+  color: var(--am-text-on-accent);
 }
 
 .spaced {

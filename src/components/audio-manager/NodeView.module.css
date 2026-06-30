@@ -53,7 +53,7 @@
   transition: background var(--am-dur-fast), color var(--am-dur-fast);
 }
 .zoomBtn {
-  font-size: 14px;
+  font-size: var(--am-text-14);
   line-height: 1;
   min-width: 22px;
 }
@@ -120,11 +120,11 @@
 }
 .viewSwitchBtnActive {
   background: var(--am-accent);
-  color: #fff;
+  color: var(--am-text-on-accent);
 }
 .viewSwitchBtnActive:hover {
   background: var(--am-accent);
-  color: #fff;
+  color: var(--am-text-on-accent);
 }
 
 .canvas {
@@ -315,7 +315,7 @@
 .nodeGainReadout {
   flex-shrink: 0;
   min-width: 44px;
-  font-size: 10px;
+  font-size: var(--am-text-10);
   font-variant-numeric: tabular-nums;
   text-align: right;
   color: var(--am-text-tertiary);
@@ -451,7 +451,7 @@
     var(--am-surface-1, #1b1e26) 100%);
   border: 1px solid var(--am-border-default);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--am-text-11);
   font-weight: 600;
   color: var(--am-text-secondary);
   cursor: grab;
@@ -487,7 +487,7 @@
   background: var(--am-surface-1, #1b1e26);
   border: 1px dashed var(--am-text-tertiary);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--am-text-11);
   font-weight: 600;
   color: var(--am-text-secondary);
   cursor: grab;
@@ -566,7 +566,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--am-text-tertiary);
-  font-size: 13px;
+  font-size: var(--am-text-13);
   line-height: 1;
   cursor: pointer;
 }
@@ -582,7 +582,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--am-text-tertiary);
-  font-size: 16px;
+  font-size: var(--am-text-16);
   line-height: 1;
   cursor: pointer;
   z-index: 4;
@@ -608,7 +608,7 @@
   border-color: var(--am-meter-clip, #EF4444) !important;
   animation: am-node-rec-pulse 1.6s ease-in-out infinite;
 }
-.recBadgeArmed:hover { background: #DC2626 !important; }
+.recBadgeArmed:hover { background: var(--am-accent-active) !important; }
 .recBadgeDisabled { opacity: 0.25; cursor: not-allowed; }
 @keyframes am-node-rec-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
@@ -625,7 +625,7 @@
   border-color: var(--am-meter-clip, #EF4444) !important;
   animation: am-node-rec-pulse 1.6s ease-in-out infinite;
 }
-.wirePopoverBtnRec:hover { background: #DC2626 !important; }
+.wirePopoverBtnRec:hover { background: var(--am-accent-active) !important; }
 
 /* ── Bus node specifics ───────────────────────────────────────────── */
 .busNode {
@@ -657,7 +657,7 @@
 
 .busNodeId {
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   color: var(--am-text-tertiary);
   background: var(--am-surface-3);
   padding: 1px 5px;
@@ -683,7 +683,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: var(--am-text-10);
   color: var(--am-text-tertiary);
   text-transform: uppercase;
   letter-spacing: var(--am-tracking-wide);
@@ -864,7 +864,7 @@
   background: transparent;
   border: 0;
   color: var(--am-text-primary, #e6e8ea);
-  font-size: 13px;
+  font-size: var(--am-text-13);
   text-align: left;
   padding: 7px 10px;
   border-radius: 5px;
@@ -881,7 +881,7 @@
 }
 .bgCtxHeading {
   padding: 4px 12px;
-  font-size: 10px;
+  font-size: var(--am-text-10);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;

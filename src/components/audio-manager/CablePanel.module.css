@@ -7,9 +7,9 @@
   border-left-width: 3px;
 }
 
-.tone_ok { border-left-color: #34d399; }
-.tone_warn { border-left-color: #fbbf24; }
-.tone_error { border-left-color: #f87171; }
+.tone_ok { border-left-color: var(--am-success); }
+.tone_warn { border-left-color: var(--am-warning); }
+.tone_error { border-left-color: var(--am-meter-clip); }
 .tone_neutral { border-left-color: var(--am-text-secondary); }
 
 .head {
@@ -26,9 +26,9 @@
   flex-shrink: 0;
 }
 
-.dot_ok { background: #34d399; }
-.dot_warn { background: #fbbf24; }
-.dot_error { background: #f87171; }
+.dot_ok { background: var(--am-success); }
+.dot_warn { background: var(--am-warning); }
+.dot_error { background: var(--am-meter-clip); }
 .dot_neutral { background: var(--am-text-secondary); }
 
 .headText {
@@ -36,13 +36,13 @@
 }
 
 .headline {
-  font-size: 13px;
+  font-size: var(--am-text-13);
   font-weight: 600;
   color: var(--am-text-primary);
 }
 
 .detail {
-  font-size: 12px;
+  font-size: var(--am-text-12);
   color: var(--am-text-secondary);
   margin-top: 2px;
 }
@@ -60,7 +60,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--am-text-11);
 }
 
 .epDot {
@@ -75,7 +75,7 @@
 }
 
 .epLive .epDot {
-  background: #34d399;
+  background: var(--am-success);
 }
 
 .epMissing {
@@ -91,7 +91,7 @@
   margin-left: 4px;
   padding: 0 5px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: var(--am-text-10);
   font-weight: 600;
   line-height: 16px;
   color: var(--am-text-primary);
@@ -100,14 +100,14 @@
 }
 
 .epTagConflict {
-  color: #fbbf24;
+  color: var(--am-warning);
   background: rgba(251, 191, 36, 0.15);
 }
 
 .conflictNote {
   margin-top: 10px;
-  font-size: 11px;
-  color: #fbbf24;
+  font-size: var(--am-text-11);
+  color: var(--am-warning);
 }
 
 .actions {
@@ -121,8 +121,8 @@
   border-radius: 6px;
   border: 1px solid var(--am-accent, #ef4444);
   background: var(--am-accent, #ef4444);
-  color: #fff;
-  font-size: 12px;
+  color: var(--am-text-on-accent);
+  font-size: var(--am-text-12);
   font-weight: 600;
   cursor: pointer;
 }
@@ -138,7 +138,7 @@
   border: 1px solid var(--am-border-default);
   background: transparent;
   color: var(--am-text-secondary);
-  font-size: 12px;
+  font-size: var(--am-text-12);
   cursor: pointer;
 }
 
@@ -150,4 +150,9 @@
 .secondaryBtn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* polish: smooth hover state (was instant) */
+.secondaryBtn {
+  transition: background var(--am-dur-fast) var(--am-ease-out), color var(--am-dur-fast) var(--am-ease-out), border-color var(--am-dur-fast) var(--am-ease-out);
 }

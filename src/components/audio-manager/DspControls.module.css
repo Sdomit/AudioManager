@@ -150,7 +150,7 @@
 }
 .toggle[data-on] .toggleKnob {
   transform: translateX(14px);
-  background: #fff;
+  background: var(--am-text-on-accent);
 }
 
 /* ── Stereo section ─────────────────────────────────────────────── */
@@ -188,7 +188,7 @@
 .pill[data-on] {
   background: var(--am-accent);
   border-color: var(--am-accent);
-  color: #fff;
+  color: var(--am-text-on-accent);
 }
 
 /* ── Preset row (Stream Voice / Reset) ──────────────────────────── */
@@ -200,7 +200,7 @@
 .presetBtn {
   font-size: var(--am-text-11);
   font-weight: 600;
-  color: #fff;
+  color: var(--am-text-on-accent);
   background: var(--am-accent);
   border: 1px solid var(--am-accent);
   border-radius: var(--am-radius-sm, 4px);

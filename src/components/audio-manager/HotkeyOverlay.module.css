@@ -31,7 +31,7 @@
 }
 
 .title {
-  font-size: 14px;
+  font-size: var(--am-text-14);
   font-weight: 600;
   color: var(--am-text-primary);
   margin: 0;
@@ -41,7 +41,7 @@
   background: transparent;
   border: 0;
   color: var(--am-text-secondary);
-  font-size: 18px;
+  font-size: var(--am-text-18);
   line-height: 1;
   cursor: pointer;
   padding: 4px 6px;
@@ -68,7 +68,7 @@
 }
 
 .groupTitle {
-  font-size: 11px;
+  font-size: var(--am-text-11);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--am-text-secondary);
@@ -107,7 +107,7 @@
   background: var(--am-surface-0);
   color: var(--am-text-primary);
   font-family: var(--am-font-mono, ui-monospace, "JetBrains Mono", Menlo, monospace);
-  font-size: 11px;
+  font-size: var(--am-text-11);
   font-weight: 600;
   line-height: 1.4;
   text-align: center;
@@ -116,7 +116,7 @@
 .description {
   margin: 0;
   color: var(--am-text-primary);
-  font-size: 13px;
+  font-size: var(--am-text-13);
 }
 
 .footer {
@@ -128,7 +128,7 @@
 }
 
 .footerHint {
-  font-size: 11px;
+  font-size: var(--am-text-11);
   color: var(--am-text-secondary);
 }
 

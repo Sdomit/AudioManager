@@ -28,7 +28,7 @@
 .axisLabel {
   fill: var(--am-text-tertiary);
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
 }
 
 .curve {

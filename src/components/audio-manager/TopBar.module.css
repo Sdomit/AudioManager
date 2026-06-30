@@ -258,7 +258,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: var(--am-text-14);
   color: var(--am-text-secondary);
   background: transparent;
   border: none;
@@ -347,7 +347,7 @@
 .menuStar {
   color: var(--am-warning, #F59E0B);
   margin-right: 6px;
-  font-size: 11px;
+  font-size: var(--am-text-11);
   vertical-align: 1px;
 }
 

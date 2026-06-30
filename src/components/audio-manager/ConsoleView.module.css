@@ -45,7 +45,7 @@
 }
 
 .channelLabel {
-  font-size: 11px;
+  font-size: var(--am-text-11);
   color: var(--am-text-secondary);
   text-align: center;
   line-height: 1.2;
@@ -75,7 +75,7 @@
 .dbVal,
 .volVal {
   font-family: var(--am-font-mono);
-  font-size: 11px;
+  font-size: var(--am-text-11);
   color: var(--am-text-secondary);
   min-height: 15px;
 }

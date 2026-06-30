@@ -61,7 +61,7 @@
 
 .defaultTag {
   margin-left: auto;
-  font-size: 10px;
+  font-size: var(--am-text-10);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--am-text-tertiary, #9aa3ad);
@@ -77,7 +77,7 @@
 }
 
 .sectionLabel {
-  font-size: 10px;
+  font-size: var(--am-text-10);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--am-text-tertiary, #9aa3ad);
