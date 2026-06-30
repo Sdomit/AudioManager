@@ -277,6 +277,13 @@ export const getRecorderSettings = (): Promise<RecorderSettings> =>
 export const setRecorderFormat = (format: RecordFormat): Promise<void> =>
   invoke<void>("set_recorder_format", { format });
 
+/** Whether the app is registered to launch on user sign-in. */
+export const getAutostart = (): Promise<boolean> =>
+  invoke<boolean>("get_autostart");
+
+export const setAutostart = (enabled: boolean): Promise<void> =>
+  invoke<void>("set_autostart", { enabled });
+
 // ── AudioManager Virtual Cable helper ────────────────────────────────────────
 
 /** Query the amvc-helper binary for driver status. Never rejects. */

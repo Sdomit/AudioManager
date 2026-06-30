@@ -9,7 +9,7 @@ import type { SVGProps } from "react";
  * Avoids pulling in an icon library. Add icons here as needed.
  */
 
-type IconProps = SVGProps<SVGSVGElement> & { size?: number };
+export type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
 function Base({ size = 16, children, ...props }: IconProps & { children: React.ReactNode }) {
   return (

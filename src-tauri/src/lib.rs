@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use tauri::{Emitter, Manager};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
 use audio::bus::{BusConfig, BusId, BusStatus};
@@ -1829,6 +1830,22 @@ fn set_recorder_format(app: tauri::AppHandle, format: RecordFormat) -> Result<()
 }
 
 #[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    }
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn open_recordings_folder(app: tauri::AppHandle) -> Result<(), EngineError> {
     let dir = resolve_recordings_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| EngineError {
@@ -2452,6 +2469,10 @@ fn phone_set_latency_mode(session_id: String, mode: String) -> Result<(), Engine
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(AppState::new())
         .setup(|app| {
             // pairing-v2 #1 (Phase 2): when a trusted phone auto-resumes, re-add
@@ -2616,6 +2637,8 @@ pub fn run() {
             set_recordings_dir,
             get_recorder_settings,
             set_recorder_format,
+            get_autostart,
+            set_autostart,
             delete_recording_file,
             open_recordings_folder,
             amvc::query_amvc_helper,

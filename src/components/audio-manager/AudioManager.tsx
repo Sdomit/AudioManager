@@ -18,6 +18,7 @@ import { RoutingView } from "./RoutingView";
 import { StreamSetupSheet } from "./StreamSetupSheet";
 import { PhonePairingSheet } from "./PhonePairingSheet";
 import { SettingsSheet } from "./SettingsSheet";
+import { applyPrefs, loadPrefs, savePrefs, type AppPrefs } from "./prefs";
 import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
 import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
@@ -100,6 +101,15 @@ export function AudioManager() {
   const [inputPickerOpen, setInputPickerOpen] = useState(false);
   const [phonePairingOpen, setPhonePairingOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appPrefs, setAppPrefs] = useState<AppPrefs>(loadPrefs);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const updatePrefs = useCallback((p: AppPrefs) => {
+    setAppPrefs(p);
+    savePrefs(p);
+  }, []);
+  useEffect(() => {
+    if (rootRef.current) applyPrefs(rootRef.current, appPrefs);
+  }, [appPrefs]);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
   // Preset dialog: "save" mode collects a new name; "rename" mode
@@ -440,6 +450,7 @@ export function AudioManager() {
 
   return (
     <div
+      ref={rootRef}
       className={`audioManager ${styles.root}`}
       data-density={state.density}
     >
@@ -708,6 +719,12 @@ export function AudioManager() {
         onClose={() => setSettingsOpen(false)}
         density={state.density}
         onDensityChange={am.setDensity}
+        prefs={appPrefs}
+        onPrefsChange={updatePrefs}
+        onOpenPhonePairing={() => {
+          setSettingsOpen(false);
+          setPhonePairingOpen(true);
+        }}
         inputDevices={inputDevicesCache}
         outputDevices={outputDevicesCache}
       />
