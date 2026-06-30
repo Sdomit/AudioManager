@@ -3,7 +3,9 @@ import { createPortal } from "react-dom";
 import {
   iconForBusRole,
   iconForKind,
+  GridIcon,
   MuteIcon,
+  PlusIcon,
   RecordIcon,
   XIcon,
 } from "./Icon";
@@ -124,6 +126,10 @@ const FX_H = 36;
 const FX_GAP = 28;
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
+// Background-grid pitch. Matches the SVG <pattern> cell so snapping lands nodes
+// exactly on the dots the user sees.
+const GRID = 20;
+const snapTo = (n: number) => Math.round(n / GRID) * GRID;
 
 interface DragState {
   /**
@@ -323,6 +329,7 @@ const LS_VIEW          = "am.nodeView.viewport";
 const LS_GROUPS        = "am.nodeGroups.v1";
 const LS_FLOATING_FX   = "am.floatingFx.v1";
 const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
+const LS_SNAP          = "am.nodeView.snap";
 
 /**
  * Load unified node positions. Reads the v2 key first; if absent and
@@ -463,6 +470,9 @@ export function NodeView({
   // in the right-hand DetailPanel (#feature4). The old floating popover is gone;
   // editing lives in one place, so the badge just reuses the node's onSelect.
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
+  // Live right-column x for bus nodes, so the node-drag handler can lock bus
+  // horizontal position without depending on render-scope state.
+  const busColXRef = useRef(COL_PAD + INPUT_W + COL_GAP_BETWEEN);
   const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
     w: MIN_CANVAS_W,
     h: MIN_CANVAS_H,
@@ -543,6 +553,17 @@ export function NodeView({
   const [panning, setPanning] = useState<PanState | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
 
+  // Snap-to-grid toggle (persisted). When on, dragging locks node positions to
+  // the GRID lattice and the background grid is drawn a touch brighter.
+  const [snap, setSnap] = useState<boolean>(() => {
+    try { return localStorage.getItem(LS_SNAP) === "1"; } catch { return false; }
+  });
+  const snapRef = useRef(snap);
+  useEffect(() => {
+    snapRef.current = snap;
+    try { localStorage.setItem(LS_SNAP, snap ? "1" : "0"); } catch {}
+  }, [snap]);
+
   const toCanvas = useCallback((clientX: number, clientY: number) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -607,8 +628,12 @@ export function NodeView({
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      // Hug the input column (not the right edge of the huge world canvas).
-      const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
+      // Seed buses in the right-hand output column (right edge of the visible
+      // viewport). The re-pin effect keeps them there as the panel resizes.
+      const busColX = Math.max(
+        COL_PAD + INPUT_W + COL_GAP_BETWEEN,
+        (Math.floor(wrapSize.w) || MIN_CANVAS_W) - COL_PAD - BUS_W,
+      );
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -921,9 +946,32 @@ export function NodeView({
   const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W, 10_000);
   const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H, 10_000);
   boundsRef.current = { w: canvasW, h: canvasH };
-  // Bus column hugs the input column instead of the (now huge) right edge so
-  // the initial layout still fits in the visible viewport.
-  const busColumnX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
+  // Output (bus) column is pinned to the right edge of the *visible* viewport
+  // (not the huge 10k world), so outputs always sit on the right with room for
+  // inputs on the left and effect nodes in between. Floors at the original
+  // input+gap offset so a narrow panel never overlaps the input column.
+  const busColumnX = Math.max(
+    COL_PAD + INPUT_W + COL_GAP_BETWEEN,
+    (Math.floor(wrapSize.w) || MIN_CANVAS_W) - COL_PAD - BUS_W,
+  );
+  busColXRef.current = busColumnX;
+
+  // Keep every bus pinned to the right column: re-run when the viewport width
+  // (→ busColumnX) changes. Guarded so it only writes when an x actually
+  // differs, avoiding a render loop.
+  useEffect(() => {
+    setNodePositions((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [nid, p] of prev) {
+        if (isBusNodeId(nid) && p.x !== busColumnX) {
+          next.set(nid, { x: busColumnX, y: p.y });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [busColumnX]);
 
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
@@ -1232,9 +1280,15 @@ export function NodeView({
       if (nodeDrag.groupStart.size > 0) {
         setNodePositions((prev) => {
           const next = new Map(prev);
+          const doSnap = snapRef.current;
           for (const [nid, p0] of nodeDrag.groupStart) {
+            // Buses are pinned to the right column — only their y moves.
+            const isBus = isBusNodeId(nid);
+            const rawX = isBus ? busColXRef.current : p0.x + dx;
+            const rawY = p0.y + dy;
             next.set(nid, clampToBounds(
-              p0.x + dx, p0.y + dy,
+              isBus ? rawX : doSnap ? snapTo(rawX) : rawX,
+              doSnap ? snapTo(rawY) : rawY,
               nodeWidth(nid), nodeHeight(nid),
               boundsRef.current.w, boundsRef.current.h,
             ));
@@ -1449,6 +1503,50 @@ export function NodeView({
   const resetView = useCallback(() => {
     setView(clampViewToBounds({ tx: 0, ty: 0, zoom: 1 }));
   }, [clampViewToBounds]);
+
+  // Zoom out (never in) and re-center so every node — inputs, effects, outputs —
+  // stays visible. Used when the detail panel opens (selecting a node), since
+  // the panel narrows the canvas; we shrink to keep the whole graph in view.
+  const fitToContent = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const vw = el.clientWidth;
+    const vh = el.clientHeight;
+    const positions = nodePosRef.current;
+    if (positions.size === 0 || vw === 0 || vh === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [nid, p] of positions) {
+      const w = nodeWidth(nid);
+      const h = nodeHeight(nid);
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x + w > maxX) maxX = p.x + w;
+      if (p.y + h > maxY) maxY = p.y + h;
+    }
+    const pad = 56;
+    const contentW = maxX - minX + pad * 2;
+    const contentH = maxY - minY + pad * 2;
+    const fitZoom = Math.min(vw / contentW, vh / contentH);
+    // Only ever zoom out from the current level — keeps everything shown
+    // without yanking the user closer than they already were.
+    const zoom = clampZoom(Math.min(viewRef.current.zoom, fitZoom));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    setView(clampViewToBounds({ zoom, tx: vw / 2 - cx * zoom, ty: vh / 2 - cy * zoom }));
+  }, [clampViewToBounds]);
+
+  // Selecting a node opens the detail panel (parent flex sibling), which
+  // narrows this canvas. Re-fit so inputs + effects + the right-pinned outputs
+  // all stay visible. Re-runs on the panel-driven width change too.
+  const selKey =
+    selection.kind === "input" ? `i:${selection.inputId}`
+    : selection.kind === "bus" ? `b:${selection.busId}`
+    : "none";
+  useEffect(() => {
+    if (selKey === "none") return;
+    const t = window.setTimeout(fitToContent, 70);
+    return () => window.clearTimeout(t);
+  }, [selKey, wrapSize.w, fitToContent]);
 
   // ── Group management ────────────────────────────────────────────────
   // Frontend-only: creating / removing a group is a localStorage write.
@@ -1785,35 +1883,47 @@ export function NodeView({
       {(() => {
         const toolbar = (
           <div className={styles.zoomBar} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.zoomGroup}>
+              <button
+                type="button"
+                className={styles.zoomBtn}
+                onClick={() => zoomBy(1 / 1.2)}
+                title="Zoom out"
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className={styles.zoomReadout}
+                onClick={resetView}
+                title="Reset zoom (100%)"
+              >
+                {Math.round(view.zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className={styles.zoomBtn}
+                onClick={() => zoomBy(1.2)}
+                title="Zoom in"
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+            </div>
             <button
               type="button"
-              className={styles.zoomBtn}
-              onClick={() => zoomBy(1 / 1.2)}
-              title="Zoom out"
-              aria-label="Zoom out"
+              className={`${styles.toolBtn} ${snap ? styles.toolBtnActive : ""}`}
+              onClick={() => setSnap((s) => !s)}
+              aria-pressed={snap}
+              title="Snap nodes to grid"
             >
-              −
+              <GridIcon size={14} />
+              <span>Snap</span>
             </button>
             <button
               type="button"
-              className={styles.zoomReadout}
-              onClick={resetView}
-              title="Reset zoom (100%)"
-            >
-              {Math.round(view.zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              className={styles.zoomBtn}
-              onClick={() => zoomBy(1.2)}
-              title="Zoom in"
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className={styles.resetBtn}
+              className={styles.toolBtn}
               onClick={resetLayout}
               title="Reset node positions"
             >
@@ -1822,22 +1932,24 @@ export function NodeView({
             {onAddInput && (
               <button
                 type="button"
-                className={styles.addInputBtn}
+                className={`${styles.toolBtn} ${styles.toolBtnAccent}`}
                 onClick={onAddInput}
                 title="Add input device"
                 aria-label="Add input device"
               >
-                + Add input
+                <PlusIcon size={14} />
+                <span>Add input</span>
               </button>
             )}
             <button
               type="button"
-              className={styles.addGroupBtn}
+              className={styles.toolBtn}
               onClick={addGroup}
               title="Add a group node (frontend only)"
               aria-label="Add group node"
             >
-              + Group
+              <PlusIcon size={14} />
+              <span>Group</span>
             </button>
           </div>
         );
@@ -1876,9 +1988,15 @@ export function NodeView({
             </filter>
           </defs>
 
-          {/* Background grid */}
-          <pattern id="nodeGrid" width="20" height="20" patternUnits="userSpaceOnUse">
-            <circle cx="0.5" cy="0.5" r="0.5" fill="rgba(255,255,255,0.04)" />
+          {/* Background grid — pitch === GRID so snapped nodes land on the dots.
+              A touch brighter while snap-to-grid is on, as live feedback. */}
+          <pattern id="nodeGrid" width={GRID} height={GRID} patternUnits="userSpaceOnUse">
+            <circle
+              cx="0.5"
+              cy="0.5"
+              r={snap ? 1 : 0.6}
+              fill={`rgba(255,255,255,${snap ? 0.1 : 0.045})`}
+            />
           </pattern>
           <rect width={canvasW} height={canvasH} fill="url(#nodeGrid)" />
 

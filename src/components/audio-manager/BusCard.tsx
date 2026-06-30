@@ -1,5 +1,5 @@
 import { BusDeviceDropdown } from "./BusDeviceDropdown";
-import { iconForBusRole, AlertIcon, MuteIcon, MoreIcon, PowerIcon } from "./Icon";
+import { iconForBusRole, AlertIcon, MuteIcon, VolumeIcon, MoreIcon, PowerIcon } from "./Icon";
 import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
 import { SpectrumAnalyzer } from "./SpectrumAnalyzer";
@@ -138,7 +138,7 @@ export function BusCard({
       {/* Actions */}
       <div className={styles.actionsRow}>
         <button
-          className={`${styles.actionBtn} ${bus.enabled ? styles.actionActive : ""}`}
+          className={`${styles.actionBtn} ${bus.enabled ? styles.actionEnabled : ""}`}
           onClick={(e) => {
             e.stopPropagation();
             onToggleEnabled();
@@ -165,7 +165,7 @@ export function BusCard({
           aria-pressed={bus.muted}
           title={bus.muted ? "Unmute" : "Mute"}
         >
-          <MuteIcon size={14} />
+          {bus.muted ? <MuteIcon size={14} /> : <VolumeIcon size={14} />}
           <span>{bus.muted ? "Muted" : "Mute"}</span>
         </button>
         <button

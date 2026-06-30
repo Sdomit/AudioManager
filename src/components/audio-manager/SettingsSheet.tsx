@@ -141,18 +141,15 @@ export function SettingsSheet({
           {tab === "appearance" && (
             <section>
               <h3 className={styles.sectionTitle}>Density</h3>
-              <div className={styles.densityRow}>
-                {(["comfortable", "compact"] as Density[]).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => onDensityChange(d)}
-                    aria-pressed={density === d}
-                    className={`${styles.densityBtn} ${density === d ? styles.densityBtnActive : ""}`}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
+              <select
+                className={styles.select}
+                value={density}
+                onChange={(e) => onDensityChange(e.target.value as Density)}
+                aria-label="Interface density"
+              >
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
               <p className={`${styles.muted} ${styles.spaced}`}>
                 Meter colors and theme follow the app's CSS variables.
               </p>

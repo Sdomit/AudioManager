@@ -844,15 +844,23 @@ export function useAudioManager(): UseAudioManager {
 
   const setBusDevice = useCallback(
     (id: BusId, device: string | null) => {
-      const prev = getBus(id)?.device ?? null;
+      const bus = getBus(id);
+      const prev = bus?.device ?? null;
+      // Assigning an output device auto-enables a disabled bus — picking a
+      // device is intent to use it, so the user shouldn't have to also flip
+      // Enable. Unassigning (device === null) leaves enabled state alone.
+      const autoEnable = device !== null && bus != null && !bus.enabled;
       recordHistory();
       dispatch({ type: "set_bus_device", id, device });
+      if (autoEnable) dispatch({ type: "set_bus_enabled", id, enabled: true });
       ipc
         .setBusDevice(id, device)
+        .then(() => (autoEnable ? ipc.setBusEnabled(id, true) : undefined))
         .then(() => refresh())
         .catch((e) => {
           console.error("setBusDevice failed:", e);
           dispatch({ type: "set_bus_device", id, device: prev });
+          if (autoEnable) dispatch({ type: "set_bus_enabled", id, enabled: false });
         });
     },
     [getBus, refresh],

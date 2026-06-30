@@ -26,10 +26,19 @@
 
 .zoomBar {
   /* Portalled into the Routing header (RoutingView's .nodeToolbarSlot), so
-     this is a static flex strip, not an absolute overlay. */
-  display: flex;
+     this is a static flex strip, not an absolute overlay. Transparent strip:
+     the zoom segment + each action button carry their own chrome so they read
+     as a proper, evenly-spaced toolbar (sized to match the view toggle). */
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--am-space-2);
+}
+
+/* Zoom segmented sub-group: −  [100%]  + */
+.zoomGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   padding: 3px;
   background: var(--am-surface-2);
   border: 1px solid var(--am-border-default);
@@ -37,53 +46,78 @@
 }
 
 .zoomBtn,
-.zoomReadout,
-.resetBtn,
-.addInputBtn,
-.addGroupBtn {
-  padding: 4px 10px;
-  font-size: var(--am-text-11);
-  font-weight: 500;
+.zoomReadout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 8px;
+  font-size: var(--am-text-12);
+  font-weight: 600;
   color: var(--am-text-secondary);
   background: transparent;
-  border: none;
   border-radius: var(--am-radius-sm);
-  letter-spacing: var(--am-tracking-tight);
-  cursor: pointer;
   transition: background var(--am-dur-fast), color var(--am-dur-fast);
 }
 .zoomBtn {
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
-  min-width: 22px;
+  min-width: 26px;
+  padding: 0;
 }
-.zoomReadout { min-width: 40px; }
-.resetBtn {
-  margin-left: 4px;
-  border-left: 1px solid var(--am-border-default);
-  padding-left: 10px;
-}
-.addInputBtn {
-  margin-left: 4px;
-  border-left: 1px solid var(--am-border-default);
-  padding-left: 10px;
-  color: var(--am-accent, #EF4444);
-  font-weight: 600;
-}
-.addGroupBtn {
-  margin-left: 4px;
-  border-left: 1px solid var(--am-border-default);
-  padding-left: 10px;
-  color: rgba(170, 180, 200, 0.95);
-  font-weight: 600;
+.zoomReadout {
+  min-width: 46px;
+  font-family: var(--am-font-mono);
 }
 .zoomBtn:hover,
-.zoomReadout:hover,
-.resetBtn:hover,
-.addInputBtn:hover,
-.addGroupBtn:hover {
+.zoomReadout:hover {
   background: var(--am-surface-3);
   color: var(--am-text-primary);
+}
+
+/* Standalone toolbar action buttons — Snap / Reset layout / Add input / Group.
+   Same height + weight as the Flow/Nodes/Matrix toggle so the header reads as
+   one coherent control strip. */
+.toolBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--am-space-1);
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--am-text-13);
+  font-weight: 600;
+  color: var(--am-text-secondary);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  letter-spacing: var(--am-tracking-tight);
+  white-space: nowrap;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast),
+    border-color var(--am-dur-fast);
+}
+.toolBtn:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
+  border-color: var(--am-border-strong);
+}
+
+/* Add input — primary accent affordance. */
+.toolBtnAccent {
+  color: var(--am-accent);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.toolBtnAccent:hover {
+  color: var(--am-accent-hover);
+  background: var(--am-accent-muted);
+  border-color: var(--am-accent);
+}
+
+/* Snap toggle — green when active, the universal "on" signal. */
+.toolBtnActive,
+.toolBtnActive:hover {
+  background: var(--am-success-muted);
+  color: var(--am-success);
+  border-color: var(--am-success);
 }
 
 /* Flow / Nodes / Matrix switch inside the zoom bar. Lets users switch routing
