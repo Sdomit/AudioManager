@@ -8,7 +8,7 @@
 
 **Solution**:
 1. Check Windows Event Viewer for crash logs
-2. Kill any existing `audio-manager.exe` processes
+2. Kill any existing `AudioManager.exe` processes
 3. Try again
 4. If persistent, check that WASAPI drivers are installed: `mmsys.cpl` → Sound settings
 

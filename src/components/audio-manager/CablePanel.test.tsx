@@ -123,10 +123,10 @@ describe("CablePanel", () => {
     expect(screen.queryByText("Repair")).toBeNull();
   });
 
-  it("unavailable → Helper not found", async () => {
+  it("unavailable → Optional add-on", async () => {
     qMock.mockResolvedValue({ kind: "unavailable", reason: "not found" });
     render(<CablePanel open />);
-    await screen.findByText(/Helper not found/);
+    await screen.findByText(/Optional add-on/);
     expect(iMock).not.toHaveBeenCalled();
   });
 

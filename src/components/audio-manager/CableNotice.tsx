@@ -77,7 +77,8 @@ export function CableNotice({ onDismiss, onRecheck }: CableNoticeProps) {
   return (
     <div className={styles.notice} role="status" aria-label="AudioManager Virtual Cable notice">
       <span className={styles.message}>
-        Install the AudioManager Virtual Cable to enable branded routing.
+        No virtual audio cable detected. Install a third-party cable such as
+        VB-Cable to send audio into other apps (OBS, Discord, Zoom).
       </span>
       <div className={styles.actions}>
         <button
