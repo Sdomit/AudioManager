@@ -2007,7 +2007,7 @@ export function NodeView({
       <div
         className={styles.gridOverlay}
         style={{
-          backgroundImage: `radial-gradient(circle, ${snap ? "var(--am-grid-dot-strong)" : "var(--am-grid-dot)"} ${snap ? 1.3 : 1}px, transparent ${snap ? 1.8 : 1.5}px)`,
+          backgroundImage: `radial-gradient(circle, ${snap ? "var(--am-grid-dot-strong)" : "var(--am-grid-dot)"} ${snap ? 0.9 : 0.6}px, transparent ${snap ? 1.3 : 1}px)`,
           backgroundSize: `${GRID * view.zoom}px ${GRID * view.zoom}px`,
           // Offset by half a cell so dots sit on world grid multiples (= snap targets).
           backgroundPosition: `${view.tx - (GRID * view.zoom) / 2}px ${view.ty - (GRID * view.zoom) / 2}px`,
