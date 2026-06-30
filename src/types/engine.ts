@@ -334,12 +334,20 @@ export type TapSpec =
   | { kind: "input_post"; device_id: string; bus_id: BusId }
   | { kind: "bus_out"; bus_id: BusId };
 
+export type RecordFormat = "float32" | "int24" | "int16";
+
+export interface RecorderSettings {
+  recordings_dir: string;
+  format: RecordFormat;
+}
+
 export interface RecordingInfo {
   id: string;
   spec: TapSpec;
   file_path: string;
   channels: number;
   sample_rate: number;
+  format: RecordFormat;
   started_at_unix_ms: number;
   samples_written: number;
   bytes_written: number;

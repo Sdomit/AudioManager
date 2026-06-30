@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import * as ipc from "../../ipc/commands";
+import type { RecordFormat } from "../../types/engine";
 import { AlertIcon, RecordIcon, XIcon } from "./Icon";
 import { ElapsedTime } from "./RecordButton";
 import type { ActiveRecording, RecordingFile, TapSpec } from "./types";
@@ -23,7 +25,7 @@ interface RecordingsPanelProps {
  *
  *   - Active section: live size/dropped counters, per-row stop button.
  *   - Files section: WAV files on disk, click to open folder or delete.
- *   - Settings: change the recordings directory.
+ *   - Settings: change the recordings directory and bit-depth format.
  *
  * Files are NOT auto-played in-app (no decoder linked) — clicking just
  * opens the OS folder. Cross-platform via tauri-plugin-opener.
@@ -43,8 +45,19 @@ export function RecordingsPanel({
 }: RecordingsPanelProps) {
   const [editingDir, setEditingDir] = useState(false);
   const [dirDraft, setDirDraft] = useState("");
+  const [format, setFormat] = useState<RecordFormat>("float32");
+
+  useEffect(() => {
+    if (!open) return;
+    ipc.getRecorderSettings().then((s) => setFormat(s.format)).catch(() => {});
+  }, [open]);
 
   if (!open) return null;
+
+  function handleFormatChange(f: RecordFormat) {
+    setFormat(f);
+    ipc.setRecorderFormat(f).catch(() => {});
+  }
 
   return (
     <div className={styles.backdrop} onClick={onClose} role="presentation">
@@ -106,7 +119,8 @@ export function RecordingsPanel({
                         {formatBytes(r.bytes_written)}
                       </span>
                       <span className={styles.metaItem}>
-                        {r.channels}ch · {r.sample_rate / 1000}k
+                        {r.channels}ch · {r.sample_rate / 1000}k ·{" "}
+                        {formatLabel(r.format)}
                       </span>
                       {r.dropped_samples > 0 && (
                         <span className={styles.metaWarn}>
@@ -179,6 +193,22 @@ export function RecordingsPanel({
               </button>
             </div>
           )}
+
+          <div className={styles.formatRow}>
+            <label className={styles.formatLabel} htmlFor="rec-format">
+              Format
+            </label>
+            <select
+              id="rec-format"
+              className={styles.formatSelect}
+              value={format}
+              onChange={(e) => handleFormatChange(e.target.value as RecordFormat)}
+            >
+              <option value="float32">32-bit float WAV</option>
+              <option value="int24">24-bit PCM WAV</option>
+              <option value="int16">16-bit PCM WAV</option>
+            </select>
+          </div>
         </section>
 
         {/* Past recordings */}
@@ -232,6 +262,14 @@ function specLabel(spec: TapSpec): string {
       return `Input · ${spec.device_id} → ${spec.bus_id} (post)`;
     case "bus_out":
       return `Bus · ${spec.bus_id}`;
+  }
+}
+
+function formatLabel(f: RecordFormat): string {
+  switch (f) {
+    case "float32": return "32f";
+    case "int24":   return "24i";
+    case "int16":   return "16i";
   }
 }
 

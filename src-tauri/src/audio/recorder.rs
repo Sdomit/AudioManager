@@ -31,6 +31,41 @@ use serde::{Deserialize, Serialize};
 use crate::audio::bus::BusId;
 use crate::audio::mixer::EngineError;
 
+/// WAV bit depth / sample format for new recordings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordFormat {
+    #[default]
+    Float32,
+    Int24,
+    Int16,
+}
+
+impl RecordFormat {
+    pub fn bits_per_sample(self) -> u16 {
+        match self {
+            Self::Float32 => 32,
+            Self::Int24 => 24,
+            Self::Int16 => 16,
+        }
+    }
+
+    pub fn hound_format(self) -> hound::SampleFormat {
+        match self {
+            Self::Float32 => hound::SampleFormat::Float,
+            Self::Int24 | Self::Int16 => hound::SampleFormat::Int,
+        }
+    }
+
+    pub fn bytes_per_sample(self) -> u64 {
+        match self {
+            Self::Float32 => 4,
+            Self::Int24 => 3,
+            Self::Int16 => 2,
+        }
+    }
+}
+
 /// ~1 second at 48 kHz stereo. Sized to ride out writer-thread jitter on a
 /// healthy disk; sustained overflow is reported through `dropped_samples`.
 const RECORDER_RING_FRAMES: usize = 96_000;
@@ -143,6 +178,7 @@ pub struct RecorderHandle {
     pub file_path: PathBuf,
     pub channels: u16,
     pub sample_rate: u32,
+    pub format: RecordFormat,
     pub started_at: SystemTime,
     pub tap_id: u64,
     pub engine_bus: BusId,
@@ -174,6 +210,7 @@ impl RecorderHandle {
             file_path: self.file_path.display().to_string(),
             channels: self.channels,
             sample_rate: self.sample_rate,
+            format: self.format,
             started_at_unix_ms,
             samples_written: self.samples_written.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
@@ -218,6 +255,7 @@ pub struct RecordingInfo {
     pub file_path: String,
     pub channels: u16,
     pub sample_rate: u32,
+    pub format: RecordFormat,
     pub started_at_unix_ms: u64,
     pub samples_written: u64,
     pub bytes_written: u64,
@@ -241,6 +279,7 @@ pub struct StartRecorderRequest<'a> {
     pub kind: CallbackTapKind,
     pub channels: u16,
     pub sample_rate: u32,
+    pub format: RecordFormat,
     pub engine_bus: BusId,
     pub engine_tap_tx: &'a mpsc::Sender<TapCommand>,
     pub recordings_dir: &'a Path,
@@ -257,6 +296,7 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
         kind,
         channels,
         sample_rate,
+        format,
         engine_bus,
         engine_tap_tx,
         recordings_dir,
@@ -295,8 +335,8 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
     let wav_spec = hound::WavSpec {
         channels,
         sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
+        bits_per_sample: format.bits_per_sample(),
+        sample_format: format.hound_format(),
     };
     let writer = hound::WavWriter::create(&path, wav_spec).map_err(|e| EngineError {
         message: format!("Failed to create WAV file '{}': {e}", path.display()),
@@ -325,6 +365,7 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
         .spawn(move || {
             run_writer(
                 writer,
+                format,
                 consumer,
                 writer_stop,
                 writer_error,
@@ -369,6 +410,7 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
         file_path: path,
         channels,
         sample_rate,
+        format,
         started_at: now,
         tap_id,
         engine_bus,
@@ -382,8 +424,21 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
     })
 }
 
+fn write_sample(
+    writer: &mut hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    format: RecordFormat,
+    s: f32,
+) -> hound::Result<()> {
+    match format {
+        RecordFormat::Float32 => writer.write_sample(s),
+        RecordFormat::Int24 => writer.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0) as i32),
+        RecordFormat::Int16 => writer.write_sample((s.clamp(-1.0, 1.0) * 32_767.0) as i16),
+    }
+}
+
 fn run_writer(
     mut writer: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    format: RecordFormat,
     mut consumer: Consumer<f32>,
     stop_flag: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
@@ -400,7 +455,7 @@ fn run_writer(
         while written_this_batch < BATCH {
             match consumer.pop() {
                 Some(sample) => {
-                    if let Err(e) = writer.write_sample(sample) {
+                    if let Err(e) = write_sample(&mut writer, format, sample) {
                         set_first_error(&error, format!("WAV write failed: {e}"));
                         write_failed = true;
                         break;
@@ -411,7 +466,7 @@ fn run_writer(
             }
         }
         // Update byte counter once per batch from successful writes only.
-        add_written_bytes(&bytes_written, written_this_batch);
+        add_written_bytes(&bytes_written, written_this_batch, format);
 
         if write_failed {
             finalize_writer(writer, &path, &bytes_written, &error);
@@ -430,13 +485,13 @@ fn run_writer(
     // when we noticed stop_flag and when Remove arrived in the callback.
     let mut tail = 0;
     while let Some(sample) = consumer.pop() {
-        if let Err(e) = writer.write_sample(sample) {
+        if let Err(e) = write_sample(&mut writer, format, sample) {
             set_first_error(&error, format!("WAV write failed during drain: {e}"));
             break;
         }
         tail += 1;
     }
-    add_written_bytes(&bytes_written, tail);
+    add_written_bytes(&bytes_written, tail, format);
 
     finalize_writer(writer, &path, &bytes_written, &error);
 }
@@ -522,9 +577,9 @@ fn recording_status_error(error: Option<String>, dropped_samples: u64) -> Option
 }
 
 #[inline]
-fn add_written_bytes(bytes_written: &Arc<AtomicU64>, successful_samples: usize) {
+fn add_written_bytes(bytes_written: &Arc<AtomicU64>, successful_samples: usize, format: RecordFormat) {
     if successful_samples > 0 {
-        bytes_written.fetch_add((successful_samples as u64) * 4, Ordering::Relaxed);
+        bytes_written.fetch_add(successful_samples as u64 * format.bytes_per_sample(), Ordering::Relaxed);
     }
 }
 
@@ -541,6 +596,8 @@ fn bus_short(id: BusId) -> &'static str {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecorderSettings {
     pub recordings_dir: PathBuf,
+    #[serde(default)]
+    pub format: RecordFormat,
 }
 
 impl RecorderSettings {
@@ -551,6 +608,7 @@ impl RecorderSettings {
     pub fn default_in(app_data_dir: &Path) -> Self {
         Self {
             recordings_dir: app_data_dir.join("recordings"),
+            format: RecordFormat::Float32,
         }
     }
 
@@ -794,16 +852,30 @@ mod tests {
     #[test]
     fn add_written_bytes_counts_successful_samples_once() {
         let bytes = Arc::new(AtomicU64::new(0));
-        add_written_bytes(&bytes, 4096);
-        add_written_bytes(&bytes, 1024); // partial batch before a later failure
+        add_written_bytes(&bytes, 4096, RecordFormat::Float32);
+        add_written_bytes(&bytes, 1024, RecordFormat::Float32);
         assert_eq!(bytes.load(Ordering::Relaxed), (4096_u64 + 1024_u64) * 4);
     }
 
     #[test]
     fn add_written_bytes_ignores_zero_successes() {
         let bytes = Arc::new(AtomicU64::new(1234));
-        add_written_bytes(&bytes, 0); // failed sample is never counted
+        add_written_bytes(&bytes, 0, RecordFormat::Float32);
         assert_eq!(bytes.load(Ordering::Relaxed), 1234);
+    }
+
+    #[test]
+    fn add_written_bytes_int16_uses_2_bytes() {
+        let bytes = Arc::new(AtomicU64::new(0));
+        add_written_bytes(&bytes, 100, RecordFormat::Int16);
+        assert_eq!(bytes.load(Ordering::Relaxed), 200);
+    }
+
+    #[test]
+    fn add_written_bytes_int24_uses_3_bytes() {
+        let bytes = Arc::new(AtomicU64::new(0));
+        add_written_bytes(&bytes, 100, RecordFormat::Int24);
+        assert_eq!(bytes.load(Ordering::Relaxed), 300);
     }
 
     #[test]
@@ -822,6 +894,7 @@ mod tests {
             kind: CallbackTapKind::BusOut,
             channels: 2,
             sample_rate: 48_000,
+            format: RecordFormat::Float32,
             engine_bus: BusId::A1,
             engine_tap_tx: &tx,
             recordings_dir: &tmp,
@@ -863,6 +936,7 @@ mod tests {
             file_path: PathBuf::from("ignored.wav"),
             channels: 2,
             sample_rate: 48_000,
+            format: RecordFormat::Float32,
             started_at: SystemTime::now(),
             tap_id: 42,
             engine_bus: BusId::A1,
@@ -896,10 +970,12 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let s = RecorderSettings {
             recordings_dir: dir.join("custom"),
+            format: RecordFormat::Int24,
         };
         s.save(&dir).unwrap();
         let loaded = RecorderSettings::load_or_default(&dir);
         assert_eq!(loaded.recordings_dir, s.recordings_dir);
+        assert_eq!(loaded.format, s.format);
         let _ = fs::remove_dir_all(&dir);
     }
 }

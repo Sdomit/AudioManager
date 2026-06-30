@@ -20,8 +20,8 @@ use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerEngine, MixerInput};
 use audio::source::InputSourceSpec;
 use audio::recorder::{
-    self, CallbackTapKind, RecorderSettings, RecordingFile, RecordingInfo, StartRecorderRequest,
-    TapSpec,
+    self, CallbackTapKind, RecordFormat, RecorderSettings, RecordingFile, RecordingInfo,
+    StartRecorderRequest, TapSpec,
 };
 use audio::routing::Route;
 use presets::{PresetFileV2, PresetLoadResult, PresetLoadWarning, PresetSummary};
@@ -1656,6 +1656,7 @@ fn start_recording_inner(
     inner: &mut AppInner,
     recordings_dir: &std::path::Path,
     session_subdir: Option<&str>,
+    format: RecordFormat,
     spec: TapSpec,
 ) -> Result<RecordingInfo, EngineError> {
     let (engine_bus, kind, channels, sample_rate, tap_tx) = resolve_tap(inner, &spec)?;
@@ -1664,6 +1665,7 @@ fn start_recording_inner(
         kind,
         channels,
         sample_rate,
+        format,
         engine_bus,
         engine_tap_tx: &tap_tx,
         recordings_dir,
@@ -1681,8 +1683,10 @@ fn start_recording(
     spec: TapSpec,
 ) -> Result<RecordingInfo, EngineError> {
     let recordings_dir = resolve_recordings_dir(&app)?;
+    let base = app_local_dir(&app)?;
+    let format = RecorderSettings::load_or_default(&base).format;
     let mut inner = state.inner.lock().unwrap();
-    let result = start_recording_inner(&mut inner, &recordings_dir, None, spec);
+    let result = start_recording_inner(&mut inner, &recordings_dir, None, format, spec);
     if let Err(err) = &result {
         inner.last_error = Some(err.message.clone());
     }
@@ -1695,6 +1699,8 @@ fn start_master_recording(
     app: tauri::AppHandle,
 ) -> Result<Vec<RecordingInfo>, EngineError> {
     let recordings_dir = resolve_recordings_dir(&app)?;
+    let base = app_local_dir(&app)?;
+    let format = RecorderSettings::load_or_default(&base).format;
     let mut inner = state.inner.lock().unwrap();
     let running_buses: Vec<BusId> = inner
         .buses
@@ -1718,6 +1724,7 @@ fn start_master_recording(
             &mut inner,
             &recordings_dir,
             Some(&session),
+            format,
             TapSpec::BusOut { bus_id },
         ) {
             Ok(info) => out.push(info),
@@ -1805,6 +1812,20 @@ fn set_recordings_dir(
 fn delete_recording_file(path: String) -> Result<(), EngineError> {
     let p = PathBuf::from(path);
     recorder::delete_recording_file(&p)
+}
+
+#[tauri::command]
+fn get_recorder_settings(app: tauri::AppHandle) -> Result<RecorderSettings, EngineError> {
+    let base = app_local_dir(&app)?;
+    Ok(RecorderSettings::load_or_default(&base))
+}
+
+#[tauri::command]
+fn set_recorder_format(app: tauri::AppHandle, format: RecordFormat) -> Result<(), EngineError> {
+    let base = app_local_dir(&app)?;
+    let mut settings = RecorderSettings::load_or_default(&base);
+    settings.format = format;
+    settings.save(&base)
 }
 
 #[tauri::command]
@@ -2593,6 +2614,8 @@ pub fn run() {
             list_recording_files,
             get_recordings_dir,
             set_recordings_dir,
+            get_recorder_settings,
+            set_recorder_format,
             delete_recording_file,
             open_recordings_folder,
             amvc::query_amvc_helper,
