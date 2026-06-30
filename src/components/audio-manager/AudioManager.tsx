@@ -22,7 +22,6 @@ import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
 import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
 import { listen } from "@tauri-apps/api/event";
-import miniStyles from "./MiniPanel.module.css";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
@@ -561,6 +560,7 @@ export function AudioManager() {
             if (!input) return;
             am.setInputMuted(id, !input.muted);
           }}
+          onOpenMini={() => void openMiniWindow()}
         />
 
         {/* Detail panel: always present in matrix/flow; in the nodes canvas it
@@ -803,18 +803,6 @@ export function AudioManager() {
         onClose={() => setBusRenameFor(null)}
       />
 
-      {/* Mini Controller launcher — opens the always-on-top pop-out window. */}
-      <div className={miniStyles.launcher}>
-        <button
-          type="button"
-          className={miniStyles.toggle}
-          onClick={() => void openMiniWindow()}
-          aria-label="Open mini controller window"
-          title="Open mini controller (Ctrl+Shift+P)"
-        >
-          🎛
-        </button>
-      </div>
     </div>
   );
 }

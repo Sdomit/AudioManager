@@ -13,6 +13,7 @@ import type {
   Send,
   TapSpec,
 } from "./types";
+import miniStyles from "./MiniPanel.module.css";
 import styles from "./RoutingView.module.css";
 
 interface RoutingViewProps {
@@ -41,6 +42,8 @@ interface RoutingViewProps {
   onBusVolumeChange: (id: BusId, v: number) => void;
   onInputDsp: (id: string, dsp: DspConfig) => void;
   onToggleInputMute: (id: string) => void;
+  /** Open the always-on-top mini controller window. */
+  onOpenMini: () => void;
 }
 
 /**
@@ -70,6 +73,7 @@ export function RoutingView({
   onBusVolumeChange,
   onInputDsp,
   onToggleInputMute,
+  onOpenMini,
 }: RoutingViewProps) {
   return (
     <section className={styles.routing} aria-label="Routing">
@@ -134,6 +138,20 @@ export function RoutingView({
             onToggleInputMute={onToggleInputMute}
           />
         )}
+      </div>
+
+      {/* Mini controller launcher — anchored to the canvas bottom-right (inside
+          this column) so it never overlaps the detail panel on the right. */}
+      <div className={miniStyles.launcher}>
+        <button
+          type="button"
+          className={miniStyles.toggle}
+          onClick={onOpenMini}
+          aria-label="Open mini controller window"
+          title="Open mini controller (Ctrl+Shift+P)"
+        >
+          🎛
+        </button>
       </div>
     </section>
   );

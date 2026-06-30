@@ -1,4 +1,5 @@
 .routing {
+  position: relative; /* anchor for the mini-controller launcher */
   display: flex;
   flex-direction: column;
   flex: 1;
