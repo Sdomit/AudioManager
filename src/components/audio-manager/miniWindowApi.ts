@@ -1,6 +1,5 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-/** Label of the always-on-top Mini Controller window. */
 export const MINI_LABEL = "mini";
 
 const MINI_OPTIONS = {
@@ -10,7 +9,7 @@ const MINI_OPTIONS = {
   height: 384,
   resizable: false,
   decorations: false,
-  alwaysOnTop: true,
+  alwaysOnTop: false,
   skipTaskbar: true,
   center: true,
 } as const;
