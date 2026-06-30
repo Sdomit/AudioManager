@@ -58,9 +58,9 @@
   border-radius: 50%;
   background: var(--am-text-tertiary, var(--am-border-subtle));
 }
-.dot_running  { background: var(--am-meter-ok); }
+.dot_running  { background: var(--am-meter-low); }
 .dot_clipping { background: var(--am-meter-clip); }
-.dot_silent   { background: var(--am-meter-ok); opacity: 0.35; }
+.dot_silent   { background: var(--am-meter-low); opacity: 0.35; }
 .dot_error    { background: var(--am-meter-clip); }
 
 /* Meter */

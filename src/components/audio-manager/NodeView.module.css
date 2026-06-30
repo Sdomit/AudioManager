@@ -180,7 +180,7 @@
   font-weight: 500;
   color: var(--am-text-primary);
   background: var(--am-surface-2);
-  border: 1px solid var(--am-drop-invalid, #EF4444);
+  border: 1px solid var(--am-meter-clip);
   border-radius: var(--am-radius-sm);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   pointer-events: none;

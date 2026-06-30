@@ -86,8 +86,8 @@
   padding: var(--am-space-2) var(--am-space-3);
   font-size: var(--am-text-12, 12px);
   line-height: 1.4;
-  color: var(--am-warn, #d97706);
-  background: rgba(217, 119, 6, 0.1);
+  color: var(--am-warning);
+  background: var(--am-warning-muted);
   border-radius: var(--am-radius-md);
 }
 
