@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   iconForBusRole,
@@ -130,6 +130,50 @@ const MIN_CANVAS_H = 300;
 // exactly on the dots the user sees.
 const GRID = 20;
 const snapTo = (n: number) => Math.round(n / GRID) * GRID;
+
+/**
+ * Popup menu that opens at (x, y) but flips inside the window when it would
+ * overflow the right/bottom edge. Measures itself in useLayoutEffect (before
+ * paint) so there is no visible jump.
+ */
+function ClampedMenu({
+  x,
+  y,
+  className,
+  ariaLabel,
+  children,
+}: {
+  x: number;
+  y: number;
+  className: string;
+  ariaLabel: string;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const pad = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const left = x + r.width > vw - pad ? Math.max(pad, vw - pad - r.width) : x;
+    const top = y + r.height > vh - pad ? Math.max(pad, vh - pad - r.height) : y;
+    setPos({ left, top });
+  }, [x, y]);
+  return (
+    <div
+      ref={ref}
+      className={className}
+      role="menu"
+      aria-label={ariaLabel}
+      style={{ left: pos.left, top: pos.top }}
+    >
+      {children}
+    </div>
+  );
+}
 
 interface DragState {
   /**
@@ -2410,11 +2454,11 @@ export function NodeView({
                 onClick={() => setAddFxMenu(null)}
                 aria-hidden
               />
-              <div
+              <ClampedMenu
+                x={addFxMenu.x}
+                y={addFxMenu.y}
                 className={styles.bgCtxMenu}
-                role="menu"
-                aria-label="Add effect"
-                style={{ left: addFxMenu.x, top: addFxMenu.y }}
+                ariaLabel="Add effect"
               >
                 {available.length === 0 ? (
                   <div className={styles.bgCtxItem} aria-disabled>
@@ -2435,7 +2479,7 @@ export function NodeView({
                     </button>
                   ))
                 )}
-              </div>
+              </ClampedMenu>
             </>
           );
         })()}
@@ -2451,11 +2495,11 @@ export function NodeView({
             }}
             aria-hidden
           />
-          <div
+          <ClampedMenu
+            x={bgCtx.x}
+            y={bgCtx.y}
             className={styles.bgCtxMenu}
-            role="menu"
-            aria-label="Canvas actions"
-            style={{ left: bgCtx.x, top: bgCtx.y }}
+            ariaLabel="Canvas actions"
           >
             {onAddInput && (
               <button
@@ -2544,7 +2588,7 @@ export function NodeView({
             >
               Reset layout
             </button>
-          </div>
+          </ClampedMenu>
         </>
       )}
     </div>
