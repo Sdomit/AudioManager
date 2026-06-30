@@ -7,7 +7,7 @@ import {
   RecordIcon,
   XIcon,
 } from "./Icon";
-import { findRecording } from "./RecordButton";
+import { findRecording, RecordButton } from "./RecordButton";
 import type {
   ActiveRecording,
   AudioInput,
@@ -122,6 +122,8 @@ const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus co
 const FX_W = 120;
 const FX_H = 36;
 const FX_GAP = 28;
+const RECORD_W = 210;
+const RECORD_H = 104;
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
 
@@ -177,7 +179,7 @@ function dropReasonFor(code: string): string {
 }
 
 interface NodeDragState {
-  kind: "input" | "bus" | "group" | "fx" | "float";
+  kind: "input" | "bus" | "group" | "fx" | "float" | "record";
   id: string;
   startMouseX: number;
   startMouseY: number;
@@ -232,18 +234,30 @@ function floatIdFromNodeId(id: NodeId): string | null {
     : null;
 }
 
+// Record node: a parked sink. Pick a source (any input or bus) via its dropdown;
+// it records that tap. Local UI node — position + bound source are frontend-only.
+const RECORD_NODE_PREFIX = "record:";
+function recordNodeId(recId: string): NodeId {
+  return `${RECORD_NODE_PREFIX}${recId}`;
+}
+function isRecordNodeId(id: NodeId): boolean {
+  return id.startsWith(RECORD_NODE_PREFIX);
+}
+
 // ── Layout helpers ────────────────────────────────────────────────────
 // Node footprint by graph NodeId kind. Centralizes the size lookup that
 // the clamp / drag / placement paths used to each duplicate inline.
 function nodeWidth(nid: NodeId): number {
   if (isInputNodeId(nid)) return INPUT_W;
   if (isBusNodeId(nid)) return BUS_W;
+  if (isRecordNodeId(nid)) return RECORD_W;
   if (isFxNodeId(nid) || isFloatNodeId(nid)) return FX_W;
   return GROUP_W;
 }
 function nodeHeight(nid: NodeId): number {
   if (isInputNodeId(nid)) return INPUT_H;
   if (isBusNodeId(nid)) return BUS_H;
+  if (isRecordNodeId(nid)) return RECORD_H;
   if (isFxNodeId(nid) || isFloatNodeId(nid)) return FX_H;
   return GROUP_H;
 }
@@ -323,6 +337,7 @@ const LS_VIEW          = "am.nodeView.viewport";
 const LS_GROUPS        = "am.nodeGroups.v1";
 const LS_FLOATING_FX   = "am.floatingFx.v1";
 const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
+const LS_RECORD_NODES  = "am.recordNodes.v1";
 
 /**
  * Load unified node positions. Reads the v2 key first; if absent and
@@ -392,6 +407,26 @@ function loadFloatingFx(): Map<string, FloatingFxMeta> {
     }
   } catch {}
   return new Map();
+}
+
+/** Frontend-only record node: bound source tap (null until a source is picked). */
+interface RecordNodeMeta { source: TapSpec | null; }
+
+function loadRecordNodes(): Map<string, RecordNodeMeta> {
+  try {
+    const raw = localStorage.getItem(LS_RECORD_NODES);
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<[string, RecordNodeMeta]>;
+      return new Map(arr);
+    }
+  } catch {}
+  return new Map();
+}
+
+let recordIdCounter = 0;
+function nextRecordId(): string {
+  recordIdCounter += 1;
+  return `r_${Date.now().toString(36)}_${recordIdCounter.toString(36)}`;
 }
 
 let floatIdCounter = 0;
@@ -580,12 +615,15 @@ export function NodeView({
   const [localGroups, setLocalGroups] = useState<Map<string, GroupMeta>>(loadGroups);
   const [localEdges, setLocalEdges] = useState<Map<string, GraphEdge>>(loadLocalEdges);
   const [floatingFx, setFloatingFx] = useState<Map<string, FloatingFxMeta>>(loadFloatingFx);
+  const [recordNodes, setRecordNodes] = useState<Map<string, RecordNodeMeta>>(loadRecordNodes);
   const localGroupsRef = useRef(localGroups);
   const localEdgesRef = useRef(localEdges);
   const floatingFxRef = useRef(floatingFx);
+  const recordNodesRef = useRef(recordNodes);
   useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
   useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
   useEffect(() => { floatingFxRef.current = floatingFx; }, [floatingFx]);
+  useEffect(() => { recordNodesRef.current = recordNodes; }, [recordNodes]);
   useEffect(() => {
     try {
       localStorage.setItem(LS_GROUPS, JSON.stringify(Array.from(localGroups.entries())));
@@ -601,6 +639,11 @@ export function NodeView({
       localStorage.setItem(LS_FLOATING_FX, JSON.stringify(Array.from(floatingFx.entries())));
     } catch {}
   }, [floatingFx]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_RECORD_NODES, JSON.stringify(Array.from(recordNodes.entries())));
+    } catch {}
+  }, [recordNodes]);
 
   // Sync inputs+buses → seed defaults, prune removed. One effect now.
   useEffect(() => {
@@ -637,16 +680,21 @@ export function NodeView({
       for (const fid of floatingFxRef.current.keys()) {
         aliveFloats.add(floatNodeId(fid));
       }
+      const aliveRecords = new Set<NodeId>();
+      for (const rid of recordNodesRef.current.keys()) {
+        aliveRecords.add(recordNodeId(rid));
+      }
       for (const id of Array.from(next.keys())) {
         if (isInputNodeId(id) && !aliveInputs.has(id)) { next.delete(id); changed = true; }
         else if (isBusNodeId(id) && !aliveBuses.has(id)) { next.delete(id); changed = true; }
         else if (isGroupNodeId(id) && !aliveGroups.has(id)) { next.delete(id); changed = true; }
         else if (isFxNodeId(id) && !aliveFx.has(id)) { next.delete(id); changed = true; }
         else if (isFloatNodeId(id) && !aliveFloats.has(id)) { next.delete(id); changed = true; }
+        else if (isRecordNodeId(id) && !aliveRecords.has(id)) { next.delete(id); changed = true; }
       }
       return changed ? next : prev;
     });
-  }, [inputs, buses, floatingFx]);
+  }, [inputs, buses, floatingFx, recordNodes]);
 
   // Prune local edges whose endpoints no longer exist.
   useEffect(() => {
@@ -979,7 +1027,7 @@ export function NodeView({
   // ── Mouse handlers for moving a node ──────────────────────────────────
   const handleNodeMouseDown = useCallback(
     (
-      kind: "input" | "bus" | "group" | "fx" | "float",
+      kind: "input" | "bus" | "group" | "fx" | "float" | "record",
       id: string,
       e: React.MouseEvent,
     ) => {
@@ -993,6 +1041,7 @@ export function NodeView({
         : kind === "bus" ? busNodeId(id as BusId)
         : kind === "fx" ? (id as NodeId) // already a fxNodeId
         : kind === "float" ? (id as NodeId) // already a floatNodeId
+        : kind === "record" ? (id as NodeId) // already a recordNodeId
         : groupNodeId(id);
       const pos = nodePosRef.current.get(nid);
       if (!pos) return;
@@ -1542,6 +1591,9 @@ export function NodeView({
   // floatNodeId(`float:<floatId>`).
   const onFloatNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
     handleNodeMouseDown("float", id, e), [handleNodeMouseDown]);
+  // Record node drag. `id` is the full recordNodeId(`record:<recId>`).
+  const onRecordNodeMouseDown = useCallback((id: string, e: React.MouseEvent) =>
+    handleNodeMouseDown("record", id, e), [handleNodeMouseDown]);
 
   // Start a drag-connect from a group's output port.
   const onGroupPortMouseDown = useCallback(
@@ -2204,6 +2256,145 @@ export function NodeView({
           );
         })}
 
+        {/* Record nodes — pick a source (input or bus); records that tap. */}
+        {Array.from(recordNodes.entries()).map(([rid, meta]) => {
+          const nid = recordNodeId(rid);
+          const pos = nodePositions.get(nid);
+          if (!pos) return null;
+          const isMoving = nodeDrag?.kind === "record" && nodeDrag.id === nid;
+          // Validate the bound source against the live inputs/buses so a
+          // deleted source falls back to "removed" instead of a stale "ready".
+          const src = meta.source;
+          const sourceAlive =
+            !!src &&
+            (src.kind === "bus_out"
+              ? buses.some((b) => b.id === src.bus_id)
+              : inputs.some((i) => i.id === src.device_id));
+          const activeSource = sourceAlive ? src : null;
+          const rec = activeSource
+            ? findRecording(activeRecordings, activeSource)
+            : null;
+          const armed = !!rec;
+          const srcValue = activeSource
+            ? activeSource.kind === "bus_out"
+              ? `bus:${activeSource.bus_id}`
+              : `input:${activeSource.device_id}`
+            : "";
+          return (
+            <div
+              key={nid}
+              className={`${styles.floatFx} ${isMoving ? styles.nodeMoving : ""}`}
+              style={{
+                left: pos.x,
+                top: pos.y,
+                width: RECORD_W,
+                height: RECORD_H,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "stretch",
+                gap: 6,
+                padding: 10,
+              }}
+              onMouseDown={(e) => onRecordNodeMouseDown(nid, e)}
+              title="Record node — pick a source and arm"
+            >
+              <span className={styles.inputPort} aria-hidden>
+                <span className={styles.portInner} />
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span className={styles.fxNodeKind}>RECORD</span>
+                <button
+                  type="button"
+                  className={styles.fxNodeRemove}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (rec) onStopRecording(rec.id);
+                    setRecordNodes((prev) => {
+                      const next = new Map(prev);
+                      next.delete(rid);
+                      return next;
+                    });
+                  }}
+                  title="Remove record node"
+                  aria-label="Remove record node"
+                >
+                  ×
+                </button>
+              </div>
+              <select
+                value={srcValue}
+                disabled={armed}
+                onMouseDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  let source: TapSpec | null = null;
+                  if (v.startsWith("bus:")) {
+                    source = { kind: "bus_out", bus_id: v.slice(4) as BusId };
+                  } else if (v.startsWith("input:")) {
+                    source = { kind: "input_pre", device_id: v.slice(6) };
+                  }
+                  setRecordNodes((prev) => {
+                    const next = new Map(prev);
+                    const m = next.get(rid);
+                    if (m) next.set(rid, { ...m, source });
+                    return next;
+                  });
+                }}
+                style={{ width: "100%" }}
+                title={armed ? "Stop recording to change source" : "Recording source"}
+              >
+                <option value="">— select source —</option>
+                {inputs.length > 0 && (
+                  <optgroup label="Inputs">
+                    {inputs.map((i) => (
+                      <option key={`in-${i.id}`} value={`input:${i.id}`}>
+                        {i.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {buses.length > 0 && (
+                  <optgroup label="Buses">
+                    {buses.map((b) => (
+                      <option key={`bus-${b.id}`} value={`bus:${b.id}`}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <RecordButton
+                  spec={activeSource ?? { kind: "input_pre", device_id: "" }}
+                  active={activeRecordings}
+                  onStart={onStartRecording}
+                  onStop={onStopRecording}
+                  disabled={!activeSource}
+                  title={
+                    activeSource ? "Start recording this source" : "Pick a source first"
+                  }
+                />
+                <span className={styles.fxNodeLabel}>
+                  {armed
+                    ? "recording…"
+                    : activeSource
+                      ? "ready"
+                      : src
+                        ? "source removed"
+                        : "no source"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+
         {/* Group nodes (frontend-only DAG demo nodes) */}
         {Array.from(localGroups.entries()).map(([gid, meta]) => {
           const nid = groupNodeId(gid);
@@ -2405,6 +2596,32 @@ export function NodeView({
                 + {d.label}
               </button>
             ))}
+            <div className={styles.bgCtxSep} aria-hidden />
+            <div className={styles.bgCtxHeading}>Add node</div>
+            <button
+              role="menuitem"
+              className={styles.bgCtxItem}
+              onClick={() => {
+                const { x: cx, y: cy } = toCanvas(bgCtx.x, bgCtx.y);
+                const id = nextRecordId();
+                setRecordNodes((prev) => {
+                  const next = new Map(prev);
+                  next.set(id, { source: null });
+                  return next;
+                });
+                setNodePositions((prev) => {
+                  const next = new Map(prev);
+                  next.set(recordNodeId(id), {
+                    x: Math.max(0, cx - RECORD_W / 2),
+                    y: Math.max(0, cy - RECORD_H / 2),
+                  });
+                  return next;
+                });
+                setBgCtx(null);
+              }}
+            >
+              + Record node
+            </button>
             <div className={styles.bgCtxSep} aria-hidden />
             <button
               role="menuitem"

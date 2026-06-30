@@ -1681,10 +1681,13 @@ fn start_recording(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     spec: TapSpec,
+    config: Option<recorder::RecordConfig>,
 ) -> Result<RecordingInfo, EngineError> {
-    let recordings_dir = resolve_recordings_dir(&app)?;
     let base = app_local_dir(&app)?;
-    let format = RecorderSettings::load_or_default(&base).format;
+    let global_format = RecorderSettings::load_or_default(&base).format;
+    let global_dir = resolve_recordings_dir(&app)?;
+    let (recordings_dir, format) =
+        recorder::RecordConfig::resolve(config.as_ref(), global_dir, global_format);
     let mut inner = state.inner.lock().unwrap();
     let result = start_recording_inner(&mut inner, &recordings_dir, None, format, spec);
     if let Err(err) = &result {

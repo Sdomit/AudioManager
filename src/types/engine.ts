@@ -341,6 +341,15 @@ export interface RecorderSettings {
   format: RecordFormat;
 }
 
+/**
+ * Per-recording overrides from a Record node. Omitted fields fall back to the
+ * global `RecorderSettings` default. Matches Rust `recorder::RecordConfig`.
+ */
+export interface RecordConfig {
+  dir?: string;
+  format?: RecordFormat;
+}
+
 export interface RecordingInfo {
   id: string;
   spec: TapSpec;

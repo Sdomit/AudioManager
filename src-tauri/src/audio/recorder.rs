@@ -642,6 +642,35 @@ impl RecorderSettings {
     }
 }
 
+/// Per-recording overrides supplied by a Record node. Each `None` field falls
+/// back to the global `RecorderSettings` default at start time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RecordConfig {
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    #[serde(default)]
+    pub format: Option<RecordFormat>,
+}
+
+impl RecordConfig {
+    /// Effective `(dir, format)` for a recording: any override wins over the
+    /// global default; an empty dir override is ignored.
+    pub fn resolve(
+        config: Option<&RecordConfig>,
+        global_dir: PathBuf,
+        global_format: RecordFormat,
+    ) -> (PathBuf, RecordFormat) {
+        let dir = config
+            .and_then(|c| c.dir.as_ref())
+            .filter(|p| !p.as_os_str().is_empty())
+            .cloned()
+            .unwrap_or(global_dir);
+        let format = config.and_then(|c| c.format).unwrap_or(global_format);
+        (dir, format)
+    }
+}
+
 /// List all `.wav` files in `dir`. Returns oldest-first by mtime.
 pub fn list_recording_files(dir: &Path) -> Result<Vec<RecordingFile>, EngineError> {
     if !dir.exists() {
@@ -977,5 +1006,30 @@ mod tests {
         assert_eq!(loaded.recordings_dir, s.recordings_dir);
         assert_eq!(loaded.format, s.format);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn record_config_resolve_override_and_fallback() {
+        let g = PathBuf::from("/global");
+        // No config → global.
+        let (d, f) = RecordConfig::resolve(None, g.clone(), RecordFormat::Float32);
+        assert_eq!(d, g);
+        assert_eq!(f, RecordFormat::Float32);
+        // Both overridden.
+        let c = RecordConfig {
+            dir: Some(PathBuf::from("/custom")),
+            format: Some(RecordFormat::Int16),
+        };
+        let (d, f) = RecordConfig::resolve(Some(&c), g.clone(), RecordFormat::Float32);
+        assert_eq!(d, PathBuf::from("/custom"));
+        assert_eq!(f, RecordFormat::Int16);
+        // Empty dir override ignored; format override still applies.
+        let c = RecordConfig {
+            dir: Some(PathBuf::new()),
+            format: Some(RecordFormat::Int24),
+        };
+        let (d, f) = RecordConfig::resolve(Some(&c), g.clone(), RecordFormat::Float32);
+        assert_eq!(d, g);
+        assert_eq!(f, RecordFormat::Int24);
     }
 }

@@ -23,6 +23,7 @@ import type {
   PresetSummary,
   PassthroughStatus,
   RecordFormat,
+  RecordConfig,
   RecorderSettings,
   RecordingFile,
   RecordingInfo,
@@ -233,8 +234,11 @@ export const renameBus = (busId: BusId, name: string): Promise<BusStatus> =>
 // ── Recording ─────────────────────────────────────────────────────────────────
 
 /** Start a single recording at the requested tap point. */
-export const startRecording = (spec: TapSpec): Promise<RecordingInfo> =>
-  invoke<RecordingInfo>("start_recording", { spec });
+export const startRecording = (
+  spec: TapSpec,
+  config?: RecordConfig,
+): Promise<RecordingInfo> =>
+  invoke<RecordingInfo>("start_recording", { spec, config });
 
 /**
  * Start one BusOut recording for every running bus. Files land in a
