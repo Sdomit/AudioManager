@@ -103,19 +103,34 @@ Each phase: implement → verify gate → Codex review → stage. No push until 
   device opened; cargo + clippy green.
 
 ### R2 — Backend: format expansion (FLAC + Opus + MP3)
-- `RecordFormat` → `RecordContainer { Wav, Flac, Opus, Mp3 }` + params
-  (bit_depth, sample_rate, channels, quality).
-- Writer abstraction: trait `SampleSink` with WAV (hound, existing), FLAC, Opus, MP3
-  impls. Writer thread writes via the trait.
-- Resample + downmix stage in writer when target rate/channels differ from source
-  (Opus is fixed 48 kHz → resample required).
-- **Crate choices (verify before adding; do not guess versions):**
-  - FLAC → `flacenc` (pure Rust, **preferred** — avoids another C/CMake dep).
-  - Opus → `audiopus` (already in tree; see memory `pairing-v2` RC-pin note).
-  - MP3 → `mp3lame-encoder` (binds libmp3lame; needs MSVC/CMake — already required by
-    build env). Flag as the heaviest dep; drop MP3 if it complicates the build.
-- **Verify**: record one input to each container; files open + correct duration in a
-  player; cargo green.
+
+Split into a no-dep refactor (R2a, DONE) + one encoder per slice. Each encoder is a
+`SampleSink` impl; the writer loop is untouched after R2a.
+
+**R2a — `SampleSink` trait refactor (DONE, committed).**
+- `trait SampleSink { write(f32); bytes_estimate()->u64; finalize()->u64 }` +
+  `WavSink` (hound). `run_writer` is generic over `Box<dyn SampleSink>`. No new deps,
+  behavior-preserving. cargo test 294 pass.
+
+**Per-encoder dep findings (verified against current Cargo.toml):**
+- **FLAC** → streaming needs `flac-bound` (binds libFLAC → C/CMake build dep). Pure-Rust
+  `flacenc` buffers the whole stream in RAM (bad for long live takes) — rejected for the
+  streaming sink. FLAC = lossless, self-contained container (no Ogg).
+- **Opus** → `audiopus =0.3.0-rc.0` is ALREADY a dep (phone decode); its `Encoder` is
+  usable. BUT: needs resample to 48 kHz (reuse `audio/resampler.rs`), 2.5–60 ms framing,
+  AND an Ogg container to make a playable `.opus`/`.ogg` (new `ogg` crate). No new C dep.
+- **MP3** → `mp3lame-encoder` (binds libmp3lame → C dep), streaming, self-contained.
+
+**Remaining slices (pick by dep tolerance):**
+- **R2b Opus** — lowest *new-dep* cost (only `ogg`; audiopus already built). Needs
+  resampler + framing. Good "compression" default.
+- **R2c FLAC** — `flac-bound` (C/libFLAC). Lossless. Add only if a C dep is acceptable.
+- **R2d MP3** — `mp3lame-encoder` (C/libmp3lame). Add last; drop on MSVC friction.
+
+Each slice: add the crate, add `<X>Sink: SampleSink`, extend `RecordContainer` +
+`RecordConfig`/`RecorderSettings`, wire a resampler/downmix when target rate/channels
+differ from source, then verify the file opens + correct duration. Do NOT guess crate
+versions — resolve them when adding.
 
 ### R3 — Backend: settings model (global default + per-node override) + IPC
 - Extend `RecorderSettings` (global defaults) + new per-node `RecordConfig` (override

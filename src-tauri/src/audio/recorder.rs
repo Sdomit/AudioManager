@@ -332,15 +332,10 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
     let filename = format!("{ts}_{}_{short_id}.wav", spec.slug());
     let path = dir.join(filename);
 
-    let wav_spec = hound::WavSpec {
-        channels,
-        sample_rate,
-        bits_per_sample: format.bits_per_sample(),
-        sample_format: format.hound_format(),
-    };
-    let writer = hound::WavWriter::create(&path, wav_spec).map_err(|e| EngineError {
-        message: format!("Failed to create WAV file '{}': {e}", path.display()),
-    })?;
+    let sink: Box<dyn SampleSink> = Box::new(
+        WavSink::create(&path, channels, sample_rate, format)
+            .map_err(|message| EngineError { message })?,
+    );
 
     let ring = RingBuffer::<f32>::new(RECORDER_RING_FRAMES * channels as usize);
     let (producer, consumer) = ring.split();
@@ -359,19 +354,10 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
     let writer_stop = Arc::clone(&stop_flag);
     let writer_error = Arc::clone(&error);
     let writer_bytes = Arc::clone(&bytes_written);
-    let path_for_thread = path.clone();
     let writer_handle = thread::Builder::new()
         .name(format!("rec-writer-{short_id}"))
         .spawn(move || {
-            run_writer(
-                writer,
-                format,
-                consumer,
-                writer_stop,
-                writer_error,
-                writer_bytes,
-                path_for_thread,
-            );
+            run_writer(sink, consumer, writer_stop, writer_error, writer_bytes);
         })
         .map_err(|e| {
             // Writer spawn failed: drop the WAV file we just opened so it
@@ -424,26 +410,95 @@ pub fn start_recorder(req: StartRecorderRequest<'_>) -> Result<RecorderHandle, E
     })
 }
 
-fn write_sample(
-    writer: &mut hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+/// A streaming destination for one recorder tap's interleaved f32 samples.
+/// One value == one channel sample, fed in interleaved order.
+///
+// ponytail: single impl (WavSink) today; the trait exists because the FLAC /
+// Opus / MP3 sinks (R2b–R2d) drop in as sibling impls with no change to the
+// writer loop below. Collapse back into WavSink if those formats are dropped.
+trait SampleSink: Send {
+    /// Encode and write one sample.
+    fn write(&mut self, s: f32) -> Result<(), String>;
+    /// Running on-disk byte estimate, polled by the writer loop for the meter.
+    fn bytes_estimate(&self) -> u64;
+    /// Flush and close. Returns the final on-disk byte count when known.
+    fn finalize(self: Box<Self>) -> Result<u64, String>;
+}
+
+/// WAV sink: hound writer + PCM/float conversion by bit depth.
+struct WavSink {
+    writer: Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>,
     format: RecordFormat,
-    s: f32,
-) -> hound::Result<()> {
-    match format {
-        RecordFormat::Float32 => writer.write_sample(s),
-        RecordFormat::Int24 => writer.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0) as i32),
-        RecordFormat::Int16 => writer.write_sample((s.clamp(-1.0, 1.0) * 32_767.0) as i16),
+    path: PathBuf,
+    samples: u64,
+}
+
+impl WavSink {
+    fn create(
+        path: &Path,
+        channels: u16,
+        sample_rate: u32,
+        format: RecordFormat,
+    ) -> Result<Self, String> {
+        let wav_spec = hound::WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: format.bits_per_sample(),
+            sample_format: format.hound_format(),
+        };
+        let writer = hound::WavWriter::create(path, wav_spec)
+            .map_err(|e| format!("Failed to create WAV file '{}': {e}", path.display()))?;
+        Ok(Self {
+            writer: Some(writer),
+            format,
+            path: path.to_path_buf(),
+            samples: 0,
+        })
+    }
+}
+
+impl SampleSink for WavSink {
+    fn write(&mut self, s: f32) -> Result<(), String> {
+        let w = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| "WAV writer already finalized".to_string())?;
+        match self.format {
+            RecordFormat::Float32 => w.write_sample(s),
+            RecordFormat::Int24 => w.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0) as i32),
+            RecordFormat::Int16 => w.write_sample((s.clamp(-1.0, 1.0) * 32_767.0) as i16),
+        }
+        .map_err(|e| format!("WAV write failed: {e}"))?;
+        self.samples += 1;
+        Ok(())
+    }
+
+    fn bytes_estimate(&self) -> u64 {
+        self.samples * self.format.bytes_per_sample()
+    }
+
+    fn finalize(mut self: Box<Self>) -> Result<u64, String> {
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| "WAV writer already finalized".to_string())?;
+        writer
+            .finalize()
+            .map_err(|e| format!("WAV finalize failed: {e}"))?;
+        // Prefer the real file size; fall back to the running estimate.
+        let bytes = fs::metadata(&self.path)
+            .map(|m| m.len())
+            .unwrap_or_else(|_| self.samples * self.format.bytes_per_sample());
+        Ok(bytes)
     }
 }
 
 fn run_writer(
-    mut writer: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
-    format: RecordFormat,
+    mut sink: Box<dyn SampleSink>,
     mut consumer: Consumer<f32>,
     stop_flag: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     bytes_written: Arc<AtomicU64>,
-    path: PathBuf,
 ) {
     // Reserve a small batch counter so a relentlessly-full ring doesn't
     // monopolize the thread without yielding.
@@ -455,8 +510,8 @@ fn run_writer(
         while written_this_batch < BATCH {
             match consumer.pop() {
                 Some(sample) => {
-                    if let Err(e) = write_sample(&mut writer, format, sample) {
-                        set_first_error(&error, format!("WAV write failed: {e}"));
+                    if let Err(e) = sink.write(sample) {
+                        set_first_error(&error, e);
                         write_failed = true;
                         break;
                     }
@@ -465,11 +520,11 @@ fn run_writer(
                 None => break,
             }
         }
-        // Update byte counter once per batch from successful writes only.
-        add_written_bytes(&bytes_written, written_this_batch, format);
+        // Publish the running byte estimate once per batch.
+        bytes_written.store(sink.bytes_estimate(), Ordering::Relaxed);
 
         if write_failed {
-            finalize_writer(writer, &path, &bytes_written, &error);
+            finalize_sink(sink, &bytes_written, &error);
             return;
         }
 
@@ -483,33 +538,27 @@ fn run_writer(
 
     // Final drain — the engine may have pushed a few extra samples between
     // when we noticed stop_flag and when Remove arrived in the callback.
-    let mut tail = 0;
     while let Some(sample) = consumer.pop() {
-        if let Err(e) = write_sample(&mut writer, format, sample) {
-            set_first_error(&error, format!("WAV write failed during drain: {e}"));
+        if let Err(e) = sink.write(sample) {
+            set_first_error(&error, e);
             break;
         }
-        tail += 1;
     }
-    add_written_bytes(&bytes_written, tail, format);
+    bytes_written.store(sink.bytes_estimate(), Ordering::Relaxed);
 
-    finalize_writer(writer, &path, &bytes_written, &error);
+    finalize_sink(sink, &bytes_written, &error);
 }
 
-fn finalize_writer(
-    writer: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
-    path: &Path,
+fn finalize_sink(
+    sink: Box<dyn SampleSink>,
     bytes_written: &Arc<AtomicU64>,
     error: &Arc<Mutex<Option<String>>>,
 ) {
-    if let Err(e) = writer.finalize() {
-        // Preserve root cause if a write error already happened.
-        set_first_error(error, format!("WAV finalize failed: {e}"));
-        return;
-    }
-    // Replace the running-sum approximation with the actual file size.
-    if let Ok(meta) = fs::metadata(path) {
-        bytes_written.store(meta.len(), Ordering::Relaxed);
+    match sink.finalize() {
+        Ok(bytes) => {
+            bytes_written.store(bytes, Ordering::Relaxed);
+        }
+        Err(e) => set_first_error(error, e),
     }
 }
 
@@ -577,12 +626,6 @@ fn recording_status_error(error: Option<String>, dropped_samples: u64) -> Option
 }
 
 #[inline]
-fn add_written_bytes(bytes_written: &Arc<AtomicU64>, successful_samples: usize, format: RecordFormat) {
-    if successful_samples > 0 {
-        bytes_written.fetch_add(successful_samples as u64 * format.bytes_per_sample(), Ordering::Relaxed);
-    }
-}
-
 fn bus_short(id: BusId) -> &'static str {
     match id {
         BusId::A1 => "A1",
@@ -879,32 +922,12 @@ mod tests {
     }
 
     #[test]
-    fn add_written_bytes_counts_successful_samples_once() {
-        let bytes = Arc::new(AtomicU64::new(0));
-        add_written_bytes(&bytes, 4096, RecordFormat::Float32);
-        add_written_bytes(&bytes, 1024, RecordFormat::Float32);
-        assert_eq!(bytes.load(Ordering::Relaxed), (4096_u64 + 1024_u64) * 4);
-    }
-
-    #[test]
-    fn add_written_bytes_ignores_zero_successes() {
-        let bytes = Arc::new(AtomicU64::new(1234));
-        add_written_bytes(&bytes, 0, RecordFormat::Float32);
-        assert_eq!(bytes.load(Ordering::Relaxed), 1234);
-    }
-
-    #[test]
-    fn add_written_bytes_int16_uses_2_bytes() {
-        let bytes = Arc::new(AtomicU64::new(0));
-        add_written_bytes(&bytes, 100, RecordFormat::Int16);
-        assert_eq!(bytes.load(Ordering::Relaxed), 200);
-    }
-
-    #[test]
-    fn add_written_bytes_int24_uses_3_bytes() {
-        let bytes = Arc::new(AtomicU64::new(0));
-        add_written_bytes(&bytes, 100, RecordFormat::Int24);
-        assert_eq!(bytes.load(Ordering::Relaxed), 300);
+    fn record_format_bytes_per_sample_matches_bit_depth() {
+        // WavSink::bytes_estimate is samples * this; the per-format byte width
+        // is the part worth pinning (16-bit=2, 24-bit=3, 32f=4).
+        assert_eq!(RecordFormat::Float32.bytes_per_sample(), 4);
+        assert_eq!(RecordFormat::Int24.bytes_per_sample(), 3);
+        assert_eq!(RecordFormat::Int16.bytes_per_sample(), 2);
     }
 
     #[test]
