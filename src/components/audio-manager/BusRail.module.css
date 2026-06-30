@@ -1,8 +1,12 @@
 .rail {
+  position: relative; /* anchor for the floating view toggle */
   display: flex;
   align-items: stretch;
   gap: var(--am-space-3);
   padding: var(--am-space-4);
+  /* Leave room on the right for the floating Console/Cards toggle so wide cards
+     don't slide under it. */
+  padding-right: 92px;
   background: var(--am-surface-1);
   border-bottom: 1px solid var(--am-border-subtle);
   min-width: 0;
@@ -42,9 +46,10 @@
 }
 
 .viewToggle {
-  margin-left: auto;
-  align-self: flex-start;
-  margin-top: var(--am-space-1);
+  position: absolute;
+  top: var(--am-space-4);
+  right: var(--am-space-4);
+  z-index: 1;
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 600;
@@ -68,6 +73,7 @@
 @media (max-width: 1199px) {
   .rail {
     padding: var(--am-space-3);
+    padding-right: 88px; /* keep room for the floating view toggle */
     gap: var(--am-space-2);
   }
   .groupCards { gap: var(--am-space-2); }
