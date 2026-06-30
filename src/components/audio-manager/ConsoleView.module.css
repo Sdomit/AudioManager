@@ -45,7 +45,7 @@
 }
 
 .channelLabel {
-  font-size: 11px;
+  font-size: var(--am-text-11);
   color: var(--am-text-secondary);
   text-align: center;
   line-height: 1.2;
@@ -58,9 +58,9 @@
   border-radius: 50%;
   background: var(--am-text-tertiary, var(--am-border-subtle));
 }
-.dot_running  { background: var(--am-meter-ok); }
+.dot_running  { background: var(--am-meter-low); }
 .dot_clipping { background: var(--am-meter-clip); }
-.dot_silent   { background: var(--am-meter-ok); opacity: 0.35; }
+.dot_silent   { background: var(--am-meter-low); opacity: 0.35; }
 .dot_error    { background: var(--am-meter-clip); }
 
 /* Meter */
@@ -75,7 +75,7 @@
 .dbVal,
 .volVal {
   font-family: var(--am-font-mono);
-  font-size: 11px;
+  font-size: var(--am-text-11);
   color: var(--am-text-secondary);
   min-height: 15px;
 }

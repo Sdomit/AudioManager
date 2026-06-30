@@ -97,3 +97,9 @@
 .actionBtn:hover {
   background: rgba(255, 255, 255, 0.14);
 }
+
+/* polish: smooth hover state (was instant) */
+.dismissBtn,
+.actionBtn {
+  transition: background var(--am-dur-fast) var(--am-ease-out), color var(--am-dur-fast) var(--am-ease-out), border-color var(--am-dur-fast) var(--am-ease-out);
+}

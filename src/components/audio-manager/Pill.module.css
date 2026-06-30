@@ -17,7 +17,7 @@
 
 .pill.sm {
   padding: 2px 6px;
-  font-size: 10px;
+  font-size: var(--am-text-10);
 }
 
 .dot {

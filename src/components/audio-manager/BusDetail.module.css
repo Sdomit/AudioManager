@@ -311,7 +311,7 @@
   text-overflow: ellipsis;
 }
 .routedDevice {
-  font-size: 10px;
+  font-size: var(--am-text-10);
   color: var(--am-text-tertiary);
   white-space: nowrap;
   overflow: hidden;

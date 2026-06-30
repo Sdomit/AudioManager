@@ -40,7 +40,7 @@
   background: transparent;
   border: none;
   border-radius: var(--am-radius-sm);
-  font-size: 14px;
+  font-size: var(--am-text-14);
   line-height: 1;
   cursor: pointer;
   transition: background var(--am-dur-fast), color var(--am-dur-fast);

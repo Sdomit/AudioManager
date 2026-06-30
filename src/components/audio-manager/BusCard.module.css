@@ -218,7 +218,7 @@
 
 .volLabel {
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--am-text-tertiary);

@@ -19,7 +19,7 @@
 }
 
 .groupLabel {
-  font-size: 10px;
+  font-size: var(--am-text-10);
   font-weight: 600;
   letter-spacing: var(--am-tracking-wide);
   text-transform: uppercase;
@@ -46,7 +46,7 @@
   align-self: flex-start;
   margin-top: var(--am-space-1);
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: var(--am-text-11);
   font-weight: 600;
   letter-spacing: 0.05em;
   border: 1px solid var(--am-border-subtle);
@@ -71,4 +71,9 @@
     gap: var(--am-space-2);
   }
   .groupCards { gap: var(--am-space-2); }
+}
+
+/* polish: smooth hover state (was instant) */
+.viewToggle {
+  transition: background var(--am-dur-fast) var(--am-ease-out), color var(--am-dur-fast) var(--am-ease-out), border-color var(--am-dur-fast) var(--am-ease-out);
 }
