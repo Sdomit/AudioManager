@@ -5,7 +5,7 @@
   z-index: 200;
   display: flex;
   justify-content: flex-end;
-  animation: am-fade-in 120ms ease-out;
+  animation: am-fade-in var(--am-dur-fast) var(--am-ease-out);
 }
 
 .drawer {
@@ -17,7 +17,7 @@
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.32);
   display: flex;
   flex-direction: column;
-  animation: am-drawer-in 180ms var(--am-ease-out);
+  animation: am-drawer-in var(--am-dur-base) var(--am-ease-out);
   overflow-y: auto;
 }
 

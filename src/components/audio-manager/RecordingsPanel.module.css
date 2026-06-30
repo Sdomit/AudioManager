@@ -5,7 +5,7 @@
   z-index: 200;
   display: flex;
   justify-content: flex-end;
-  animation: am-fade-in 120ms ease-out;
+  animation: am-fade-in var(--am-dur-fast) var(--am-ease-out);
 }
 
 .drawer {
@@ -17,7 +17,7 @@
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.32);
   display: flex;
   flex-direction: column;
-  animation: am-drawer-in 180ms var(--am-ease-out);
+  animation: am-drawer-in var(--am-dur-base) var(--am-ease-out);
   overflow: hidden;
 }
 
@@ -105,7 +105,7 @@
 
 .count {
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   color: var(--am-text-tertiary);
   background: var(--am-surface-3);
   padding: 1px 6px;
@@ -119,13 +119,13 @@
   padding: 3px 10px;
   font-size: var(--am-text-11);
   font-weight: 500;
-  color: white;
+  color: var(--am-text-on-accent);
   background: var(--am-meter-clip, #EF4444);
   border: none;
   border-radius: var(--am-radius-sm);
   cursor: pointer;
 }
-.stopAllBtn:hover { background: #DC2626; }
+.stopAllBtn:hover { background: var(--am-accent-active); }
 
 .empty {
   font-size: var(--am-text-12);
@@ -202,7 +202,7 @@
   display: flex;
   align-items: center;
   gap: var(--am-space-2);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   color: var(--am-text-tertiary);
   font-family: var(--am-font-mono);
 }
@@ -225,13 +225,13 @@
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: white;
+  color: var(--am-text-on-accent);
   background: var(--am-meter-clip, #EF4444);
   border: none;
   border-radius: var(--am-radius-sm);
   cursor: pointer;
 }
-.stopBtn:hover { background: #DC2626; }
+.stopBtn:hover { background: var(--am-accent-active); }
 
 .deleteBtn {
   width: 24px;
@@ -319,7 +319,7 @@
   border: 1px solid var(--am-border-default);
 }
 .dirSave {
-  color: white;
+  color: var(--am-text-on-accent);
   background: var(--am-accent, #22C55E);
   border-color: var(--am-accent, #22C55E);
 }

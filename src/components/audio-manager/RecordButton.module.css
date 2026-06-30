@@ -22,22 +22,22 @@
 }
 
 .btnArmed {
-  color: white;
+  color: var(--am-text-on-accent);
   background: var(--am-meter-clip, #EF4444);
   border-color: var(--am-meter-clip, #EF4444);
   animation: am-rec-pulse 1.6s ease-in-out infinite;
 }
 
 .btnArmed:hover {
-  color: white;
-  background: #DC2626;
-  border-color: #DC2626;
+  color: var(--am-text-on-accent);
+  background: var(--am-accent-active);
+  border-color: var(--am-accent-active);
 }
 
 .btnCompact {
   padding: 2px 4px;
   border-radius: var(--am-radius-sm);
-  font-size: 10px;
+  font-size: var(--am-text-10);
 }
 
 .btnDisabled {

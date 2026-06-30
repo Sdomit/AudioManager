@@ -22,6 +22,8 @@
   cursor: pointer;
   outline: none;
   user-select: none;
+  transition: background var(--am-dur-fast) var(--am-ease-out),
+    border-color var(--am-dur-fast) var(--am-ease-out);
 }
 
 .strip:hover { background: var(--am-surface-3); }
@@ -128,7 +130,7 @@
 /* Mute button */
 .muteBtn {
   padding: 3px 12px;
-  font-size: 11px;
+  font-size: var(--am-text-11);
   font-weight: 700;
   letter-spacing: 0.05em;
   border: 1px solid var(--am-border-subtle);
@@ -136,6 +138,9 @@
   background: transparent;
   color: var(--am-text-secondary);
   cursor: pointer;
+  transition: background var(--am-dur-fast) var(--am-ease-out),
+    border-color var(--am-dur-fast) var(--am-ease-out),
+    color var(--am-dur-fast) var(--am-ease-out);
 }
 
 .muteBtn:hover { background: var(--am-surface-3); }
@@ -143,5 +148,5 @@
 .muteBtnActive {
   background: var(--am-meter-clip);
   border-color: var(--am-meter-clip);
-  color: #fff;
+  color: var(--am-text-on-accent);
 }
