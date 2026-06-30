@@ -201,7 +201,11 @@ pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
 
     let app = server::router();
     let mut last_err = String::from("no port available");
-    for port in PORT_RANGE {
+    // Prefer the fixed range first (matches the QR/firewall expectation), then
+    // fall back to an OS-assigned ephemeral port (0) so pairing still starts when
+    // the whole range is occupied. The bound port rides in the QR either way; the
+    // app's own inbound firewall rule covers any port it listens on.
+    for port in PORT_RANGE.chain(std::iter::once(0u16)) {
         let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
         let handle = axum_server::Handle::new();
         let server_handle = handle.clone();
@@ -226,17 +230,24 @@ pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
         match runtime().block_on(async {
             tokio::time::timeout(Duration::from_secs(3), handle.listening()).await
         }) {
-            Ok(Some(_bound)) => {
+            Ok(Some(bound)) => {
+                // Use the actually-bound port, not the requested one — for the
+                // ephemeral fallback (requested 0) the OS picks the real port.
+                let actual = bound.port();
                 let mut slot = server_slot().lock().unwrap();
-                *slot = Some(RunningServer { port, handle });
-                return Ok(port);
+                *slot = Some(RunningServer { port: actual, handle });
+                return Ok(actual);
             }
             Ok(None) => {
                 // The serve task already returned (that is why listening()
                 // resolved None); shutdown() is belt-and-suspenders so no bound
                 // task can survive to the next iteration.
                 handle.shutdown();
-                last_err = format!("port {port} unavailable");
+                last_err = if port == 0 {
+                    "no free port available".to_string()
+                } else {
+                    format!("port {port} unavailable")
+                };
                 continue;
             }
             Err(_) => {
