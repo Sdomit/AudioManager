@@ -17,6 +17,16 @@
 .wrapPanReady { cursor: grab; }
 .wrapPanning  { cursor: grabbing; user-select: none; }
 
+/* Screen-space dot grid. Lives outside the transformed canvas so it always
+   fills the visible viewport; background-size/position are driven by the
+   current zoom/pan so dots still line up with world grid cells. */
+.gridOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
 .canvasTransform {
   position: absolute;
   top: 0;

@@ -2005,6 +2005,16 @@ export function NodeView({
           : toolbar;
       })()}
       <div
+        className={styles.gridOverlay}
+        style={{
+          backgroundImage: `radial-gradient(circle, ${snap ? "var(--am-grid-dot-strong)" : "var(--am-grid-dot)"} ${snap ? 1.3 : 1}px, transparent ${snap ? 1.8 : 1.5}px)`,
+          backgroundSize: `${GRID * view.zoom}px ${GRID * view.zoom}px`,
+          // Offset by half a cell so dots sit on world grid multiples (= snap targets).
+          backgroundPosition: `${view.tx - (GRID * view.zoom) / 2}px ${view.ty - (GRID * view.zoom) / 2}px`,
+        }}
+        aria-hidden
+      />
+      <div
         className={styles.canvasTransform}
         style={{
           transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.zoom})`,
@@ -2032,17 +2042,8 @@ export function NodeView({
             </filter>
           </defs>
 
-          {/* Background grid — pitch === GRID so snapped nodes land on the dots.
-              A touch brighter while snap-to-grid is on, as live feedback. */}
-          <pattern id="nodeGrid" width={GRID} height={GRID} patternUnits="userSpaceOnUse">
-            <circle
-              cx={GRID / 2}
-              cy={GRID / 2}
-              r={snap ? 1.3 : 1}
-              fill={snap ? "var(--am-grid-dot-strong)" : "var(--am-grid-dot)"}
-            />
-          </pattern>
-          <rect width={canvasW} height={canvasH} fill="url(#nodeGrid)" />
+          {/* Background grid is now a screen-space CSS overlay (.gridOverlay)
+              so it always fills the viewport regardless of pan. */}
 
           {/* Render wires (selected/hovered last for z-order). Wires
               touching a group node are local-only and have no live
