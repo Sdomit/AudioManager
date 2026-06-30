@@ -44,7 +44,7 @@
   align-items: center;
   justify-content: center;
   background: var(--am-accent);
-  color: white;
+  color: var(--am-text-on-accent);
   border-radius: var(--am-radius-md);
   box-shadow: 0 0 0 3px var(--am-accent-muted);
 }
@@ -109,6 +109,11 @@
   box-shadow: var(--am-elev-3);
   padding: var(--am-space-1);
   z-index: calc(var(--am-z-elevated) + 1);
+  animation: am-menu-fade var(--am-dur-fast) var(--am-ease-out);
+}
+@keyframes am-menu-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .menuHeader {
@@ -146,7 +151,7 @@
 }
 .menuV1 {
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   color: var(--am-warning);
   padding: 1px 6px;
   border-radius: var(--am-radius-sm);
@@ -187,7 +192,7 @@
 
 .streamPillCount {
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   padding: 1px 5px;
   border-radius: var(--am-radius-pill);
   background: rgba(255, 255, 255, 0.08);
@@ -294,26 +299,26 @@
   background: rgba(239, 68, 68, 0.06);
 }
 .recordBtnActive {
-  color: white;
+  color: var(--am-text-on-accent);
   background: var(--am-meter-clip, #EF4444);
   border-color: var(--am-meter-clip, #EF4444);
   animation: am-topbar-rec-pulse 1.6s ease-in-out infinite;
 }
 .recordBtnActive:hover {
-  background: #DC2626;
-  border-color: #DC2626;
-  color: white;
+  background: var(--am-accent-active);
+  border-color: var(--am-accent-active);
+  color: var(--am-text-on-accent);
 }
 .recordBtnLabel {
   font-variant-numeric: tabular-nums;
 }
 .recordBtnCount {
   font-family: var(--am-font-mono);
-  font-size: 10px;
+  font-size: var(--am-text-10);
   padding: 0 5px;
   border-radius: var(--am-radius-pill);
   background: rgba(255, 255, 255, 0.18);
-  color: white;
+  color: var(--am-text-on-accent);
 }
 @keyframes am-topbar-rec-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
@@ -359,21 +364,28 @@
   min-width: 200px;
   background: var(--am-surface-2);
   border: 1px solid var(--am-border-default);
-  border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  border-radius: var(--am-radius-md);
+  box-shadow: var(--am-elev-3);
   padding: 4px;
   display: flex;
   flex-direction: column;
   gap: 1px;
+  transform-origin: top;
+  animation: am-menu-in var(--am-dur-fast) var(--am-ease-out);
+}
+@keyframes am-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .ctxItem {
   background: transparent;
   border: 0;
   color: var(--am-text-primary, #e6e8ea);
-  font-size: 13px;
+  font-size: var(--am-text-13);
   text-align: left;
   padding: 7px 10px;
+  transition: background var(--am-dur-fast);
   border-radius: 5px;
   cursor: pointer;
 }

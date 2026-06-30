@@ -6,6 +6,7 @@
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.45);
+  animation: am-overlay-in var(--am-dur-fast) var(--am-ease-out);
 }
 
 .sheet {
@@ -15,8 +16,18 @@
   background: var(--am-surface-2);
   color: var(--am-text-primary);
   border: 1px solid var(--am-border-default);
-  border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  border-radius: var(--am-radius-lg);
+  box-shadow: var(--am-elev-3);
+  animation: am-dialog-in var(--am-dur-base) var(--am-ease-out);
+}
+
+@keyframes am-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes am-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .header {

@@ -68,6 +68,7 @@
   --am-font-ui: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --am-font-mono: "Geist Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
 
+  --am-text-10:          10px;  /* micro labels: counts, badges, version chips */
   --am-text-11:          11px;
   --am-text-12:          12px;
   --am-text-13:          13px;

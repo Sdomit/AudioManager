@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   z-index: 50;
-  animation: fade 120ms ease-out;
+  animation: fade var(--am-dur-fast) var(--am-ease-out);
 }
 
 .modal {
