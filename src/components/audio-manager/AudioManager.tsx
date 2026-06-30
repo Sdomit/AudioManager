@@ -26,6 +26,7 @@ import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onDevicesChanged } from "../../ipc/events";
 import type { DeviceInfo } from "../../types/engine";
 import {
@@ -102,6 +103,11 @@ export function AudioManager() {
   // hint. Refreshes when the phone manager opens/closes (after pair/forget) and
   // on a slow interval. Tolerates the phone server being down (→ 0).
   const [phoneCount, setPhoneCount] = useState(0);
+  // UI theme (dark default). Persisted locally; also drives the OS title bar.
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    try { return localStorage.getItem("am.theme") === "light" ? "light" : "dark"; }
+    catch { return "dark"; }
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
@@ -442,6 +448,12 @@ export function AudioManager() {
   }, []);
 
   useEffect(() => {
+    try { localStorage.setItem("am.theme", theme); } catch {}
+    // Match the native title bar to the app theme (no-op outside Tauri).
+    try { void getCurrentWindow().setTheme(theme).catch(() => {}); } catch {}
+  }, [theme]);
+
+  useEffect(() => {
     let cancelled = false;
     const fetchPhones = () => {
       ipc
@@ -458,6 +470,7 @@ export function AudioManager() {
     <div
       className={`audioManager ${styles.root}`}
       data-density={state.density}
+      data-theme={theme}
     >
       <TopBar
         presets={state.presets}
@@ -729,6 +742,8 @@ export function AudioManager() {
         onClose={() => setSettingsOpen(false)}
         density={state.density}
         onDensityChange={am.setDensity}
+        theme={theme}
+        onThemeChange={setTheme}
         inputDevices={inputDevicesCache}
         outputDevices={outputDevicesCache}
       />

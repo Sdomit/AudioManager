@@ -2039,7 +2039,7 @@ export function NodeView({
               cx={GRID / 2}
               cy={GRID / 2}
               r={snap ? 1.3 : 1}
-              fill={`rgba(255,255,255,${snap ? 0.16 : 0.09})`}
+              fill={snap ? "var(--am-grid-dot-strong)" : "var(--am-grid-dot)"}
             />
           </pattern>
           <rect width={canvasW} height={canvasH} fill="url(#nodeGrid)" />
