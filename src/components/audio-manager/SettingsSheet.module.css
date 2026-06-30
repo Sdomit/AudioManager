@@ -10,14 +10,16 @@
 }
 
 .sheet {
-  width: min(560px, 92vw);
-  max-height: 82vh;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(740px, 94vw);
+  height: min(580px, 86vh);
   background: var(--am-surface-2);
   color: var(--am-text-primary);
   border: 1px solid var(--am-border-default);
   border-radius: var(--am-radius-lg);
   box-shadow: var(--am-elev-3);
+  overflow: hidden;
   animation: am-dialog-in var(--am-dur-base) var(--am-ease-out);
 }
 
@@ -33,127 +35,349 @@
 .header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
+  gap: 8px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--am-border-default);
+  color: var(--am-text-secondary);
+  flex: 0 0 auto;
 }
 
 .title {
-  font-size: 15px;
+  font-size: 14px;
+  color: var(--am-text-primary);
+  flex: 1;
 }
 
 .close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   background: none;
   border: none;
-  color: inherit;
-  font-size: 20px;
-  line-height: 1;
+  border-radius: 6px;
+  color: var(--am-text-secondary);
   cursor: pointer;
 }
 
-.tabs {
+.close:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
+}
+
+/* ── Body: sidebar nav + content ─────────────────────────────────────────── */
+
+.body {
   display: flex;
-  gap: 4px;
-  padding: 10px 14px 0;
-  flex-wrap: wrap;
+  flex: 1;
+  min-height: 0;
 }
 
-.tab {
-  padding: 6px 12px;
+.sidebar {
+  flex: 0 0 178px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  border-right: 1px solid var(--am-border-default);
+  background: var(--am-surface-1);
+  overflow-y: auto;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
   border-radius: 8px;
-  border: 1px solid transparent;
-  background: var(--am-surface-2, rgba(255, 255, 255, 0.06));
-  color: inherit;
-  font-size: 12px;
+  background: none;
+  color: var(--am-text-secondary);
+  font-size: 13px;
+  text-align: left;
   cursor: pointer;
+  transition: background var(--am-dur-fast) var(--am-ease-out);
 }
 
-.tabActive {
-  background: var(--am-accent, #4f8cff);
-  color: #000;
+.navItem:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
 }
 
-.panel {
-  padding: 18px;
+.navItemActive,
+.navItemActive:hover {
+  background: var(--am-surface-4);
+  color: var(--am-text-primary);
+}
+
+.navIcon {
+  display: flex;
+  align-items: center;
+  color: var(--am-text-tertiary);
+}
+
+.navItemActive .navIcon {
+  color: var(--am-accent);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 18px;
   font-size: 13px;
   line-height: 1.5;
 }
 
-.sectionTitle {
-  margin: 0 0 8px;
-  font-size: 13px;
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-subtle);
+  border-radius: var(--am-radius-md, 10px);
+  padding: 14px 16px;
+  margin-bottom: 12px;
 }
 
-.muted {
-  opacity: 0.6;
+.card:last-child {
+  margin-bottom: 0;
+}
+
+.cardTitle {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--am-text-secondary);
+}
+
+.cardDesc {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--am-text-tertiary);
+  line-height: 1.45;
+}
+
+.footnote {
+  margin: 4px 2px 0;
+  font-size: 12px;
+  color: var(--am-text-tertiary);
+}
+
+/* ── Segmented control ───────────────────────────────────────────────────── */
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--am-surface-0);
+  border: 1px solid var(--am-border-subtle);
+  border-radius: 9px;
+}
+
+.segItem {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--am-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--am-dur-fast) var(--am-ease-out);
+}
+
+.segItem:hover {
+  color: var(--am-text-primary);
+}
+
+.segItemActive,
+.segItemActive:hover {
+  background: var(--am-accent);
+  color: var(--am-text-on-accent, #fff);
+}
+
+/* ── Switch toggle ───────────────────────────────────────────────────────── */
+
+.switchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switchDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.switchInput {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switchTrack {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--am-surface-4);
+  transition: background var(--am-dur-fast) var(--am-ease-out);
+  position: relative;
+}
+
+.switchKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--am-text-primary);
+  transition: transform var(--am-dur-fast) var(--am-ease-out);
+}
+
+.switchInput:checked + .switchTrack {
+  background: var(--am-accent);
+}
+
+.switchInput:checked + .switchTrack .switchKnob {
+  transform: translateX(14px);
+  background: var(--am-text-on-accent, #fff);
+}
+
+.switchInput:focus-visible + .switchTrack {
+  outline: 2px solid var(--am-accent-ring);
+  outline-offset: 2px;
+}
+
+/* ── Accent swatches ─────────────────────────────────────────────────────── */
+
+.swatchRow {
+  display: flex;
+  gap: 10px;
+}
+
+.swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--am-border-default);
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatchActive {
+  border-color: var(--am-text-primary);
+  box-shadow: 0 0 0 2px var(--am-accent-ring);
+}
+
+/* ── Lists ───────────────────────────────────────────────────────────────── */
+
+.deviceList,
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.deviceList li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deviceName {
+  color: var(--am-text-primary);
+}
+
+.deviceMeta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--am-text-tertiary);
+}
+
+.badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--am-accent-muted);
+  color: var(--am-accent);
+}
+
+.kvList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.kvList li {
+  display: flex;
+  gap: 10px;
+}
+
+.kvKey {
+  flex: 0 0 110px;
+  color: var(--am-text-tertiary);
+}
+
+.path {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: var(--am-surface-0);
+  border: 1px solid var(--am-border-subtle);
+  font-size: 12px;
+  color: var(--am-text-secondary);
+  word-break: break-all;
 }
 
 .subtle {
-  opacity: 0.8;
+  margin: 0;
+  color: var(--am-text-secondary);
+}
+
+.spaced {
+  margin: 12px 0 0;
+}
+
+.dim {
+  color: var(--am-text-tertiary);
 }
 
 .error {
   color: var(--am-meter-clip, #ef4444);
 }
 
-.deviceGroup {
-  margin-bottom: 14px;
-}
-
-.deviceList {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.list {
-  margin: 6px 0;
-  padding-left: 18px;
-}
-
-.dim {
-  opacity: 0.55;
-}
-
-.dimmer {
-  opacity: 0.45;
-}
-
-.densityRow {
-  display: flex;
-  gap: 8px;
-}
-
-.densityBtn {
-  padding: 6px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--am-border-default);
-  background: var(--am-surface-2, rgba(255, 255, 255, 0.06));
-  color: inherit;
-  text-transform: capitalize;
-  cursor: pointer;
-}
-
-.densityBtnActive {
-  border-color: var(--am-accent, #4f8cff);
-  background: var(--am-accent, #4f8cff);
-  color: #000;
-}
-
-.spaced {
-  margin-top: 12px;
-}
-
 .link {
   color: var(--am-accent, #4f8cff);
 }
 
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
 .actionBtn {
-  padding: 6px 14px;
+  padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid var(--am-border-default);
-  background: var(--am-surface-3, rgba(255, 255, 255, 0.06));
-  color: inherit;
+  background: var(--am-surface-3);
+  color: var(--am-text-primary);
+  font-size: 12px;
   cursor: pointer;
+  transition: border-color var(--am-dur-fast) var(--am-ease-out);
 }
 
 .actionBtn:hover {
@@ -161,11 +385,12 @@
 }
 
 .dangerBtn {
-  padding: 6px 14px;
+  padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid var(--am-danger, #b91c1c);
   background: transparent;
   color: var(--am-text-primary);
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -179,49 +404,42 @@
   gap: 8px;
 }
 
-.swatchRow {
-  display: flex;
-  gap: 8px;
-}
-
-.swatch {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 2px solid var(--am-border-default);
+.linkBtn {
+  background: none;
+  border: none;
+  color: var(--am-accent, #4f8cff);
   cursor: pointer;
   padding: 0;
+  font: inherit;
+  font-size: 12px;
 }
 
-.swatchActive {
-  border-color: var(--am-text-primary);
-  box-shadow: 0 0 0 2px var(--am-accent-ring);
-}
-
-.toggleRow {
+.pairedRow {
   display: flex;
+  justify-content: space-between;
+  gap: 10px;
   align-items: center;
-  gap: 8px;
-  cursor: pointer;
 }
+
+/* ── Hotkeys ─────────────────────────────────────────────────────────────── */
 
 .hotkeyList {
   margin: 0;
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .hotkeyRow {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
 }
 
 .hotkeyKeys {
   display: flex;
   gap: 3px;
-  flex: 0 0 auto;
-  min-width: 96px;
+  flex: 0 0 110px;
+  flex-wrap: wrap;
 }
 
 .kbd {
@@ -230,25 +448,12 @@
   padding: 1px 6px;
   border-radius: 4px;
   border: 1px solid var(--am-border-strong);
-  background: var(--am-surface-1);
+  border-bottom-width: 2px;
+  background: var(--am-surface-0);
+  color: var(--am-text-secondary);
 }
 
 .hotkeyDesc {
   margin: 0;
-  opacity: 0.85;
-}
-
-.pairedRow {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.linkBtn {
-  background: none;
-  border: none;
-  color: var(--am-accent, #4f8cff);
-  cursor: pointer;
-  padding: 0;
-  font: inherit;
+  color: var(--am-text-secondary);
 }

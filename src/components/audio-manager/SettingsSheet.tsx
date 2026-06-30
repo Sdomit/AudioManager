@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   DeviceInfo,
@@ -17,6 +17,18 @@ import {
   setAutostart,
   setRecorderFormat,
 } from "../../ipc/commands";
+import {
+  AppIcon,
+  ChainIcon,
+  CheckIcon,
+  GridIcon,
+  InfoIcon,
+  RecordIcon,
+  SettingsIcon,
+  SpeakerIcon,
+  XIcon,
+  type IconProps,
+} from "./Icon";
 import { HOTKEY_GROUPS } from "./HotkeyOverlay";
 import { ACCENT_SWATCHES, type AppPrefs } from "./prefs";
 import type { Density } from "./types";
@@ -46,14 +58,14 @@ type Tab =
   | "general"
   | "about";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "devices", label: "Devices" },
-  { id: "recording", label: "Recording" },
-  { id: "appearance", label: "Appearance" },
-  { id: "hotkeys", label: "Hotkeys" },
-  { id: "connectivity", label: "Connectivity" },
-  { id: "general", label: "General" },
-  { id: "about", label: "About" },
+const TABS: { id: Tab; label: string; icon: (p: IconProps) => ReactNode }[] = [
+  { id: "devices", label: "Devices", icon: SpeakerIcon },
+  { id: "recording", label: "Recording", icon: RecordIcon },
+  { id: "appearance", label: "Appearance", icon: AppIcon },
+  { id: "hotkeys", label: "Hotkeys", icon: GridIcon },
+  { id: "connectivity", label: "Connectivity", icon: ChainIcon },
+  { id: "general", label: "General", icon: SettingsIcon },
+  { id: "about", label: "About", icon: InfoIcon },
 ];
 
 /** Heuristic: names that look like a virtual-audio cable / loopback endpoint. */
@@ -71,11 +83,11 @@ const LAYOUT_KEYS = [
 ];
 
 /**
- * App settings. Tabbed modal: Devices, Recording, Appearance, Hotkeys,
- * Connectivity (virtual cable + phone remote), General (startup + data),
- * and About. Reuses AudioManager's cached device poll so opening costs no
- * extra IPC; per-tab data (recorder settings, phone status, autostart) is
- * lazy-loaded the first time its tab is shown.
+ * App settings. Sidebar-nav modal: Devices, Recording, Appearance, Hotkeys,
+ * Connectivity (virtual cable + phone remote), General (startup + data), and
+ * About. Reuses AudioManager's cached device poll so opening costs no extra
+ * IPC; per-tab data (recorder settings, phone status, autostart) is lazy-loaded
+ * the first time its tab is shown.
  */
 export function SettingsSheet({
   open,
@@ -116,6 +128,7 @@ export function SettingsSheet({
     >
       <div className={styles.sheet} onMouseDown={(e) => e.stopPropagation()}>
         <header className={styles.header}>
+          <SettingsIcon size={15} />
           <strong className={styles.title}>Settings</strong>
           <button
             type="button"
@@ -123,48 +136,132 @@ export function SettingsSheet({
             aria-label="Close settings"
             className={styles.close}
           >
-            ×
+            <XIcon size={15} />
           </button>
         </header>
 
-        <nav role="tablist" aria-label="Settings sections" className={styles.tabs}>
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={`${styles.tab} ${tab === t.id ? styles.tabActive : ""}`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
+        <div className={styles.body}>
+          <nav role="tablist" aria-label="Settings sections" className={styles.sidebar}>
+            {TABS.map((t) => {
+              const TabIcon = t.icon;
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTab(t.id)}
+                  className={`${styles.navItem} ${active ? styles.navItemActive : ""}`}
+                >
+                  <span className={styles.navIcon}>
+                    <TabIcon size={15} />
+                  </span>
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
 
-        <div role="tabpanel" className={styles.panel}>
-          {tab === "devices" && (
-            <DevicesTab inputDevices={inputDevices} outputDevices={outputDevices} />
-          )}
-          {tab === "recording" && <RecordingTab open={open} />}
-          {tab === "appearance" && (
-            <AppearanceTab
-              density={density}
-              onDensityChange={onDensityChange}
-              prefs={prefs}
-              onPrefsChange={onPrefsChange}
-            />
-          )}
-          {tab === "hotkeys" && <HotkeysTab />}
-          {tab === "connectivity" && (
-            <ConnectivityTab cables={cables} onOpenPhonePairing={onOpenPhonePairing} />
-          )}
-          {tab === "general" && <GeneralTab />}
-          {tab === "about" && <AboutTab />}
+          <div role="tabpanel" className={styles.content}>
+            {tab === "devices" && (
+              <DevicesTab inputDevices={inputDevices} outputDevices={outputDevices} />
+            )}
+            {tab === "recording" && <RecordingTab />}
+            {tab === "appearance" && (
+              <AppearanceTab
+                density={density}
+                onDensityChange={onDensityChange}
+                prefs={prefs}
+                onPrefsChange={onPrefsChange}
+              />
+            )}
+            {tab === "hotkeys" && <HotkeysTab />}
+            {tab === "connectivity" && (
+              <ConnectivityTab cables={cables} onOpenPhonePairing={onOpenPhonePairing} />
+            )}
+            {tab === "general" && <GeneralTab />}
+            {tab === "about" && <AboutTab />}
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+/* ── Shared building blocks ─────────────────────────────────────────────── */
+
+function Card({
+  title,
+  desc,
+  children,
+}: {
+  title?: string;
+  desc?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <section className={styles.card}>
+      {title && <h3 className={styles.cardTitle}>{title}</h3>}
+      {children}
+      {desc && <p className={styles.cardDesc}>{desc}</p>}
+    </section>
+  );
+}
+
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T | undefined;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className={styles.segmented} role="group">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          aria-pressed={value === o.value}
+          className={`${styles.segItem} ${value === o.value ? styles.segItemActive : ""}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Switch({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (v: boolean) => void;
+  label: ReactNode;
+}) {
+  return (
+    <label className={`${styles.switchRow} ${disabled ? styles.switchDisabled : ""}`}>
+      <input
+        type="checkbox"
+        className={styles.switchInput}
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className={styles.switchTrack} aria-hidden="true">
+        <span className={styles.switchKnob} />
+      </span>
+      <span>{label}</span>
+    </label>
+  );
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────────────── */
 
 function DevicesTab({
   inputDevices,
@@ -176,38 +273,48 @@ function DevicesTab({
   const defIn = inputDevices.find((d) => d.is_default);
   const defOut = outputDevices.find((d) => d.is_default);
   return (
-    <section>
-      <DeviceList title={`Inputs (${inputDevices.length})`} devices={inputDevices} />
-      <DeviceList title={`Outputs (${outputDevices.length})`} devices={outputDevices} />
-      <h3 className={styles.sectionTitle}>Engine</h3>
-      <ul className={styles.list}>
-        <li>
-          Default input:{" "}
-          {defIn ? `${defIn.name} · ${Math.round(defIn.default_sample_rate / 1000)} kHz` : "—"}
-        </li>
-        <li>
-          Default output:{" "}
-          {defOut ? `${defOut.name} · ${Math.round(defOut.default_sample_rate / 1000)} kHz` : "—"}
-        </li>
-      </ul>
-      <p className={`${styles.muted} ${styles.spaced}`}>
-        Pick the device for a bus or input directly in the mixer — this list
-        shows everything the audio engine can see. Per-bus buffer size lives on
-        each bus in the mixer.
-      </p>
-    </section>
+    <>
+      <Card title={`Inputs (${inputDevices.length})`}>
+        <DeviceList devices={inputDevices} />
+      </Card>
+      <Card title={`Outputs (${outputDevices.length})`}>
+        <DeviceList devices={outputDevices} />
+      </Card>
+      <Card
+        title="Engine"
+        desc="Pick the device for a bus or input directly in the mixer — this list shows everything the engine sees. Per-bus buffer size lives on each bus."
+      >
+        <ul className={styles.kvList}>
+          <li>
+            <span className={styles.kvKey}>Default input</span>
+            <span>
+              {defIn
+                ? `${defIn.name} · ${Math.round(defIn.default_sample_rate / 1000)} kHz`
+                : "—"}
+            </span>
+          </li>
+          <li>
+            <span className={styles.kvKey}>Default output</span>
+            <span>
+              {defOut
+                ? `${defOut.name} · ${Math.round(defOut.default_sample_rate / 1000)} kHz`
+                : "—"}
+            </span>
+          </li>
+        </ul>
+      </Card>
+    </>
   );
 }
 
-function RecordingTab({ open }: { open: boolean }) {
+function RecordingTab() {
   const [settings, setSettings] = useState<RecorderSettings | null>(null);
 
   useEffect(() => {
-    if (!open) return;
     getRecorderSettings()
       .then(setSettings)
       .catch(() => {});
-  }, [open]);
+  }, []);
 
   const onFormat = (format: RecordFormat) => {
     setSettings((s) => (s ? { ...s, format } : s));
@@ -215,36 +322,28 @@ function RecordingTab({ open }: { open: boolean }) {
   };
 
   return (
-    <section>
-      <h3 className={styles.sectionTitle}>Format</h3>
-      <div className={styles.densityRow}>
-        {(["float32", "int24", "int16"] as RecordFormat[]).map((f) => (
-          <button
-            key={f}
-            onClick={() => onFormat(f)}
-            aria-pressed={settings?.format === f}
-            className={`${styles.densityBtn} ${
-              settings?.format === f ? styles.densityBtnActive : ""
-            }`}
-          >
-            {formatLabel(f)}
-          </button>
-        ))}
-      </div>
-
-      <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Recordings folder</h3>
-      <p className={styles.subtle}>{settings?.recordings_dir ?? "…"}</p>
-      <button
-        className={styles.actionBtn}
-        onClick={() => void openRecordingsFolder()}
+    <>
+      <Card
+        title="Format"
+        desc="WAV bit depth. 32-bit float is loss-free for editing; 16-bit PCM is smallest."
       >
-        Open folder
-      </button>
-      <p className={`${styles.muted} ${styles.spaced}`}>
-        New recordings are written here as WAV in the selected bit depth. 32-bit
-        float is loss-free for editing; 16-bit PCM is smallest.
-      </p>
-    </section>
+        <Segmented
+          value={settings?.format}
+          onChange={onFormat}
+          options={[
+            { value: "float32", label: "32-bit float" },
+            { value: "int24", label: "24-bit PCM" },
+            { value: "int16", label: "16-bit PCM" },
+          ]}
+        />
+      </Card>
+      <Card title="Recordings folder">
+        <p className={styles.path}>{settings?.recordings_dir ?? "…"}</p>
+        <button className={styles.actionBtn} onClick={() => void openRecordingsFolder()}>
+          Open folder
+        </button>
+      </Card>
+    </>
   );
 }
 
@@ -260,66 +359,58 @@ function AppearanceTab({
   onPrefsChange: (p: AppPrefs) => void;
 }) {
   return (
-    <section>
-      <h3 className={styles.sectionTitle}>Density</h3>
-      <div className={styles.densityRow}>
-        {(["comfortable", "compact"] as Density[]).map((d) => (
-          <button
-            key={d}
-            onClick={() => onDensityChange(d)}
-            aria-pressed={density === d}
-            className={`${styles.densityBtn} ${
-              density === d ? styles.densityBtnActive : ""
-            }`}
-          >
-            {d}
-          </button>
-        ))}
-      </div>
-
-      <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Accent color</h3>
-      <div className={styles.swatchRow}>
-        {ACCENT_SWATCHES.map((sw) => {
-          const active = prefs.accent === sw.value;
-          return (
-            <button
-              key={sw.value || "default"}
-              title={sw.label}
-              aria-label={sw.label}
-              aria-pressed={active}
-              onClick={() => onPrefsChange({ ...prefs, accent: sw.value })}
-              className={`${styles.swatch} ${active ? styles.swatchActive : ""}`}
-              style={{ background: sw.value || "var(--am-accent, #EF4444)" }}
-            />
-          );
-        })}
-      </div>
-
-      <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Motion</h3>
-      <label className={styles.toggleRow}>
-        <input
-          type="checkbox"
-          checked={prefs.reduceMotion}
-          onChange={(e) =>
-            onPrefsChange({ ...prefs, reduceMotion: e.target.checked })
-          }
+    <>
+      <Card title="Density">
+        <Segmented
+          value={density}
+          onChange={onDensityChange}
+          options={[
+            { value: "comfortable", label: "Comfortable" },
+            { value: "compact", label: "Compact" },
+          ]}
         />
-        Reduce motion (disable panel animations)
-      </label>
-      <p className={`${styles.muted} ${styles.spaced}`}>
-        Meter colors follow the accent. Real-time meters keep animating — they
-        convey live data.
-      </p>
-    </section>
+      </Card>
+
+      <Card title="Accent color" desc="Recolors buttons, meters, and highlights.">
+        <div className={styles.swatchRow}>
+          {ACCENT_SWATCHES.map((sw) => {
+            const active = prefs.accent === sw.value;
+            return (
+              <button
+                key={sw.value || "default"}
+                title={sw.label}
+                aria-label={sw.label}
+                aria-pressed={active}
+                onClick={() => onPrefsChange({ ...prefs, accent: sw.value })}
+                className={`${styles.swatch} ${active ? styles.swatchActive : ""}`}
+                style={{ background: sw.value || "var(--am-accent, #EF4444)" }}
+              >
+                {active && <CheckIcon size={14} />}
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      <Card
+        title="Motion"
+        desc="Real-time meters keep animating regardless — they convey live data."
+      >
+        <Switch
+          checked={prefs.reduceMotion}
+          onChange={(reduceMotion) => onPrefsChange({ ...prefs, reduceMotion })}
+          label="Reduce motion (disable panel animations)"
+        />
+      </Card>
+    </>
   );
 }
 
 function HotkeysTab() {
   return (
-    <section>
+    <>
       {HOTKEY_GROUPS.map((group) => (
-        <div key={group.title} className={styles.deviceGroup}>
-          <h3 className={styles.sectionTitle}>{group.title}</h3>
+        <Card key={group.title} title={group.title}>
           <dl className={styles.hotkeyList}>
             {group.entries.map((entry) => (
               <div key={entry.description} className={styles.hotkeyRow}>
@@ -334,10 +425,10 @@ function HotkeysTab() {
               </div>
             ))}
           </dl>
-        </div>
+        </Card>
       ))}
-      <p className={styles.muted}>Shortcuts pause while a text field is focused.</p>
-    </section>
+      <p className={styles.footnote}>Shortcuts pause while a text field is focused.</p>
+    </>
   );
 }
 
@@ -359,40 +450,42 @@ function ConnectivityTab({
   useEffect(reload, []);
 
   return (
-    <section>
-      <h3 className={styles.sectionTitle}>Virtual audio cable</h3>
-      {cables.length > 0 ? (
-        <>
-          <p className={styles.subtle}>Detected virtual cable endpoints:</p>
+    <>
+      <Card title="Virtual audio cable">
+        {cables.length > 0 ? (
           <ul className={styles.list}>
             {cables.map((c) => (
               <li key={c.id}>{c.name}</li>
             ))}
           </ul>
-        </>
-      ) : (
-        <p className={styles.subtle}>
-          No virtual cable detected. Install one (e.g. the bundled AudioManager
-          Virtual Cable / VB-CABLE) to route a bus into other apps, then assign
-          it to a bus output in the mixer.
-        </p>
-      )}
-
-      <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Phone remote</h3>
-      <ul className={styles.list}>
-        <li>
-          Server: {phone?.running ? `running on port ${phone.port ?? "?"}` : "stopped"}
-          {phone?.running && !phone.reachable && (
-            <span className={styles.error}> · port may be firewalled</span>
-          )}
-        </li>
-        {phone?.running && phone.lanIps.length > 0 && (
-          <li className={styles.dim}>LAN: {phone.lanIps.join(", ")}</li>
+        ) : (
+          <p className={styles.cardDesc}>
+            No virtual cable detected. Install one (e.g. the bundled AudioManager
+            Virtual Cable / VB-CABLE) to route a bus into other apps, then assign
+            it to a bus output in the mixer.
+          </p>
         )}
-      </ul>
-      {paired.length > 0 && (
-        <>
-          <p className={styles.subtle}>Paired devices:</p>
+      </Card>
+
+      <Card title="Phone remote">
+        <ul className={styles.kvList}>
+          <li>
+            <span className={styles.kvKey}>Server</span>
+            <span>
+              {phone?.running ? `running · port ${phone.port ?? "?"}` : "stopped"}
+              {phone?.running && !phone.reachable && (
+                <span className={styles.error}> · port may be firewalled</span>
+              )}
+            </span>
+          </li>
+          {phone?.running && phone.lanIps.length > 0 && (
+            <li>
+              <span className={styles.kvKey}>LAN</span>
+              <span>{phone.lanIps.join(", ")}</span>
+            </li>
+          )}
+        </ul>
+        {paired.length > 0 && (
           <ul className={styles.list}>
             {paired.map((d) => (
               <li key={d.id} className={styles.pairedRow}>
@@ -409,12 +502,12 @@ function ConnectivityTab({
               </li>
             ))}
           </ul>
-        </>
-      )}
-      <button className={styles.actionBtn} onClick={onOpenPhonePairing}>
-        Pair a device…
-      </button>
-    </section>
+        )}
+        <button className={styles.actionBtn} onClick={onOpenPhonePairing}>
+          Pair a device…
+        </button>
+      </Card>
+    </>
   );
 }
 
@@ -431,13 +524,16 @@ function GeneralTab() {
   const toggleAutostart = (enabled: boolean) => {
     setAutostartState(enabled);
     setAutostart(enabled).catch(() => {
-      // Revert on failure.
       getAutostart().then(setAutostartState).catch(() => setAutostartState(null));
     });
   };
 
   const resetLayout = () => {
-    if (!confirm("Reset the node-graph layout? Positions, groups, and floating effects are cleared. Routing is unaffected.")) {
+    if (
+      !confirm(
+        "Reset the node-graph layout? Positions, groups, and floating effects are cleared. Routing is unaffected.",
+      )
+    ) {
       return;
     }
     for (const k of LAYOUT_KEYS) localStorage.removeItem(k);
@@ -477,65 +573,64 @@ function GeneralTab() {
   };
 
   return (
-    <section>
-      <h3 className={styles.sectionTitle}>Startup</h3>
-      <label className={styles.toggleRow}>
-        <input
-          type="checkbox"
+    <>
+      <Card
+        title="Startup"
+        desc={
+          autostart === null ? "Autostart is unavailable on this platform." : undefined
+        }
+      >
+        <Switch
           checked={autostart === true}
           disabled={autostart === null}
-          onChange={(e) => toggleAutostart(e.target.checked)}
+          onChange={toggleAutostart}
+          label="Launch AudioManager when I sign in"
         />
-        Launch AudioManager when I sign in
-      </label>
-      {autostart === null && (
-        <p className={styles.muted}>Autostart is unavailable on this platform.</p>
-      )}
+      </Card>
 
-      <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Data</h3>
-      <div className={styles.btnRow}>
-        <button className={styles.actionBtn} onClick={exportSettings}>
-          Export settings
-        </button>
-        <button className={styles.actionBtn} onClick={() => fileRef.current?.click()}>
-          Import settings
-        </button>
-        <button className={styles.dangerBtn} onClick={resetLayout}>
-          Reset layout
-        </button>
-      </div>
-      <input
-        ref={fileRef}
-        type="file"
-        accept="application/json"
-        hidden
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) importSettings(f);
-          e.target.value = "";
-        }}
-      />
-      <p className={`${styles.muted} ${styles.spaced}`}>
-        Export bundles your layout, presets list, and preferences as JSON.
-        Importing overwrites matching keys and reloads.
-      </p>
-    </section>
+      <Card
+        title="Data"
+        desc="Export bundles your layout, presets list, and preferences as JSON. Importing overwrites matching keys and reloads."
+      >
+        <div className={styles.btnRow}>
+          <button className={styles.actionBtn} onClick={exportSettings}>
+            Export settings
+          </button>
+          <button className={styles.actionBtn} onClick={() => fileRef.current?.click()}>
+            Import settings
+          </button>
+          <button className={styles.dangerBtn} onClick={resetLayout}>
+            Reset layout
+          </button>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) importSettings(f);
+            e.target.value = "";
+          }}
+        />
+      </Card>
+    </>
   );
 }
 
 function AboutTab() {
   return (
-    <section>
-      <h3 className={styles.sectionTitle}>AudioManager</h3>
+    <Card title="AudioManager">
       <p className={styles.subtle}>
         A flexible audio router and mixer — route mics, system audio, and phones
         through buses with per-input DSP, monitoring, and recording.
       </p>
-      <p className={`${styles.muted} ${styles.spaced}`}>
+      <p className={styles.cardDesc}>
         Advanced metering (RMS / LUFS ballistics) and global engine sample-rate /
         buffer control are on the roadmap.
       </p>
-      <p className={`${styles.muted} ${styles.spaced}`}>
+      <p className={styles.spaced}>
         <a
           href="https://github.com/Sdomit/AudioManager"
           target="_blank"
@@ -545,41 +640,23 @@ function AboutTab() {
           github.com/Sdomit/AudioManager
         </a>
       </p>
-    </section>
+    </Card>
   );
 }
 
-function DeviceList({ title, devices }: { title: string; devices: DeviceInfo[] }) {
+function DeviceList({ devices }: { devices: DeviceInfo[] }) {
+  if (devices.length === 0) return <p className={styles.cardDesc}>None found.</p>;
   return (
-    <div className={styles.deviceGroup}>
-      <h3 className={styles.sectionTitle}>{title}</h3>
-      {devices.length === 0 ? (
-        <p className={styles.muted}>None found.</p>
-      ) : (
-        <ul className={styles.deviceList}>
-          {devices.map((d) => (
-            <li key={d.id}>
-              {d.name}
-              {d.is_default && <span className={styles.dim}> · default</span>}
-              <span className={styles.dimmer}>
-                {" "}
-                · {d.channels}ch · {Math.round(d.default_sample_rate / 1000)} kHz
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <ul className={styles.deviceList}>
+      {devices.map((d) => (
+        <li key={d.id}>
+          <span className={styles.deviceName}>{d.name}</span>
+          {d.is_default && <span className={styles.badge}>default</span>}
+          <span className={styles.deviceMeta}>
+            {d.channels}ch · {Math.round(d.default_sample_rate / 1000)} kHz
+          </span>
+        </li>
+      ))}
+    </ul>
   );
-}
-
-function formatLabel(f: RecordFormat): string {
-  switch (f) {
-    case "float32":
-      return "32-bit float";
-    case "int24":
-      return "24-bit PCM";
-    case "int16":
-      return "16-bit PCM";
-  }
 }
