@@ -135,7 +135,7 @@
 .card {
   background: var(--am-surface-1);
   border: 1px solid var(--am-border-subtle);
-  border-radius: var(--am-radius-md, 10px);
+  border-radius: var(--am-radius-md);
   padding: 14px 16px;
   margin-bottom: 12px;
 }
@@ -195,7 +195,7 @@
 .segItemActive,
 .segItemActive:hover {
   background: var(--am-accent);
-  color: var(--am-text-on-accent, #fff);
+  color: var(--am-text-on-accent);
 }
 
 /* ── Switch toggle ───────────────────────────────────────────────────────── */
@@ -247,7 +247,7 @@
 
 .switchInput:checked + .switchTrack .switchKnob {
   transform: translateX(14px);
-  background: var(--am-text-on-accent, #fff);
+  background: var(--am-text-on-accent);
 }
 
 .switchInput:focus-visible + .switchTrack {
@@ -270,7 +270,7 @@
   height: 28px;
   border-radius: 50%;
   border: 2px solid var(--am-border-default);
-  color: #fff;
+  color: var(--am-text-on-accent);
   cursor: pointer;
   padding: 0;
 }
@@ -360,11 +360,11 @@
 }
 
 .error {
-  color: var(--am-meter-clip, #ef4444);
+  color: var(--am-meter-clip);
 }
 
 .link {
-  color: var(--am-accent, #4f8cff);
+  color: var(--am-accent);
 }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
@@ -387,7 +387,7 @@
 .dangerBtn {
   padding: 7px 14px;
   border-radius: 8px;
-  border: 1px solid var(--am-danger, #b91c1c);
+  border: 1px solid var(--am-danger);
   background: transparent;
   color: var(--am-text-primary);
   font-size: 12px;
@@ -395,7 +395,7 @@
 }
 
 .dangerBtn:hover {
-  background: var(--am-danger, #b91c1c);
+  background: var(--am-danger);
 }
 
 .btnRow {
@@ -407,7 +407,7 @@
 .linkBtn {
   background: none;
   border: none;
-  color: var(--am-accent, #4f8cff);
+  color: var(--am-accent);
   cursor: pointer;
   padding: 0;
   font: inherit;

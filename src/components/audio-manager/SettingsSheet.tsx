@@ -383,7 +383,7 @@ function AppearanceTab({
                 aria-pressed={active}
                 onClick={() => onPrefsChange({ ...prefs, accent: sw.value })}
                 className={`${styles.swatch} ${active ? styles.swatchActive : ""}`}
-                style={{ background: sw.value || "var(--am-accent, #EF4444)" }}
+                style={{ background: sw.value || "var(--am-accent)" }}
               >
                 {active && <CheckIcon size={14} />}
               </button>
