@@ -329,3 +329,31 @@
   color: var(--am-text-secondary);
 }
 .dirCancel:hover { background: var(--am-surface-4); }
+
+.formatRow {
+  display: flex;
+  align-items: center;
+  gap: var(--am-space-3);
+  margin-top: var(--am-space-3);
+}
+
+.formatLabel {
+  font-size: var(--am-text-11);
+  color: var(--am-text-tertiary);
+  white-space: nowrap;
+}
+
+.formatSelect {
+  flex: 1;
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  background: var(--am-surface-2);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-sm);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.formatSelect:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--am-accent-ring);
+}

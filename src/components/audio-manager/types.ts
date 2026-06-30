@@ -146,6 +146,7 @@ export interface ActiveRecording {
   file_path: string;
   channels: number;
   sample_rate: number;
+  format: import("../../types/engine").RecordFormat;
   started_at_unix_ms: number;
   samples_written: number;
   bytes_written: number;

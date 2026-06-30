@@ -22,6 +22,8 @@ import type {
   PresetLoadResult,
   PresetSummary,
   PassthroughStatus,
+  RecordFormat,
+  RecorderSettings,
   RecordingFile,
   RecordingInfo,
   Route,
@@ -268,6 +270,12 @@ export const deleteRecordingFile = (path: string): Promise<void> =>
 
 export const openRecordingsFolder = (): Promise<void> =>
   invoke<void>("open_recordings_folder");
+
+export const getRecorderSettings = (): Promise<RecorderSettings> =>
+  invoke<RecorderSettings>("get_recorder_settings");
+
+export const setRecorderFormat = (format: RecordFormat): Promise<void> =>
+  invoke<void>("set_recorder_format", { format });
 
 // ── AudioManager Virtual Cable helper ────────────────────────────────────────
 
