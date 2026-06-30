@@ -14,8 +14,8 @@ interface BusRailProps {
   onSelectDevice: (id: BusId, deviceId: string | null) => void;
   /** Open the right-click context menu for a bus card. */
   onContextMenu?: (id: BusId, x: number, y: number) => void;
+  /** Card grid vs console faders. Toggled from the top bar. */
   viewMode: "card" | "console";
-  onToggleViewMode: () => void;
 }
 
 /**
@@ -33,7 +33,6 @@ export function BusRail({
   onSelectDevice,
   onContextMenu,
   viewMode,
-  onToggleViewMode,
 }: BusRailProps) {
   const a = buses.filter((b) => b.id.startsWith("A"));
   const b = buses.filter((b) => b.id.startsWith("B"));
@@ -97,14 +96,6 @@ export function BusRail({
           </BusGroup>
         </>
       )}
-      <button
-        className={styles.viewToggle}
-        onClick={onToggleViewMode}
-        title={viewMode === "card" ? "Switch to console view (V)" : "Switch to card view (V)"}
-        aria-pressed={viewMode === "console"}
-      >
-        {viewMode === "card" ? "Console" : "Cards"}
-      </button>
     </div>
   );
 }

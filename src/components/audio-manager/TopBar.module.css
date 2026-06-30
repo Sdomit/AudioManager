@@ -343,6 +343,27 @@
   background: var(--am-surface-3);
 }
 
+/* Icon button carrying a small count badge (phone manager). */
+.badgedBtn {
+  position: relative;
+}
+.iconBadge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: var(--am-radius-pill);
+  background: var(--am-accent);
+  color: var(--am-text-on-accent);
+  font-family: var(--am-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
 /* ── Preset default star ───────────────────────────────────────────────── */
 .menuStar {
   color: var(--am-warning, #F59E0B);

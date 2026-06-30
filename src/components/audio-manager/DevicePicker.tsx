@@ -41,6 +41,8 @@ interface DevicePickerProps {
    * calling onPick — the input id only exists once a phone pairs.
    */
   onAddPhone?: () => void;
+  /** Number of paired phones — tunes the phone entry hint (#phone-manager). */
+  phoneCount?: number;
 }
 
 const SYS_LOOPBACK_ID = "sys:default";
@@ -64,6 +66,7 @@ export function DevicePicker({
   recommendedDeviceId = null,
   includeLoopbackSources = false,
   onAddPhone,
+  phoneCount = 0,
 }: DevicePickerProps) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [sessions, setSessions] = useState<AudioSessionInfo[]>([]);
@@ -239,9 +242,15 @@ export function DevicePicker({
             <li>
               <button className={styles.item} onClick={onAddPhone}>
                 <div className={styles.itemMain}>
-                  <div className={styles.itemName}>Phone microphone</div>
+                  <div className={styles.itemName}>
+                    {phoneCount > 0
+                      ? `Phone microphone (${phoneCount} paired)`
+                      : "Phone microphone"}
+                  </div>
                   <div className={styles.itemMeta}>
-                    Wireless · pair by QR code on the same WiFi
+                    {phoneCount > 0
+                      ? "Open the phone manager to use or pair another"
+                      : "No phones connected — open the phone manager to pair by QR"}
                   </div>
                 </div>
               </button>

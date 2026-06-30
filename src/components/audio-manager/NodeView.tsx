@@ -2036,10 +2036,10 @@ export function NodeView({
               A touch brighter while snap-to-grid is on, as live feedback. */}
           <pattern id="nodeGrid" width={GRID} height={GRID} patternUnits="userSpaceOnUse">
             <circle
-              cx="0.5"
-              cy="0.5"
-              r={snap ? 1 : 0.6}
-              fill={`rgba(255,255,255,${snap ? 0.1 : 0.045})`}
+              cx={GRID / 2}
+              cy={GRID / 2}
+              r={snap ? 1.3 : 1}
+              fill={`rgba(255,255,255,${snap ? 0.16 : 0.09})`}
             />
           </pattern>
           <rect width={canvasW} height={canvasH} fill="url(#nodeGrid)" />

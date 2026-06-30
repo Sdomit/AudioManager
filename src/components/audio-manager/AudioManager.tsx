@@ -98,6 +98,10 @@ export function AudioManager() {
 
   const [inputPickerOpen, setInputPickerOpen] = useState(false);
   const [phonePairingOpen, setPhonePairingOpen] = useState(false);
+  // Count of paired phones — drives the top-bar phone badge and the Add-input
+  // hint. Refreshes when the phone manager opens/closes (after pair/forget) and
+  // on a slow interval. Tolerates the phone server being down (→ 0).
+  const [phoneCount, setPhoneCount] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
@@ -437,6 +441,19 @@ export function AudioManager() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPhones = () => {
+      ipc
+        .phoneListPaired()
+        .then((list) => { if (!cancelled) setPhoneCount(list.length); })
+        .catch(() => { if (!cancelled) setPhoneCount(0); });
+    };
+    fetchPhones();
+    const t = window.setInterval(fetchPhones, 5000);
+    return () => { cancelled = true; window.clearInterval(t); };
+  }, [phonePairingOpen]);
+
   return (
     <div
       className={`audioManager ${styles.root}`}
@@ -457,6 +474,8 @@ export function AudioManager() {
         onStopAllRecordings={() => void am.stopAllRecordings()}
         onOpenRecordings={am.openRecordingsPanel}
         onOpenAutomix={() => setAutomixOpen(true)}
+        onOpenPhone={() => setPhonePairingOpen(true)}
+        phoneCount={phoneCount}
         onLoadPreset={am.loadPreset}
         onOpenSaveDialog={() => setPresetDialog({ kind: "save" })}
         onRenamePreset={(id) => {
@@ -467,6 +486,8 @@ export function AudioManager() {
         onDeletePreset={am.deletePreset}
         onSetDefaultPreset={am.setDefaultPreset}
         onDensityChange={am.setDensity}
+        busViewMode={busViewMode}
+        onToggleBusView={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
         onOpenStreamSetup={am.openStreamSetup}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenTemplates={() => setTemplateDialogOpen(true)}
@@ -509,7 +530,6 @@ export function AudioManager() {
         onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
         viewMode={busViewMode}
-        onToggleViewMode={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
       />
 
       <main className={styles.main}>
@@ -686,6 +706,7 @@ export function AudioManager() {
           highlightVirtual
           includeLoopbackSources
           recommendedDeviceId={recommendedInputDevice}
+          phoneCount={phoneCount}
           onAddPhone={() => {
             setInputPickerOpen(false);
             setPhonePairingOpen(true);
