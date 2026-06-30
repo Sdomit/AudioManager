@@ -146,3 +146,109 @@
 .link {
   color: var(--am-accent, #4f8cff);
 }
+
+.actionBtn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--am-border-default);
+  background: var(--am-surface-3, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  cursor: pointer;
+}
+
+.actionBtn:hover {
+  border-color: var(--am-accent);
+}
+
+.dangerBtn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--am-danger, #b91c1c);
+  background: transparent;
+  color: var(--am-text-primary);
+  cursor: pointer;
+}
+
+.dangerBtn:hover {
+  background: var(--am-danger, #b91c1c);
+}
+
+.btnRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.swatchRow {
+  display: flex;
+  gap: 8px;
+}
+
+.swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--am-border-default);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatchActive {
+  border-color: var(--am-text-primary);
+  box-shadow: 0 0 0 2px var(--am-accent-ring);
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.hotkeyList {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.hotkeyRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.hotkeyKeys {
+  display: flex;
+  gap: 3px;
+  flex: 0 0 auto;
+  min-width: 96px;
+}
+
+.kbd {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--am-border-strong);
+  background: var(--am-surface-1);
+}
+
+.hotkeyDesc {
+  margin: 0;
+  opacity: 0.85;
+}
+
+.pairedRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.linkBtn {
+  background: none;
+  border: none;
+  color: var(--am-accent, #4f8cff);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}

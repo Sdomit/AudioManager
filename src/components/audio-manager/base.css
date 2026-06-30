@@ -110,6 +110,23 @@
 }
 
 /*
+ * Manual reduced-motion override (Settings → Appearance). Same kill switch as
+ * the media query above, but driven by a user pref so it works even when the
+ * OS setting is off.
+ */
+.audioManager[data-reduce-motion="true"],
+.audioManager[data-reduce-motion="true"] *,
+.audioManager[data-reduce-motion="true"] *::before,
+.audioManager[data-reduce-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  transition-delay: 0ms !important;
+  scroll-behavior: auto !important;
+}
+
+/*
  * Focus-visible polish (Phase F).
  *
  * Many interactive elements in the shell already declare focus styles

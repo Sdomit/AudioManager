@@ -10,21 +10,22 @@ interface HotkeyOverlayProps {
   onClose: () => void;
 }
 
-interface HotkeyEntry {
+export interface HotkeyEntry {
   keys: string[];
   description: string;
 }
 
-interface HotkeyGroup {
+export interface HotkeyGroup {
   title: string;
   entries: HotkeyEntry[];
 }
 
 /**
  * Single source of truth for the keyboard map. Mirror this list when
- * adding a new hotkey to useHotkeys.
+ * adding a new hotkey to useHotkeys. Also rendered read-only in
+ * Settings → Hotkeys.
  */
-const HOTKEY_GROUPS: HotkeyGroup[] = [
+export const HOTKEY_GROUPS: HotkeyGroup[] = [
   {
     title: "Selection",
     entries: [
