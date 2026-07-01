@@ -31,7 +31,9 @@
   position: absolute;
   top: 0;
   left: 0;
-  will-change: transform;
+  /* No will-change/GPU-layer promotion: a composited layer is rasterized at 1x
+     and bitmap-scaled, so zooming in blurs the text/meters. Letting it paint
+     normally re-rasterizes crisply at each zoom level. */
 }
 
 .zoomBar {
