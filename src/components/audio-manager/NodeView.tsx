@@ -1882,6 +1882,26 @@ export function NodeView({
     return out;
   }, [graph, nodePositions, inputFxLayout]);
 
+  // Per-input chain style: an input's fx-chain connectors adopt the colour of
+  // its outgoing bus wire (so input→fx→fx matches fx→bus) and animate the same
+  // white signal-flow when audio is actually passing through.
+  const inputWireInfo = useMemo(() => {
+    const m = new Map<string, { color: string; flowing: boolean; speed: number }>();
+    for (const w of wires) {
+      if (!w.input) continue;
+      const flowing =
+        !!w.bus && w.bus.enabled && !w.edge.muted && !w.input.muted && w.input.level > 0.05;
+      const prev = m.get(w.input.id);
+      if (!prev) {
+        m.set(w.input.id, { color: w.color, flowing, speed: w.input.level });
+      } else {
+        prev.flowing = prev.flowing || flowing;
+        prev.speed = Math.max(prev.speed, w.input.level);
+      }
+    }
+    return m;
+  }, [wires]);
+
   return (
     <div
       ref={wrapRef}
@@ -2054,24 +2074,44 @@ export function NodeView({
             );
           })}
 
-          {/* Connectors linking an input to its effect chain. Curved like
-              the main input→bus wires for visual consistency across the tool. */}
-          {Array.from(inputFxLayout.values()).flatMap((row) =>
-            row.connectors.map((c, i) => {
+          {/* Connectors linking an input to its effect chain. Curved like the
+              main input→bus wires, coloured to match the input's bus wire, and
+              carrying the same white signal-flow animation while audio passes. */}
+          {Array.from(inputFxLayout.entries()).flatMap(([inputId, row]) => {
+            const info = inputWireInfo.get(inputId);
+            const stroke = info?.color ?? "rgba(170,180,200,0.55)";
+            const flowing = info?.flowing ?? false;
+            const speed = info?.speed ?? 0;
+            return row.connectors.map((c, i) => {
               const dx = Math.max(20, Math.abs(c.x2 - c.x1));
               const d = `M ${c.x1} ${c.y1} C ${c.x1 + dx * 0.5} ${c.y1}, ${c.x2 - dx * 0.5} ${c.y2}, ${c.x2} ${c.y2}`;
               return (
-                <path
-                  key={`fxc-${c.x1}-${c.y1}-${i}`}
-                  d={d}
-                  stroke="rgba(170,180,200,0.55)"
-                  strokeWidth={2.5}
-                  strokeLinecap="round"
-                  fill="none"
-                />
+                <g key={`fxc-${inputId}-${i}`}>
+                  <path
+                    d={d}
+                    stroke={stroke}
+                    strokeWidth={2.5}
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                  {flowing && (
+                    <path
+                      d={d}
+                      stroke="white"
+                      strokeWidth={1.4}
+                      strokeLinecap="round"
+                      fill="none"
+                      opacity={0.7}
+                      strokeDasharray="4 14"
+                      style={{
+                        animation: `am-wire-flow ${Math.max(0.5, 1.4 - speed)}s linear infinite`,
+                      }}
+                    />
+                  )}
+                </g>
               );
-            }),
-          )}
+            });
+          })}
 
           {/* Ghost wire while reordering an fx node (out-port → in-port).
               Same Bezier shape as the input→bus ghost for visual consistency. */}
