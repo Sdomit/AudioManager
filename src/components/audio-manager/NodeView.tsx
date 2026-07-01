@@ -1911,6 +1911,10 @@ export function NodeView({
       });
       groupIndex += 1;
     }
+    // Discard orphaned floating (loose, unconnected) effects — a full reflow
+    // tidies the graph, so stray fx that were never dropped onto a chain go away.
+    // Their positions are already dropped since `next` omits float node ids.
+    setFloatingFx(new Map());
     setNodePositions(next);
     // Reset is an intentional full reflow: realign the viewport too so the
     // freshly laid-out columns are guaranteed to sit inside the visible area.
