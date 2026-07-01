@@ -36,6 +36,7 @@ export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairi
   const [autostart, setAutostart] = useState<boolean>(false);
   const [server, setServer] = useState<PhoneServerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const createdRef = useRef<PhoneSessionCreated | null>(null);
   createdRef.current = created;
@@ -229,9 +230,22 @@ export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairi
                 Scan with the phone&apos;s camera, on the same WiFi.
               </div>
               {pairingUrl && (
-                <div className={styles.qrUrl} title={pairingUrl}>
-                  {pairingUrl.split("#")[0]}
-                </div>
+                <button
+                  type="button"
+                  className={styles.qrUrl}
+                  title="Copy the full pairing link (includes the one-time token) and open it in the phone's browser"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(pairingUrl);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1500);
+                    } catch {}
+                  }}
+                >
+                  {copied
+                    ? "Link copied ✓"
+                    : `${pairingUrl.split("#")[0]} · copy link`}
+                </button>
               )}
               <div className={styles.qrNote}>
                 The browser will warn about the connection certificate once —

@@ -105,6 +105,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: var(--am-radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--am-dur-fast), color var(--am-dur-fast),
+    border-color var(--am-dur-fast);
+}
+.qrUrl:hover {
+  background: var(--am-surface-3);
+  color: var(--am-text-secondary);
+  border-color: var(--am-border-default);
 }
 .qrNote {
   font-size: var(--am-text-11);
