@@ -17,10 +17,14 @@
   border-bottom: 1px solid var(--am-border-subtle);
 }
 
+/* Title area yields first when space is tight so it can't overlap the toolbar;
+   the subtitle truncates before the "Routing" label. */
 .titleRow {
   display: flex;
   align-items: baseline;
   gap: var(--am-space-3);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .title {
@@ -28,11 +32,16 @@
   font-weight: 600;
   letter-spacing: var(--am-tracking-tight);
   margin: 0;
+  flex-shrink: 0;
 }
 
 .subtitle {
   font-size: var(--am-text-12);
   color: var(--am-text-tertiary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toggle {
@@ -65,10 +74,10 @@
   box-shadow: var(--am-elev-1);
 }
 
-/* Canvas toolbar slot — fills the gap between the title row and the view
-   toggle, takes whatever NodeView portals into it. */
+/* Canvas toolbar slot — takes its natural width and sits between the (flexible)
+   title and the view toggle, so it never grows into / overlaps the title. */
 .nodeToolbarSlot {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   align-items: center;
