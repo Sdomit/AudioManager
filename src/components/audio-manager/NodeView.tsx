@@ -131,6 +131,22 @@ const MIN_CANVAS_H = 300;
 const GRID = 20;
 const snapTo = (n: number) => Math.round(n / GRID) * GRID;
 
+// Distance from point (px,py) to segment (ax,ay)-(bx,by). Used to hit-test a
+// dropped fx node against chain connectors.
+function distToSegment(
+  px: number, py: number, ax: number, ay: number, bx: number, by: number,
+): number {
+  const vx = bx - ax, vy = by - ay;
+  const wx = px - ax, wy = py - ay;
+  const len2 = vx * vx + vy * vy || 1;
+  let t = (wx * vx + wy * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * vx, cy = ay + t * vy;
+  return Math.hypot(px - cx, py - cy);
+}
+const DROP_ON_WIRE_TOL = 26; // world px: how near a connector counts as a drop
+const SHAKE_FLIPS = 5;       // horizontal direction reversals => "wiggle off"
+
 /**
  * Popup menu that opens at (x, y) but flips inside the window when it would
  * overflow the right/bottom edge. Measures itself in useLayoutEffect (before
@@ -645,6 +661,11 @@ export function NodeView({
   const localGroupsRef = useRef(localGroups);
   const localEdgesRef = useRef(localEdges);
   const floatingFxRef = useRef(floatingFx);
+  // Live geometry for drop-on-connector hit-testing; assigned after their memos.
+  const inputFxLayoutRef = useRef<any>(new Map());
+  const wiresRef = useRef<any[]>([]);
+  // Shake-to-disconnect tracker (reset at the start of each node drag).
+  const shakeRef = useRef({ prevX: 0, lastSign: 0, flips: 0 });
   useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
   useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
   useEffect(() => { floatingFxRef.current = floatingFx; }, [floatingFx]);
@@ -819,6 +840,7 @@ export function NodeView({
     }
     return map;
   }, [inputs, inputPositions, nodePositions]);
+  inputFxLayoutRef.current = inputFxLayout;
 
   // Seed `nodePositions` for fx boxes that don't have a stored position yet
   // (effects just enabled, or new inputs). One-shot: subsequent renders read
@@ -1291,12 +1313,27 @@ export function NodeView({
   // ── Node-drag effect (moving a node around the canvas) ───────────────
   useEffect(() => {
     if (!nodeDrag) return;
+    // Reset the shake tracker for this drag.
+    shakeRef.current = { prevX: nodeDrag.startMouseX, lastSign: 0, flips: 0 };
 
     const onMove = (e: MouseEvent) => {
       const z = viewRef.current.zoom;
       const dx = (e.clientX - nodeDrag.startMouseX) / z;
       const dy = (e.clientY - nodeDrag.startMouseY) / z;
       setNodeDrag((d) => (d && (dx !== 0 || dy !== 0) ? { ...d, moved: true } : d));
+
+      // Shake-to-disconnect: count horizontal direction reversals for fx boxes.
+      if (nodeDrag.kind === "fx") {
+        const sr = shakeRef.current;
+        const fdx = e.clientX - sr.prevX;
+        if (Math.abs(fdx) > 3) {
+          const sign = Math.sign(fdx);
+          if (sr.lastSign !== 0 && sign !== sr.lastSign) sr.flips++;
+          sr.lastSign = sign;
+          sr.prevX = e.clientX;
+        }
+      }
+
       // Group move: apply the same delta to every node captured at
       // mousedown (single-node drags are just a group of one). Keys
       // are graph NodeIds in the unified position store.
@@ -1319,8 +1356,81 @@ export function NodeView({
       }
     };
 
+    // Which fx box a node id belongs to (input + stage key).
+    const fxOwner = (nid: string): { inputId: string; key: InputFxKey } | null => {
+      for (const [inputId, row] of inputFxLayoutRef.current as Map<string, any>) {
+        for (const b of row.boxes as { key: InputFxKey }[]) {
+          if (fxNodeId(inputId, b.key) === nid) return { inputId, key: b.key };
+        }
+      }
+      return null;
+    };
+
+    // The input whose chain connector/wire is nearest a world point (or null).
+    const chainInputAt = (x: number, y: number): string | null => {
+      let best: string | null = null;
+      let bestD = DROP_ON_WIRE_TOL;
+      for (const [inputId, row] of inputFxLayoutRef.current as Map<string, any>) {
+        for (const c of row.connectors as { x1: number; y1: number; x2: number; y2: number }[]) {
+          const d = distToSegment(x, y, c.x1, c.y1, c.x2, c.y2);
+          if (d < bestD) { bestD = d; best = inputId; }
+        }
+      }
+      for (const w of wiresRef.current as any[]) {
+        if (!w.input) continue;
+        const d = distToSegment(x, y, w.ip.x, w.ip.y, w.bp.x, w.bp.y);
+        if (d < bestD) { bestD = d; best = w.input.id; }
+      }
+      return best;
+    };
+
     const onUp = () => {
-      // Persist positions on release.
+      const drag = nodeDrag;
+      const flips = shakeRef.current.flips;
+      const pos = nodePosRef.current.get(drag.id as NodeId);
+      const center = pos
+        ? {
+            x: pos.x + nodeWidth(drag.id as NodeId) / 2,
+            y: pos.y + nodeHeight(drag.id as NodeId) / 2,
+          }
+        : null;
+
+      // Shake a chained fx → pop it out of the chain into a floating (loose) fx.
+      if (drag.kind === "fx" && flips >= SHAKE_FLIPS && pos) {
+        const owner = fxOwner(drag.id);
+        if (owner) {
+          const fid = nextFloatId();
+          toggleInputFx(owner.inputId, owner.key, false);
+          setFloatingFx((prev) => new Map(prev).set(fid, { stage: owner.key }));
+          setNodePositions((prev) =>
+            new Map(prev).set(floatNodeId(fid), { x: pos.x, y: pos.y }),
+          );
+          saveNodePositions(nodePosRef.current);
+          setNodeDrag(null);
+          return;
+        }
+      }
+
+      // Drop a floating fx onto a chain connector → claim it into that chain.
+      if (drag.kind === "float" && center) {
+        const floatId = floatIdFromNodeId(drag.id as NodeId);
+        const meta = floatId ? floatingFxRef.current.get(floatId) : null;
+        const targetInput = chainInputAt(center.x, center.y);
+        if (meta && floatId && targetInput) {
+          toggleInputFx(targetInput, meta.stage, true);
+          setFloatingFx((prev) => {
+            const n = new Map(prev);
+            n.delete(floatId);
+            return n;
+          });
+          setNodePositions((prev) => {
+            const n = new Map(prev);
+            n.delete(floatNodeId(floatId));
+            return n;
+          });
+        }
+      }
+
       saveNodePositions(nodePosRef.current);
       setNodeDrag(null);
     };
@@ -1881,6 +1991,7 @@ export function NodeView({
     }
     return out;
   }, [graph, nodePositions, inputFxLayout]);
+  wiresRef.current = wires;
 
   // Per-input chain style: an input's fx-chain connectors adopt the colour of
   // its outgoing bus wire (so input→fx→fx matches fx→bus) and animate the same
