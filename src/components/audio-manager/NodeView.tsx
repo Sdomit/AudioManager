@@ -145,7 +145,12 @@ function distToSegment(
   return Math.hypot(px - cx, py - cy);
 }
 const DROP_ON_WIRE_TOL = 26; // world px: how near a connector counts as a drop
-const SHAKE_FLIPS = 5;       // horizontal direction reversals => "wiggle off"
+// Shake-to-disconnect: N rapid horizontal reversals within the time window,
+// each above a min amplitude. Deliberately strict so a normal wavy reposition
+// drag never pops an effect loose by accident.
+const SHAKE_FLIPS = 6;
+const SHAKE_WINDOW_MS = 600;
+const SHAKE_MIN_PX = 6;
 
 /**
  * Popup menu that opens at (x, y) but flips inside the window when it would
@@ -665,7 +670,12 @@ export function NodeView({
   const inputFxLayoutRef = useRef<any>(new Map());
   const wiresRef = useRef<any[]>([]);
   // Shake-to-disconnect tracker (reset at the start of each node drag).
-  const shakeRef = useRef({ prevX: 0, lastSign: 0, flips: 0 });
+  const shakeRef = useRef<{
+    prevX: number;
+    lastSign: number;
+    times: number[];
+    triggered: boolean;
+  }>({ prevX: 0, lastSign: 0, times: [], triggered: false });
   useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
   useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
   useEffect(() => { floatingFxRef.current = floatingFx; }, [floatingFx]);
@@ -1314,7 +1324,7 @@ export function NodeView({
   useEffect(() => {
     if (!nodeDrag) return;
     // Reset the shake tracker for this drag.
-    shakeRef.current = { prevX: nodeDrag.startMouseX, lastSign: 0, flips: 0 };
+    shakeRef.current = { prevX: nodeDrag.startMouseX, lastSign: 0, times: [], triggered: false };
 
     const onMove = (e: MouseEvent) => {
       const z = viewRef.current.zoom;
@@ -1322,13 +1332,21 @@ export function NodeView({
       const dy = (e.clientY - nodeDrag.startMouseY) / z;
       setNodeDrag((d) => (d && (dx !== 0 || dy !== 0) ? { ...d, moved: true } : d));
 
-      // Shake-to-disconnect: count horizontal direction reversals for fx boxes.
-      if (nodeDrag.kind === "fx") {
+      // Shake-to-disconnect: only a burst of rapid reversals within the window
+      // (each above a min amplitude) counts — a slow wavy drag won't.
+      if (nodeDrag.kind === "fx" && !shakeRef.current.triggered) {
         const sr = shakeRef.current;
         const fdx = e.clientX - sr.prevX;
-        if (Math.abs(fdx) > 3) {
+        if (Math.abs(fdx) > SHAKE_MIN_PX) {
           const sign = Math.sign(fdx);
-          if (sr.lastSign !== 0 && sign !== sr.lastSign) sr.flips++;
+          if (sr.lastSign !== 0 && sign !== sr.lastSign) {
+            const now = performance.now();
+            sr.times.push(now);
+            while (sr.times.length && now - sr.times[0] > SHAKE_WINDOW_MS) {
+              sr.times.shift();
+            }
+            if (sr.times.length >= SHAKE_FLIPS) sr.triggered = true;
+          }
           sr.lastSign = sign;
           sr.prevX = e.clientX;
         }
@@ -1386,7 +1404,7 @@ export function NodeView({
 
     const onUp = () => {
       const drag = nodeDrag;
-      const flips = shakeRef.current.flips;
+      const shookOff = shakeRef.current.triggered;
       const pos = nodePosRef.current.get(drag.id as NodeId);
       const center = pos
         ? {
@@ -1396,7 +1414,7 @@ export function NodeView({
         : null;
 
       // Shake a chained fx → pop it out of the chain into a floating (loose) fx.
-      if (drag.kind === "fx" && flips >= SHAKE_FLIPS && pos) {
+      if (drag.kind === "fx" && shookOff && pos) {
         const owner = fxOwner(drag.id);
         if (owner) {
           const fid = nextFloatId();
