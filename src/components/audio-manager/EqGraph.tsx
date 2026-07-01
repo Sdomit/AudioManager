@@ -9,7 +9,7 @@
  * inside sensible UI travel.
  */
 
-import { createContext, useCallback, useContext, useMemo, useRef } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 
 import type { EqBand } from "../../types/engine";
 import { bandUsesGain, bandUsesQ, DSP_RANGE } from "./dspDefaults";
@@ -30,7 +30,16 @@ const F_MIN = 20;
 const F_MAX = 20_000;
 const GAIN_MAX = 24; // matches DSP_RANGE.eqGain
 const NODE_R = 9;
-const CURVE_POINTS = 200;
+// Denser sampling so sharp (high-Q) peaks/notches render accurately rather than
+// getting flattened between too-few points.
+const CURVE_POINTS = 384;
+
+function fmtFreq(hz: number): string {
+  return hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 1 : 2)} kHz` : `${Math.round(hz)} Hz`;
+}
+function fmtGain(db: number): string {
+  return `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+}
 
 const LOG_MIN = Math.log10(F_MIN);
 const LOG_SPAN = Math.log10(F_MAX) - LOG_MIN;
@@ -75,6 +84,8 @@ export function EqGraph({
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragIdx = useRef<number | null>(null);
+  // Band whose values the live readout shows (during a drag, else the selection).
+  const [active, setActive] = useState<number | null>(null);
   // Explicit prop wins; otherwise use the engine rate from context (default 48k)
   // so the curve tracks the real device rate rather than always 48 kHz.
   const ctxSampleRate = useContext(EqSampleRateContext);
@@ -110,6 +121,7 @@ export function EqGraph({
     (i: number) => (e: React.PointerEvent<SVGCircleElement>) => {
       e.preventDefault();
       dragIdx.current = i;
+      setActive(i);
       onSelect?.(i);
       e.currentTarget.setPointerCapture(e.pointerId);
     },
@@ -129,7 +141,9 @@ export function EqGraph({
       };
       if (bandUsesGain(band.kind)) {
         const [gMin, gMax] = DSP_RANGE.eqGain;
-        patch.gain_db = clamp(Math.round(yToGain(v.vy) * 2) / 2, gMin, gMax);
+        // Shift = fine (0.1 dB); otherwise the 0.5 dB engine quantum.
+        const step = e.shiftKey ? 0.1 : 0.5;
+        patch.gain_db = clamp(Math.round(yToGain(v.vy) / step) * step, gMin, gMax);
       }
       patchBand(i, patch);
     },
@@ -138,6 +152,7 @@ export function EqGraph({
 
   const handlePointerUp = useCallback((e: React.PointerEvent<SVGCircleElement>) => {
     dragIdx.current = null;
+    setActive(null);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -149,11 +164,10 @@ export function EqGraph({
       if (!bandUsesQ(band.kind)) return;
       e.preventDefault();
       const [qMin, qMax] = DSP_RANGE.eqQ;
-      const next = clamp(
-        Math.round(band.q * Math.exp(-e.deltaY * 0.001) * 10) / 10,
-        qMin,
-        qMax,
-      );
+      // Shift = fine (0.05); otherwise 0.1 steps. Exponential so Q feels even.
+      const qStep = e.shiftKey ? 0.05 : 0.1;
+      const raw = band.q * Math.exp(-e.deltaY * 0.001);
+      const next = clamp(Math.round(raw / qStep) * qStep, qMin, qMax);
       patchBand(i, { q: next });
     },
     [bands, patchBand],
@@ -231,6 +245,23 @@ export function EqGraph({
           ) : null,
         )}
       </svg>
+      {(() => {
+        const idx = active ?? selected;
+        if (idx === null) return null;
+        const b = bands[idx];
+        if (!b || !b.enabled) return null;
+        return (
+          <div className={styles.readout} role="status" aria-live="polite">
+            <span className={styles.readoutVal}>{fmtFreq(b.freq_hz)}</span>
+            {bandUsesGain(b.kind) && (
+              <span className={styles.readoutVal}>{fmtGain(b.gain_db)}</span>
+            )}
+            {bandUsesQ(b.kind) && (
+              <span className={styles.readoutVal}>Q&nbsp;{b.q.toFixed(2)}</span>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
