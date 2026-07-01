@@ -514,9 +514,6 @@ export function NodeView({
   // in the right-hand DetailPanel (#feature4). The old floating popover is gone;
   // editing lives in one place, so the badge just reuses the node's onSelect.
   const boundsRef = useRef<{ w: number; h: number }>({ w: MIN_CANVAS_W, h: MIN_CANVAS_H });
-  // Live right-column x for bus nodes, so the node-drag handler can lock bus
-  // horizontal position without depending on render-scope state.
-  const busColXRef = useRef(COL_PAD + INPUT_W + COL_GAP_BETWEEN);
   const [wrapSize, setWrapSize] = useState<{ w: number; h: number }>({
     w: MIN_CANVAS_W,
     h: MIN_CANVAS_H,
@@ -990,32 +987,14 @@ export function NodeView({
   const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W, 10_000);
   const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H, 10_000);
   boundsRef.current = { w: canvasW, h: canvasH };
-  // Output (bus) column is pinned to the right edge of the *visible* viewport
-  // (not the huge 10k world), so outputs always sit on the right with room for
-  // inputs on the left and effect nodes in between. Floors at the original
-  // input+gap offset so a narrow panel never overlaps the input column.
+  // Default x for the output (bus) column: right edge of the *visible* viewport
+  // (not the huge 10k world), so new buses + `Reset layout` place outputs on the
+  // right with room for inputs on the left and effects between. This is only a
+  // DEFAULT — buses are freely draggable afterwards (no hard pin).
   const busColumnX = Math.max(
     COL_PAD + INPUT_W + COL_GAP_BETWEEN,
     (Math.floor(wrapSize.w) || MIN_CANVAS_W) - COL_PAD - BUS_W,
   );
-  busColXRef.current = busColumnX;
-
-  // Keep every bus pinned to the right column: re-run when the viewport width
-  // (→ busColumnX) changes. Guarded so it only writes when an x actually
-  // differs, avoiding a render loop.
-  useEffect(() => {
-    setNodePositions((prev) => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const [nid, p] of prev) {
-        if (isBusNodeId(nid) && p.x !== busColumnX) {
-          next.set(nid, { x: busColumnX, y: p.y });
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [busColumnX]);
 
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
@@ -1326,12 +1305,10 @@ export function NodeView({
           const next = new Map(prev);
           const doSnap = snapRef.current;
           for (const [nid, p0] of nodeDrag.groupStart) {
-            // Buses are pinned to the right column — only their y moves.
-            const isBus = isBusNodeId(nid);
-            const rawX = isBus ? busColXRef.current : p0.x + dx;
+            const rawX = p0.x + dx;
             const rawY = p0.y + dy;
             next.set(nid, clampToBounds(
-              isBus ? rawX : doSnap ? snapTo(rawX) : rawX,
+              doSnap ? snapTo(rawX) : rawX,
               doSnap ? snapTo(rawY) : rawY,
               nodeWidth(nid), nodeHeight(nid),
               boundsRef.current.w, boundsRef.current.h,
