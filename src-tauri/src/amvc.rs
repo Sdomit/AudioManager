@@ -6,6 +6,7 @@
 //! — callers must treat that as a soft "no driver" state, not an error.
 
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,18 @@ use serde::Serialize;
 /// the helper as unavailable. Bounds the worst case so a hung helper can never
 /// wedge the query path.
 const HELPER_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn resolve_helper_program() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join("amvc-helper.exe");
+            if sibling.is_file() {
+                return sibling;
+            }
+        }
+    }
+    PathBuf::from("amvc-helper")
+}
 
 /// Outcome returned to the frontend by `query_amvc_helper`.
 #[derive(Debug, Serialize)]
@@ -75,7 +88,7 @@ struct HelperOutput {
 /// `Unavailable` variant to surface directly. Blocking — call off the main
 /// thread (see `query_amvc_helper`).
 fn capture_helper_status(timeout: Duration) -> Result<Vec<u8>, AmvcQueryResult> {
-    let mut child = Command::new("amvc-helper")
+    let mut child = Command::new(resolve_helper_program())
         .args(["status", "--json"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -161,7 +174,7 @@ pub fn run_helper_status() -> AmvcQueryResult {
 /// If the binary is absent, returns an error string (not a Tauri error) so
 /// the frontend can show an appropriate message without crashing.
 pub fn spawn_helper_install() -> Result<(), String> {
-    Command::new("amvc-helper")
+    Command::new(resolve_helper_program())
         .arg("install")
         .spawn()
         .map(|_| ())
@@ -201,7 +214,7 @@ pub async fn amvc_set_device_enabled(enabled: bool) -> Result<(), String> {
         "disable-device"
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let out = std::process::Command::new("amvc-helper")
+        let out = std::process::Command::new(resolve_helper_program())
             .args([op, "--execute"])
             .output()
             .map_err(|e| format!("failed to launch amvc-helper: {e}"))?;
