@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   BroadcastIcon,
+  ChainIcon,
   ChevronDownIcon,
   PhoneIcon,
   RecordIcon,
@@ -36,6 +37,10 @@ interface TopBarProps {
   /** Pass null to clear the default. */
   onSetDefaultPreset: (id: string | null) => void;
   onDensityChange: (d: Density) => void;
+  /** Bus rail view mode (card grid vs console faders). */
+  busViewMode: "card" | "console";
+  /** Toggle the bus rail between card and console views. */
+  onToggleBusView: () => void;
   onOpenStreamSetup: () => void;
   /** Start a master recording (one BusOut tap per running bus). */
   onStartMasterRecording: () => void;
@@ -45,6 +50,10 @@ interface TopBarProps {
   onOpenRecordings: () => void;
   /** Open the live-sound-gate (automix groups) drawer. */
   onOpenAutomix: () => void;
+  /** Open the phone manager (pair + manage phone mics). */
+  onOpenPhone: () => void;
+  /** Number of paired phones — shows a badge on the phone button. */
+  phoneCount?: number;
   /** Open the settings sheet (#feature9). */
   onOpenSettings: () => void;
   /** Open the device profile template picker. */
@@ -71,11 +80,15 @@ export function TopBar({
   onDeletePreset,
   onSetDefaultPreset,
   onDensityChange,
+  busViewMode,
+  onToggleBusView,
   onOpenStreamSetup,
   onStartMasterRecording,
   onStopAllRecordings,
   onOpenRecordings,
   onOpenAutomix,
+  onOpenPhone,
+  phoneCount = 0,
   onOpenSettings,
   onOpenTemplates,
 }: TopBarProps) {
@@ -171,7 +184,20 @@ export function TopBar({
           title="Live sound gate (automix groups)"
           aria-label="Open live sound gate panel"
         >
+          <ChainIcon size={16} />
+        </button>
+
+        <button
+          type="button"
+          className={`${styles.iconBtn} ${styles.badgedBtn}`}
+          onClick={onOpenPhone}
+          title="Phone mics — pair & manage phones"
+          aria-label="Manage phone microphones"
+        >
           <PhoneIcon size={16} />
+          {phoneCount > 0 && (
+            <span className={styles.iconBadge} aria-hidden>{phoneCount}</span>
+          )}
         </button>
 
         <button
@@ -186,6 +212,8 @@ export function TopBar({
             <span className={styles.streamPillCount}>{streamHealth.pending}</span>
           )}
         </button>
+
+        <BusViewToggle mode={busViewMode} onToggle={onToggleBusView} />
 
         <DensityToggle density={density} onChange={onDensityChange} />
 
@@ -427,6 +455,37 @@ function PresetContextMenu({
         </button>
       </div>
     </>
+  );
+}
+
+/* ── Bus rail view toggle (card grid vs console faders) ─────────────────── */
+
+function BusViewToggle({
+  mode,
+  onToggle,
+}: {
+  mode: "card" | "console";
+  onToggle: () => void;
+}) {
+  return (
+    <div className={styles.densityToggle} role="group" aria-label="Bus view">
+      <button
+        className={`${styles.densityBtn} ${mode === "card" ? styles.densityBtnActive : ""}`}
+        onClick={() => { if (mode !== "card") onToggle(); }}
+        title="Bus cards (V)"
+        aria-pressed={mode === "card"}
+      >
+        Cards
+      </button>
+      <button
+        className={`${styles.densityBtn} ${mode === "console" ? styles.densityBtnActive : ""}`}
+        onClick={() => { if (mode !== "console") onToggle(); }}
+        title="Console faders (V)"
+        aria-pressed={mode === "console"}
+      >
+        Console
+      </button>
+    </div>
   );
 }
 

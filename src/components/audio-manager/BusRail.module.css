@@ -41,30 +41,6 @@
   align-self: stretch;
 }
 
-.viewToggle {
-  margin-left: auto;
-  align-self: flex-start;
-  margin-top: var(--am-space-1);
-  padding: 3px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  border: 1px solid var(--am-border-subtle);
-  border-radius: var(--am-radius-sm);
-  background: transparent;
-  color: var(--am-text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.viewToggle:hover { background: var(--am-surface-3); }
-
-.viewToggle[aria-pressed="true"] {
-  background: var(--am-surface-3);
-  color: var(--am-text-primary);
-}
-
 @media (max-width: 1199px) {
   .rail {
     padding: var(--am-space-3);

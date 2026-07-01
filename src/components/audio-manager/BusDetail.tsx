@@ -3,6 +3,7 @@ import {
   iconForKind,
   AlertIcon,
   MuteIcon,
+  VolumeIcon,
   PowerIcon,
   ChevronRightIcon,
 } from "./Icon";
@@ -172,7 +173,7 @@ export function BusDetail({
 
         <div className={styles.actions}>
           <button
-            className={`${styles.actionBtn} ${bus.enabled ? styles.actionActive : ""}`}
+            className={`${styles.actionBtn} ${bus.enabled ? styles.actionEnabled : ""}`}
             onClick={onToggleEnabled}
             disabled={bus.state === "unconfigured" || bus.state === "error"}
             aria-pressed={bus.enabled}
@@ -185,7 +186,7 @@ export function BusDetail({
             onClick={onToggleMuted}
             aria-pressed={bus.muted}
           >
-            <MuteIcon size={14} />
+            {bus.muted ? <MuteIcon size={14} /> : <VolumeIcon size={14} />}
             <span>{bus.muted ? "Muted" : "Mute"}</span>
           </button>
           <RecordButton

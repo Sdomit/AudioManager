@@ -9,6 +9,8 @@ interface SettingsSheetProps {
   onClose: () => void;
   density: Density;
   onDensityChange: (d: Density) => void;
+  theme: "dark" | "light";
+  onThemeChange: (t: "dark" | "light") => void;
   /** Cached capture devices from AudioManager's device poll (#feature9). */
   inputDevices: DeviceInfo[];
   /** Cached playback devices from AudioManager's device poll. */
@@ -42,6 +44,8 @@ export function SettingsSheet({
   onClose,
   density,
   onDensityChange,
+  theme,
+  onThemeChange,
   inputDevices,
   outputDevices,
 }: SettingsSheetProps) {
@@ -140,21 +144,29 @@ export function SettingsSheet({
 
           {tab === "appearance" && (
             <section>
-              <h3 className={styles.sectionTitle}>Density</h3>
-              <div className={styles.densityRow}>
-                {(["comfortable", "compact"] as Density[]).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => onDensityChange(d)}
-                    aria-pressed={density === d}
-                    className={`${styles.densityBtn} ${density === d ? styles.densityBtnActive : ""}`}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
+              <h3 className={styles.sectionTitle}>Theme</h3>
+              <select
+                className={styles.select}
+                value={theme}
+                onChange={(e) => onThemeChange(e.target.value as "dark" | "light")}
+                aria-label="Color theme"
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+
+              <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Density</h3>
+              <select
+                className={styles.select}
+                value={density}
+                onChange={(e) => onDensityChange(e.target.value as Density)}
+                aria-label="Interface density"
+              >
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
               <p className={`${styles.muted} ${styles.spaced}`}>
-                Meter colors and theme follow the app's CSS variables.
+                The title bar and meters follow the selected theme.
               </p>
             </section>
           )}

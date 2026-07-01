@@ -14,6 +14,8 @@ import styles from "./PhonePairingSheet.module.css";
 interface PhonePairingSheetProps {
   open: boolean;
   onClose: () => void;
+  /** Add a paired phone to the mixer as a mic input, by its device id. */
+  onAddPhoneInput?: (id: string) => void;
 }
 
 // Fast enough that the "we hear you" level meter looks live, not stepped.
@@ -27,13 +29,14 @@ const POLL_MS = 250;
  * URL carries the pairing token in its fragment — it is rendered, never
  * logged. Closing the sheet discards the session if nothing ever scanned it.
  */
-export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
+export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairingSheetProps) {
   const [created, setCreated] = useState<PhoneSessionCreated | null>(null);
   const [sessions, setSessions] = useState<PhoneSessionStatus[]>([]);
   const [paired, setPaired] = useState<PhonePairedDevice[]>([]);
   const [autostart, setAutostart] = useState<boolean>(false);
   const [server, setServer] = useState<PhoneServerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const createdRef = useRef<PhoneSessionCreated | null>(null);
   createdRef.current = created;
@@ -227,9 +230,22 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
                 Scan with the phone&apos;s camera, on the same WiFi.
               </div>
               {pairingUrl && (
-                <div className={styles.qrUrl} title={pairingUrl}>
-                  {pairingUrl.split("#")[0]}
-                </div>
+                <button
+                  type="button"
+                  className={styles.qrUrl}
+                  title="Copy the full pairing link (includes the one-time token) and open it in the phone's browser"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(pairingUrl);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1500);
+                    } catch {}
+                  }}
+                >
+                  {copied
+                    ? "Link copied ✓"
+                    : `${pairingUrl.split("#")[0]} · copy link`}
+                </button>
               )}
               <div className={styles.qrNote}>
                 The browser will warn about the connection certificate once —
@@ -290,6 +306,16 @@ export function PhonePairingSheet({ open, onClose }: PhonePairingSheetProps) {
                     </div>
                   </div>
                   <div className={styles.sessionActions}>
+                    {onAddPhoneInput && (
+                      <button
+                        className={styles.acceptBtn}
+                        aria-label={`Add ${d.label} to the mixer`}
+                        title="Add as a mic input"
+                        onClick={() => onAddPhoneInput(d.id)}
+                      >
+                        Add
+                      </button>
+                    )}
                     <button
                       className={styles.removeBtn}
                       aria-label={`Remove ${d.label}`}

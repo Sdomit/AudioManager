@@ -235,15 +235,23 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
-.actionActive {
-  background: var(--bus-accent-muted);
-  color: var(--bus-accent);
-  border-color: var(--bus-accent);
+.actionEnabled {
+  background: var(--am-success-muted);
+  color: var(--am-success);
+  border-color: var(--am-success);
+}
+.actionEnabled:hover:not(:disabled) {
+  background: var(--am-success-muted);
+  color: var(--am-success);
 }
 .actionMuted {
-  background: var(--am-danger-muted);
-  color: var(--am-meter-clip);
-  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--am-accent);
+  color: var(--am-text-on-accent);
+  border-color: var(--am-accent);
+}
+.actionMuted:hover:not(:disabled) {
+  background: var(--am-accent-hover);
+  color: var(--am-text-on-accent);
 }
 
 /* ── Routed inputs list ─────────────────────────────────────────── */

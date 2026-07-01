@@ -1,4 +1,5 @@
 .routing {
+  position: relative; /* anchor for the mini-controller launcher */
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -12,14 +13,29 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--am-space-3);
+  row-gap: var(--am-space-2);
+  flex-wrap: wrap;
   padding: var(--am-space-4);
   border-bottom: 1px solid var(--am-border-subtle);
+}
+
+/* Toolbar + view toggle; wraps below the title as one unit when tight. */
+.headerControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--am-space-3);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
 }
 
 .titleRow {
   display: flex;
   align-items: baseline;
   gap: var(--am-space-3);
+  flex: 1 1 auto;
+  white-space: nowrap;
 }
 
 .title {
@@ -32,6 +48,7 @@
 .subtitle {
   font-size: var(--am-text-12);
   color: var(--am-text-tertiary);
+  white-space: nowrap;
 }
 
 .toggle {
@@ -64,10 +81,10 @@
   box-shadow: var(--am-elev-1);
 }
 
-/* Canvas toolbar slot — fills the gap between the title row and the view
-   toggle, takes whatever NodeView portals into it. */
+/* Canvas toolbar slot — takes its natural width and sits between the (flexible)
+   title and the view toggle, so it never grows into / overlaps the title. */
 .nodeToolbarSlot {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   align-items: center;

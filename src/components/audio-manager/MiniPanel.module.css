@@ -81,8 +81,10 @@
 }
 
 /* ── Floating launcher button (opens the always-on-top window) ───────────── */
+/* absolute (not fixed): anchors to the routing canvas (its positioned ancestor)
+   so it sits at the canvas bottom-right and never overlaps the detail panel. */
 .launcher {
-  position: fixed;
+  position: absolute;
   right: 20px;
   bottom: 20px;
   z-index: var(--am-z-sticky);

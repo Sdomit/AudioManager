@@ -1,10 +1,33 @@
 .wrap {
+  position: relative;
   width: 100%;
   border: 1px solid var(--am-border-subtle);
   border-radius: var(--am-radius-md);
   background: var(--am-surface-1);
   padding: 2px;
   margin-bottom: var(--am-space-2);
+}
+
+/* Live value readout for the band being dragged/selected (crisp HTML, avoids
+   the SVG's non-uniform scaling). */
+.readout {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px;
+  border-radius: var(--am-radius-sm);
+  background: var(--am-surface-overlay, rgba(14, 17, 22, 0.72));
+  border: 1px solid var(--am-border-default);
+  font-family: var(--am-font-mono);
+  font-size: var(--am-text-11);
+  color: var(--am-text-secondary);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.readoutVal {
+  color: var(--am-text-primary);
 }
 
 .svg {

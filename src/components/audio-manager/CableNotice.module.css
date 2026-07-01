@@ -3,10 +3,10 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background: var(--color-surface-raised, #1e2026);
-  border-bottom: 1px solid var(--color-border, #2a2d36);
+  background: var(--am-surface-2);
+  border-bottom: 1px solid var(--am-border-default);
   font-size: 12px;
-  color: var(--color-text-secondary, #9ba3b2);
+  color: var(--am-text-secondary);
 }
 
 .message {
@@ -26,25 +26,25 @@
 
 .actionBtn {
   padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--color-border, #2a2d36);
-  background: var(--color-surface, #13151a);
-  color: var(--color-text, #e2e5ed);
+  border-radius: var(--am-radius-sm);
+  border: 1px solid var(--am-border-default);
+  background: var(--am-surface-1);
+  color: var(--am-text-primary);
   font-size: 11px;
   cursor: pointer;
 }
 
 .actionBtn:hover {
-  background: var(--color-surface-hover, #21242e);
+  background: var(--am-surface-3);
 }
 
 .dismissBtn {
   width: 20px;
   height: 20px;
-  border-radius: 4px;
+  border-radius: var(--am-radius-sm);
   border: none;
   background: transparent;
-  color: var(--color-text-secondary, #9ba3b2);
+  color: var(--am-text-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
@@ -54,5 +54,5 @@
 }
 
 .dismissBtn:hover {
-  background: var(--color-surface-hover, #21242e);
+  background: var(--am-surface-3);
 }

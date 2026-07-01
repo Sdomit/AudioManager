@@ -6,7 +6,9 @@
   padding: var(--am-space-3) var(--am-space-4);
   flex: 1 1 var(--am-bus-card-min);
   min-width: 0;
-  height: var(--am-bus-card-h);
+  /* min-height (not height): the action row used to overflow a fixed-height
+     card and get clipped, hiding Enable/Mute. Let the card grow to fit. */
+  min-height: var(--am-bus-card-h);
   background: var(--am-surface-2);
   border: 1px solid var(--am-border-default);
   border-left: 3px solid var(--bus-accent);
@@ -262,19 +264,26 @@
   cursor: not-allowed;
 }
 
-.actionActive {
-  background: var(--bus-accent-muted);
-  color: var(--bus-accent);
-  border-color: var(--bus-accent);
+/* Enabled bus → green, the universal "on / live" signal. */
+.actionEnabled {
+  background: var(--am-success-muted);
+  color: var(--am-success);
+  border-color: var(--am-success);
 }
-.actionActive:hover {
-  background: var(--bus-accent-muted);
+.actionEnabled:hover:not(:disabled) {
+  background: var(--am-success-muted);
+  color: var(--am-success);
 }
 
+/* Muted → solid red so it reads as a hard stop at a glance. */
 .actionMuted {
-  background: var(--am-danger-muted);
-  color: var(--am-meter-clip);
-  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--am-accent);
+  color: var(--am-text-on-accent);
+  border-color: var(--am-accent);
+}
+.actionMuted:hover:not(:disabled) {
+  background: var(--am-accent-hover);
+  color: var(--am-text-on-accent);
 }
 
 .moreBtn {

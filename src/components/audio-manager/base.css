@@ -31,7 +31,16 @@
   box-sizing: border-box;
 }
 
-.audioManager button {
+/*
+ * Button/input/select baseline reset.
+ *
+ * Wrapped in :where() so the whole selector has ZERO specificity. This keeps
+ * it a true baseline: any component's single-class style (.actionBtn,
+ * .toggleBtn, .zoomBtn, …) now wins instead of being clobbered by this reset.
+ * Without :where(), `.audioManager button` (0,1,1) outranks `.actionBtn`
+ * (0,1,0) and every component button collapses to unstyled text.
+ */
+:where(.audioManager button) {
   font: inherit;
   color: inherit;
   background: none;
@@ -48,8 +57,8 @@
   border-radius: var(--am-radius-sm);
 }
 
-.audioManager input,
-.audioManager select {
+:where(.audioManager input),
+:where(.audioManager select) {
   font: inherit;
   color: inherit;
   background: transparent;

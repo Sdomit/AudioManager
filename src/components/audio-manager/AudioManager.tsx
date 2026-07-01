@@ -22,13 +22,13 @@ import { TopBar } from "./TopBar";
 import { TemplateDialog } from "./TemplateDialog";
 import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
 import { listen } from "@tauri-apps/api/event";
-import miniStyles from "./MiniPanel.module.css";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
 import type { BusId, TapSpec } from "./types";
 import * as ipc from "../../ipc/commands";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onDevicesChanged } from "../../ipc/events";
-import type { DeviceInfo } from "../../types/engine";
+import type { DeviceInfo, PhoneSessionStatus } from "../../types/engine";
 import {
   hasAnyAmvcDevice,
   suggestAmvcBusDevice,
@@ -99,6 +99,16 @@ export function AudioManager() {
 
   const [inputPickerOpen, setInputPickerOpen] = useState(false);
   const [phonePairingOpen, setPhonePairingOpen] = useState(false);
+  // Count of paired phones — drives the top-bar phone badge and the Add-input
+  // hint. Refreshes when the phone manager opens/closes (after pair/forget) and
+  // on a slow interval. Tolerates the phone server being down (→ 0).
+  const [phoneCount, setPhoneCount] = useState(0);
+  const [phoneSessions, setPhoneSessions] = useState<PhoneSessionStatus[]>([]);
+  // UI theme (dark default). Persisted locally; also drives the OS title bar.
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    try { return localStorage.getItem("am.theme") === "light" ? "light" : "dark"; }
+    catch { return "dark"; }
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
@@ -438,10 +448,49 @@ export function AudioManager() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    try { localStorage.setItem("am.theme", theme); } catch {}
+    // Match the native title bar to the app theme (no-op outside Tauri).
+    try { void getCurrentWindow().setTheme(theme).catch(() => {}); } catch {}
+  }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPhones = () => {
+      ipc
+        .phoneListPaired()
+        .then((list) => { if (!cancelled) setPhoneCount(list.length); })
+        .catch(() => { if (!cancelled) setPhoneCount(0); });
+      ipc
+        .phoneListSessions()
+        .then((list) => { if (!cancelled) setPhoneSessions(list); })
+        .catch(() => { if (!cancelled) setPhoneSessions([]); });
+    };
+    fetchPhones();
+    const t = window.setInterval(fetchPhones, 5000);
+    return () => { cancelled = true; window.clearInterval(t); };
+  }, [phonePairingOpen]);
+
+  // Phones whose audio is (re)connectable right now — addable to the mixer.
+  const connectedPhones = useMemo(
+    () =>
+      phoneSessions
+        .filter((s) => s.state === "accepted" || s.state === "reconnecting")
+        .map((s) => ({ id: s.id, label: s.label })),
+    [phoneSessions],
+  );
+
+  // Add a phone (by session/device id) as a mixer input: `phone:<id>`.
+  const addPhoneInput = useCallback(
+    (id: string) => { am.addInput(`phone:${id}`); },
+    [am],
+  );
+
   return (
     <div
       className={`audioManager ${styles.root}`}
       data-density={state.density}
+      data-theme={theme}
     >
       <TopBar
         presets={state.presets}
@@ -458,6 +507,8 @@ export function AudioManager() {
         onStopAllRecordings={() => void am.stopAllRecordings()}
         onOpenRecordings={am.openRecordingsPanel}
         onOpenAutomix={() => setAutomixOpen(true)}
+        onOpenPhone={() => setPhonePairingOpen(true)}
+        phoneCount={phoneCount}
         onLoadPreset={am.loadPreset}
         onOpenSaveDialog={() => setPresetDialog({ kind: "save" })}
         onRenamePreset={(id) => {
@@ -468,6 +519,8 @@ export function AudioManager() {
         onDeletePreset={am.deletePreset}
         onSetDefaultPreset={am.setDefaultPreset}
         onDensityChange={am.setDensity}
+        busViewMode={busViewMode}
+        onToggleBusView={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
         onOpenStreamSetup={am.openStreamSetup}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenTemplates={() => setTemplateDialogOpen(true)}
@@ -510,7 +563,6 @@ export function AudioManager() {
         onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
         viewMode={busViewMode}
-        onToggleViewMode={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
       />
 
       <main className={styles.main}>
@@ -561,6 +613,7 @@ export function AudioManager() {
             if (!input) return;
             am.setInputMuted(id, !input.muted);
           }}
+          onOpenMini={() => void openMiniWindow()}
         />
 
         {/* Detail panel: always present in matrix/flow; in the nodes canvas it
@@ -686,6 +739,12 @@ export function AudioManager() {
           highlightVirtual
           includeLoopbackSources
           recommendedDeviceId={recommendedInputDevice}
+          phoneCount={phoneCount}
+          connectedPhones={connectedPhones}
+          onAddPhoneInput={(id) => {
+            setInputPickerOpen(false);
+            addPhoneInput(id);
+          }}
           onAddPhone={() => {
             setInputPickerOpen(false);
             setPhonePairingOpen(true);
@@ -701,6 +760,10 @@ export function AudioManager() {
       <PhonePairingSheet
         open={phonePairingOpen}
         onClose={() => setPhonePairingOpen(false)}
+        onAddPhoneInput={(id) => {
+          setPhonePairingOpen(false);
+          addPhoneInput(id);
+        }}
       />
 
       <SettingsSheet
@@ -708,6 +771,8 @@ export function AudioManager() {
         onClose={() => setSettingsOpen(false)}
         density={state.density}
         onDensityChange={am.setDensity}
+        theme={theme}
+        onThemeChange={setTheme}
         inputDevices={inputDevicesCache}
         outputDevices={outputDevicesCache}
       />
@@ -803,18 +868,6 @@ export function AudioManager() {
         onClose={() => setBusRenameFor(null)}
       />
 
-      {/* Mini Controller launcher — opens the always-on-top pop-out window. */}
-      <div className={miniStyles.launcher}>
-        <button
-          type="button"
-          className={miniStyles.toggle}
-          onClick={() => void openMiniWindow()}
-          aria-label="Open mini controller window"
-          title="Open mini controller (Ctrl+Shift+P)"
-        >
-          🎛
-        </button>
-      </div>
     </div>
   );
 }

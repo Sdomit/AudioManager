@@ -1,9 +1,11 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   iconForBusRole,
   iconForKind,
+  GridIcon,
   MuteIcon,
+  PlusIcon,
   RecordIcon,
   XIcon,
 } from "./Icon";
@@ -119,11 +121,80 @@ const GROUP_H = 56;
 const COL_PAD = 18;
 const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
 // On-canvas per-input effect boxes (chained off the input, before its wires).
-const FX_W = 120;
-const FX_H = 36;
+const FX_W = 144;
+const FX_H = 40;
 const FX_GAP = 28;
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
+// Background-grid pitch. Matches the SVG <pattern> cell so snapping lands nodes
+// exactly on the dots the user sees.
+const GRID = 20;
+const snapTo = (n: number) => Math.round(n / GRID) * GRID;
+
+// Distance from point (px,py) to segment (ax,ay)-(bx,by). Used to hit-test a
+// dropped fx node against chain connectors.
+function distToSegment(
+  px: number, py: number, ax: number, ay: number, bx: number, by: number,
+): number {
+  const vx = bx - ax, vy = by - ay;
+  const wx = px - ax, wy = py - ay;
+  const len2 = vx * vx + vy * vy || 1;
+  let t = (wx * vx + wy * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * vx, cy = ay + t * vy;
+  return Math.hypot(px - cx, py - cy);
+}
+const DROP_ON_WIRE_TOL = 26; // world px: how near a connector counts as a drop
+// Shake-to-disconnect: N rapid horizontal reversals within the time window,
+// each above a min amplitude. Deliberately strict so a normal wavy reposition
+// drag never pops an effect loose by accident.
+const SHAKE_FLIPS = 6;
+const SHAKE_WINDOW_MS = 600;
+const SHAKE_MIN_PX = 6;
+
+/**
+ * Popup menu that opens at (x, y) but flips inside the window when it would
+ * overflow the right/bottom edge. Measures itself in useLayoutEffect (before
+ * paint) so there is no visible jump.
+ */
+function ClampedMenu({
+  x,
+  y,
+  className,
+  ariaLabel,
+  children,
+}: {
+  x: number;
+  y: number;
+  className: string;
+  ariaLabel: string;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const pad = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const left = x + r.width > vw - pad ? Math.max(pad, vw - pad - r.width) : x;
+    const top = y + r.height > vh - pad ? Math.max(pad, vh - pad - r.height) : y;
+    setPos({ left, top });
+  }, [x, y]);
+  return (
+    <div
+      ref={ref}
+      className={className}
+      role="menu"
+      aria-label={ariaLabel}
+      style={{ left: pos.left, top: pos.top }}
+    >
+      {children}
+    </div>
+  );
+}
 
 interface DragState {
   /**
@@ -323,6 +394,7 @@ const LS_VIEW          = "am.nodeView.viewport";
 const LS_GROUPS        = "am.nodeGroups.v1";
 const LS_FLOATING_FX   = "am.floatingFx.v1";
 const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
+const LS_SNAP          = "am.nodeView.snap";
 
 /**
  * Load unified node positions. Reads the v2 key first; if absent and
@@ -543,6 +615,17 @@ export function NodeView({
   const [panning, setPanning] = useState<PanState | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
 
+  // Snap-to-grid toggle (persisted). When on, dragging locks node positions to
+  // the GRID lattice and the background grid is drawn a touch brighter.
+  const [snap, setSnap] = useState<boolean>(() => {
+    try { return localStorage.getItem(LS_SNAP) === "1"; } catch { return false; }
+  });
+  const snapRef = useRef(snap);
+  useEffect(() => {
+    snapRef.current = snap;
+    try { localStorage.setItem(LS_SNAP, snap ? "1" : "0"); } catch {}
+  }, [snap]);
+
   const toCanvas = useCallback((clientX: number, clientY: number) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -583,6 +666,16 @@ export function NodeView({
   const localGroupsRef = useRef(localGroups);
   const localEdgesRef = useRef(localEdges);
   const floatingFxRef = useRef(floatingFx);
+  // Live geometry for drop-on-connector hit-testing; assigned after their memos.
+  const inputFxLayoutRef = useRef<any>(new Map());
+  const wiresRef = useRef<any[]>([]);
+  // Shake-to-disconnect tracker (reset at the start of each node drag).
+  const shakeRef = useRef<{
+    prevX: number;
+    lastSign: number;
+    times: number[];
+    triggered: boolean;
+  }>({ prevX: 0, lastSign: 0, times: [], triggered: false });
   useEffect(() => { localGroupsRef.current = localGroups; }, [localGroups]);
   useEffect(() => { localEdgesRef.current = localEdges; }, [localEdges]);
   useEffect(() => { floatingFxRef.current = floatingFx; }, [floatingFx]);
@@ -607,8 +700,12 @@ export function NodeView({
     setNodePositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      // Hug the input column (not the right edge of the huge world canvas).
-      const busColX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
+      // Seed buses in the right-hand output column (right edge of the visible
+      // viewport). The re-pin effect keeps them there as the panel resizes.
+      const busColX = Math.max(
+        COL_PAD + INPUT_W + COL_GAP_BETWEEN,
+        (Math.floor(wrapSize.w) || MIN_CANVAS_W) - COL_PAD - BUS_W,
+      );
       inputs.forEach((input, i) => {
         const nid = inputNodeId(input.id);
         if (!next.has(nid)) {
@@ -753,6 +850,7 @@ export function NodeView({
     }
     return map;
   }, [inputs, inputPositions, nodePositions]);
+  inputFxLayoutRef.current = inputFxLayout;
 
   // Seed `nodePositions` for fx boxes that don't have a stored position yet
   // (effects just enabled, or new inputs). One-shot: subsequent renders read
@@ -921,9 +1019,14 @@ export function NodeView({
   const canvasW = Math.max(MIN_CANVAS_W, Math.floor(wrapSize.w) || MIN_CANVAS_W, 10_000);
   const canvasH = Math.max(MIN_CANVAS_H, Math.floor(wrapSize.h) || MIN_CANVAS_H, 10_000);
   boundsRef.current = { w: canvasW, h: canvasH };
-  // Bus column hugs the input column instead of the (now huge) right edge so
-  // the initial layout still fits in the visible viewport.
-  const busColumnX = COL_PAD + INPUT_W + COL_GAP_BETWEEN;
+  // Default x for the output (bus) column: right edge of the *visible* viewport
+  // (not the huge 10k world), so new buses + `Reset layout` place outputs on the
+  // right with room for inputs on the left and effects between. This is only a
+  // DEFAULT — buses are freely draggable afterwards (no hard pin).
+  const busColumnX = Math.max(
+    COL_PAD + INPUT_W + COL_GAP_BETWEEN,
+    (Math.floor(wrapSize.w) || MIN_CANVAS_W) - COL_PAD - BUS_W,
+  );
 
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
@@ -1220,21 +1323,48 @@ export function NodeView({
   // ── Node-drag effect (moving a node around the canvas) ───────────────
   useEffect(() => {
     if (!nodeDrag) return;
+    // Reset the shake tracker for this drag.
+    shakeRef.current = { prevX: nodeDrag.startMouseX, lastSign: 0, times: [], triggered: false };
 
     const onMove = (e: MouseEvent) => {
       const z = viewRef.current.zoom;
       const dx = (e.clientX - nodeDrag.startMouseX) / z;
       const dy = (e.clientY - nodeDrag.startMouseY) / z;
       setNodeDrag((d) => (d && (dx !== 0 || dy !== 0) ? { ...d, moved: true } : d));
+
+      // Shake-to-disconnect: only a burst of rapid reversals within the window
+      // (each above a min amplitude) counts — a slow wavy drag won't.
+      if (nodeDrag.kind === "fx" && !shakeRef.current.triggered) {
+        const sr = shakeRef.current;
+        const fdx = e.clientX - sr.prevX;
+        if (Math.abs(fdx) > SHAKE_MIN_PX) {
+          const sign = Math.sign(fdx);
+          if (sr.lastSign !== 0 && sign !== sr.lastSign) {
+            const now = performance.now();
+            sr.times.push(now);
+            while (sr.times.length && now - sr.times[0] > SHAKE_WINDOW_MS) {
+              sr.times.shift();
+            }
+            if (sr.times.length >= SHAKE_FLIPS) sr.triggered = true;
+          }
+          sr.lastSign = sign;
+          sr.prevX = e.clientX;
+        }
+      }
+
       // Group move: apply the same delta to every node captured at
       // mousedown (single-node drags are just a group of one). Keys
       // are graph NodeIds in the unified position store.
       if (nodeDrag.groupStart.size > 0) {
         setNodePositions((prev) => {
           const next = new Map(prev);
+          const doSnap = snapRef.current;
           for (const [nid, p0] of nodeDrag.groupStart) {
+            const rawX = p0.x + dx;
+            const rawY = p0.y + dy;
             next.set(nid, clampToBounds(
-              p0.x + dx, p0.y + dy,
+              doSnap ? snapTo(rawX) : rawX,
+              doSnap ? snapTo(rawY) : rawY,
               nodeWidth(nid), nodeHeight(nid),
               boundsRef.current.w, boundsRef.current.h,
             ));
@@ -1244,8 +1374,81 @@ export function NodeView({
       }
     };
 
+    // Which fx box a node id belongs to (input + stage key).
+    const fxOwner = (nid: string): { inputId: string; key: InputFxKey } | null => {
+      for (const [inputId, row] of inputFxLayoutRef.current as Map<string, any>) {
+        for (const b of row.boxes as { key: InputFxKey }[]) {
+          if (fxNodeId(inputId, b.key) === nid) return { inputId, key: b.key };
+        }
+      }
+      return null;
+    };
+
+    // The input whose chain connector/wire is nearest a world point (or null).
+    const chainInputAt = (x: number, y: number): string | null => {
+      let best: string | null = null;
+      let bestD = DROP_ON_WIRE_TOL;
+      for (const [inputId, row] of inputFxLayoutRef.current as Map<string, any>) {
+        for (const c of row.connectors as { x1: number; y1: number; x2: number; y2: number }[]) {
+          const d = distToSegment(x, y, c.x1, c.y1, c.x2, c.y2);
+          if (d < bestD) { bestD = d; best = inputId; }
+        }
+      }
+      for (const w of wiresRef.current as any[]) {
+        if (!w.input) continue;
+        const d = distToSegment(x, y, w.ip.x, w.ip.y, w.bp.x, w.bp.y);
+        if (d < bestD) { bestD = d; best = w.input.id; }
+      }
+      return best;
+    };
+
     const onUp = () => {
-      // Persist positions on release.
+      const drag = nodeDrag;
+      const shookOff = shakeRef.current.triggered;
+      const pos = nodePosRef.current.get(drag.id as NodeId);
+      const center = pos
+        ? {
+            x: pos.x + nodeWidth(drag.id as NodeId) / 2,
+            y: pos.y + nodeHeight(drag.id as NodeId) / 2,
+          }
+        : null;
+
+      // Shake a chained fx → pop it out of the chain into a floating (loose) fx.
+      if (drag.kind === "fx" && shookOff && pos) {
+        const owner = fxOwner(drag.id);
+        if (owner) {
+          const fid = nextFloatId();
+          toggleInputFx(owner.inputId, owner.key, false);
+          setFloatingFx((prev) => new Map(prev).set(fid, { stage: owner.key }));
+          setNodePositions((prev) =>
+            new Map(prev).set(floatNodeId(fid), { x: pos.x, y: pos.y }),
+          );
+          saveNodePositions(nodePosRef.current);
+          setNodeDrag(null);
+          return;
+        }
+      }
+
+      // Drop a floating fx onto a chain connector → claim it into that chain.
+      if (drag.kind === "float" && center) {
+        const floatId = floatIdFromNodeId(drag.id as NodeId);
+        const meta = floatId ? floatingFxRef.current.get(floatId) : null;
+        const targetInput = chainInputAt(center.x, center.y);
+        if (meta && floatId && targetInput) {
+          toggleInputFx(targetInput, meta.stage, true);
+          setFloatingFx((prev) => {
+            const n = new Map(prev);
+            n.delete(floatId);
+            return n;
+          });
+          setNodePositions((prev) => {
+            const n = new Map(prev);
+            n.delete(floatNodeId(floatId));
+            return n;
+          });
+        }
+      }
+
       saveNodePositions(nodePosRef.current);
       setNodeDrag(null);
     };
@@ -1449,6 +1652,50 @@ export function NodeView({
   const resetView = useCallback(() => {
     setView(clampViewToBounds({ tx: 0, ty: 0, zoom: 1 }));
   }, [clampViewToBounds]);
+
+  // Zoom out (never in) and re-center so every node — inputs, effects, outputs —
+  // stays visible. Used when the detail panel opens (selecting a node), since
+  // the panel narrows the canvas; we shrink to keep the whole graph in view.
+  const fitToContent = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const vw = el.clientWidth;
+    const vh = el.clientHeight;
+    const positions = nodePosRef.current;
+    if (positions.size === 0 || vw === 0 || vh === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [nid, p] of positions) {
+      const w = nodeWidth(nid);
+      const h = nodeHeight(nid);
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x + w > maxX) maxX = p.x + w;
+      if (p.y + h > maxY) maxY = p.y + h;
+    }
+    const pad = 56;
+    const contentW = maxX - minX + pad * 2;
+    const contentH = maxY - minY + pad * 2;
+    const fitZoom = Math.min(vw / contentW, vh / contentH);
+    // Only ever zoom out from the current level — keeps everything shown
+    // without yanking the user closer than they already were.
+    const zoom = clampZoom(Math.min(viewRef.current.zoom, fitZoom));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    setView(clampViewToBounds({ zoom, tx: vw / 2 - cx * zoom, ty: vh / 2 - cy * zoom }));
+  }, [clampViewToBounds]);
+
+  // Selecting a node opens the detail panel (parent flex sibling), which
+  // narrows this canvas. Re-fit so inputs + effects + the right-pinned outputs
+  // all stay visible. Re-runs on the panel-driven width change too.
+  const selKey =
+    selection.kind === "input" ? `i:${selection.inputId}`
+    : selection.kind === "bus" ? `b:${selection.busId}`
+    : "none";
+  useEffect(() => {
+    if (selKey === "none") return;
+    const t = window.setTimeout(fitToContent, 70);
+    return () => window.clearTimeout(t);
+  }, [selKey, wrapSize.w, fitToContent]);
 
   // ── Group management ────────────────────────────────────────────────
   // Frontend-only: creating / removing a group is a localStorage write.
@@ -1664,6 +1911,10 @@ export function NodeView({
       });
       groupIndex += 1;
     }
+    // Discard orphaned floating (loose, unconnected) effects — a full reflow
+    // tidies the graph, so stray fx that were never dropped onto a chain go away.
+    // Their positions are already dropped since `next` omits float node ids.
+    setFloatingFx(new Map());
     setNodePositions(next);
     // Reset is an intentional full reflow: realign the viewport too so the
     // freshly laid-out columns are guaranteed to sit inside the visible area.
@@ -1762,6 +2013,27 @@ export function NodeView({
     }
     return out;
   }, [graph, nodePositions, inputFxLayout]);
+  wiresRef.current = wires;
+
+  // Per-input chain style: an input's fx-chain connectors adopt the colour of
+  // its outgoing bus wire (so input→fx→fx matches fx→bus) and animate the same
+  // white signal-flow when audio is actually passing through.
+  const inputWireInfo = useMemo(() => {
+    const m = new Map<string, { color: string; flowing: boolean; speed: number }>();
+    for (const w of wires) {
+      if (!w.input) continue;
+      const flowing =
+        !!w.bus && !w.edge.muted && !w.input.muted && w.input.level > 0.02;
+      const prev = m.get(w.input.id);
+      if (!prev) {
+        m.set(w.input.id, { color: w.color, flowing, speed: w.input.level });
+      } else {
+        prev.flowing = prev.flowing || flowing;
+        prev.speed = Math.max(prev.speed, w.input.level);
+      }
+    }
+    return m;
+  }, [wires]);
 
   return (
     <div
@@ -1785,35 +2057,47 @@ export function NodeView({
       {(() => {
         const toolbar = (
           <div className={styles.zoomBar} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.zoomGroup}>
+              <button
+                type="button"
+                className={styles.zoomBtn}
+                onClick={() => zoomBy(1 / 1.2)}
+                title="Zoom out"
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className={styles.zoomReadout}
+                onClick={resetView}
+                title="Reset zoom (100%)"
+              >
+                {Math.round(view.zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className={styles.zoomBtn}
+                onClick={() => zoomBy(1.2)}
+                title="Zoom in"
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+            </div>
             <button
               type="button"
-              className={styles.zoomBtn}
-              onClick={() => zoomBy(1 / 1.2)}
-              title="Zoom out"
-              aria-label="Zoom out"
+              className={`${styles.toolBtn} ${snap ? styles.toolBtnActive : ""}`}
+              onClick={() => setSnap((s) => !s)}
+              aria-pressed={snap}
+              title="Snap nodes to grid"
             >
-              −
+              <GridIcon size={14} />
+              <span>Snap</span>
             </button>
             <button
               type="button"
-              className={styles.zoomReadout}
-              onClick={resetView}
-              title="Reset zoom (100%)"
-            >
-              {Math.round(view.zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              className={styles.zoomBtn}
-              onClick={() => zoomBy(1.2)}
-              title="Zoom in"
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className={styles.resetBtn}
+              className={styles.toolBtn}
               onClick={resetLayout}
               title="Reset node positions"
             >
@@ -1822,22 +2106,24 @@ export function NodeView({
             {onAddInput && (
               <button
                 type="button"
-                className={styles.addInputBtn}
+                className={`${styles.toolBtn} ${styles.toolBtnAccent}`}
                 onClick={onAddInput}
                 title="Add input device"
                 aria-label="Add input device"
               >
-                + Add input
+                <PlusIcon size={14} />
+                <span>Add input</span>
               </button>
             )}
             <button
               type="button"
-              className={styles.addGroupBtn}
+              className={styles.toolBtn}
               onClick={addGroup}
               title="Add a group node (frontend only)"
               aria-label="Add group node"
             >
-              + Group
+              <PlusIcon size={14} />
+              <span>Group</span>
             </button>
           </div>
         );
@@ -1849,6 +2135,16 @@ export function NodeView({
           : toolbar;
       })()}
       <div
+        className={styles.gridOverlay}
+        style={{
+          backgroundImage: `radial-gradient(circle, ${snap ? "var(--am-grid-dot-strong)" : "var(--am-grid-dot)"} ${snap ? 0.9 : 0.6}px, transparent ${snap ? 1.3 : 1}px)`,
+          backgroundSize: `${GRID * view.zoom}px ${GRID * view.zoom}px`,
+          // Offset by half a cell so dots sit on world grid multiples (= snap targets).
+          backgroundPosition: `${view.tx - (GRID * view.zoom) / 2}px ${view.ty - (GRID * view.zoom) / 2}px`,
+        }}
+        aria-hidden
+      />
+      <div
         className={styles.canvasTransform}
         style={{
           transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.zoom})`,
@@ -1856,7 +2152,7 @@ export function NodeView({
         }}
       >
       <div className={styles.canvas} style={{ width: canvasW, height: canvasH }}>
-        <ColumnLabel x={COL_PAD} label="Inputs (drag to rearrange)" />
+        <ColumnLabel x={COL_PAD} label="Inputs" hint="drag to rearrange" />
         <ColumnLabel x={busColumnX} label="Buses" />
 
         {/* SVG wires layer */}
@@ -1876,11 +2172,8 @@ export function NodeView({
             </filter>
           </defs>
 
-          {/* Background grid */}
-          <pattern id="nodeGrid" width="20" height="20" patternUnits="userSpaceOnUse">
-            <circle cx="0.5" cy="0.5" r="0.5" fill="rgba(255,255,255,0.04)" />
-          </pattern>
-          <rect width={canvasW} height={canvasH} fill="url(#nodeGrid)" />
+          {/* Background grid is now a screen-space CSS overlay (.gridOverlay)
+              so it always fills the viewport regardless of pan. */}
 
           {/* Render wires (selected/hovered last for z-order). Wires
               touching a group node are local-only and have no live
@@ -1889,9 +2182,11 @@ export function NodeView({
             const id = w.edge.id;
             const isHover = hoverWire === id;
             const isSelected = selectedWire === id;
+            // Flow reflects signal presence: the input feeds the bus whether or
+            // not the bus has an output device, so don't gate on bus.enabled.
             const isLevelFlow =
               !!w.bus && !!w.input &&
-              w.bus.enabled && !w.edge.muted && !w.input.muted && w.input.level > 0.05;
+              !w.edge.muted && !w.input.muted && w.input.level > 0.02;
             return (
               <Wire
                 key={id}
@@ -1914,24 +2209,44 @@ export function NodeView({
             );
           })}
 
-          {/* Connectors linking an input to its effect chain. Curved like
-              the main input→bus wires for visual consistency across the tool. */}
-          {Array.from(inputFxLayout.values()).flatMap((row) =>
-            row.connectors.map((c, i) => {
+          {/* Connectors linking an input to its effect chain. Curved like the
+              main input→bus wires, coloured to match the input's bus wire, and
+              carrying the same white signal-flow animation while audio passes. */}
+          {Array.from(inputFxLayout.entries()).flatMap(([inputId, row]) => {
+            const info = inputWireInfo.get(inputId);
+            const stroke = info?.color ?? "rgba(170,180,200,0.55)";
+            const flowing = info?.flowing ?? false;
+            const speed = info?.speed ?? 0;
+            return row.connectors.map((c, i) => {
               const dx = Math.max(20, Math.abs(c.x2 - c.x1));
               const d = `M ${c.x1} ${c.y1} C ${c.x1 + dx * 0.5} ${c.y1}, ${c.x2 - dx * 0.5} ${c.y2}, ${c.x2} ${c.y2}`;
               return (
-                <path
-                  key={`fxc-${c.x1}-${c.y1}-${i}`}
-                  d={d}
-                  stroke="rgba(170,180,200,0.55)"
-                  strokeWidth={2.5}
-                  strokeLinecap="round"
-                  fill="none"
-                />
+                <g key={`fxc-${inputId}-${i}`}>
+                  <path
+                    d={d}
+                    stroke={stroke}
+                    strokeWidth={2.5}
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                  {flowing && (
+                    <path
+                      d={d}
+                      stroke="white"
+                      strokeWidth={1.4}
+                      strokeLinecap="round"
+                      fill="none"
+                      opacity={0.7}
+                      strokeDasharray="4 14"
+                      style={{
+                        animation: `am-wire-flow ${Math.max(0.5, 1.4 - speed)}s linear infinite`,
+                      }}
+                    />
+                  )}
+                </g>
               );
-            }),
-          )}
+            });
+          })}
 
           {/* Ghost wire while reordering an fx node (out-port → in-port).
               Same Bezier shape as the input→bus ghost for visual consistency. */}
@@ -2292,11 +2607,11 @@ export function NodeView({
                 onClick={() => setAddFxMenu(null)}
                 aria-hidden
               />
-              <div
+              <ClampedMenu
+                x={addFxMenu.x}
+                y={addFxMenu.y}
                 className={styles.bgCtxMenu}
-                role="menu"
-                aria-label="Add effect"
-                style={{ left: addFxMenu.x, top: addFxMenu.y }}
+                ariaLabel="Add effect"
               >
                 {available.length === 0 ? (
                   <div className={styles.bgCtxItem} aria-disabled>
@@ -2317,7 +2632,7 @@ export function NodeView({
                     </button>
                   ))
                 )}
-              </div>
+              </ClampedMenu>
             </>
           );
         })()}
@@ -2333,11 +2648,11 @@ export function NodeView({
             }}
             aria-hidden
           />
-          <div
+          <ClampedMenu
+            x={bgCtx.x}
+            y={bgCtx.y}
             className={styles.bgCtxMenu}
-            role="menu"
-            aria-label="Canvas actions"
-            style={{ left: bgCtx.x, top: bgCtx.y }}
+            ariaLabel="Canvas actions"
           >
             {onAddInput && (
               <button
@@ -2426,7 +2741,7 @@ export function NodeView({
             >
               Reset layout
             </button>
-          </div>
+          </ClampedMenu>
         </>
       )}
     </div>
@@ -2435,10 +2750,11 @@ export function NodeView({
 
 /* ── Sub-components ──────────────────────────────────────────────────── */
 
-function ColumnLabel({ x, label }: { x: number; label: string }) {
+function ColumnLabel({ x, label, hint }: { x: number; label: string; hint?: string }) {
   return (
     <div className={styles.columnLabel} style={{ left: x }}>
-      {label}
+      <span className={styles.columnLabelText}>{label}</span>
+      {hint && <span className={styles.columnLabelHint}>{hint}</span>}
     </div>
   );
 }
