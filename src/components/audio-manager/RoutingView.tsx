@@ -84,12 +84,15 @@ export function RoutingView({
             {sends.filter((s) => s.enabled).length} active sends
           </span>
         </div>
-        {/* Canvas toolbar (zoom / Reset layout / Add input / Group) is
-            portalled into here by NodeView when this view is active. */}
-        {view === "nodes" && (
-          <div id="am-node-toolbar-slot" className={styles.nodeToolbarSlot} />
-        )}
-        <ViewToggle view={view} onChange={onViewChange} />
+        {/* Toolbar + view toggle grouped so they wrap below the title together
+            (instead of overlapping it) when the header is too narrow. The canvas
+            toolbar is portalled into the slot by NodeView in the nodes view. */}
+        <div className={styles.headerControls}>
+          {view === "nodes" && (
+            <div id="am-node-toolbar-slot" className={styles.nodeToolbarSlot} />
+          )}
+          <ViewToggle view={view} onChange={onViewChange} />
+        </div>
       </header>
 
       <div className={styles.body}>

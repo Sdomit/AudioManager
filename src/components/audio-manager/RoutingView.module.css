@@ -13,18 +13,29 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--am-space-3);
+  row-gap: var(--am-space-2);
+  flex-wrap: wrap;
   padding: var(--am-space-4);
   border-bottom: 1px solid var(--am-border-subtle);
 }
 
-/* Title area yields first when space is tight so it can't overlap the toolbar;
-   the subtitle truncates before the "Routing" label. */
+/* Toolbar + view toggle; wraps below the title as one unit when tight. */
+.headerControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--am-space-3);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+
 .titleRow {
   display: flex;
   align-items: baseline;
   gap: var(--am-space-3);
   flex: 1 1 auto;
-  min-width: 0;
+  white-space: nowrap;
 }
 
 .title {
@@ -32,15 +43,11 @@
   font-weight: 600;
   letter-spacing: var(--am-tracking-tight);
   margin: 0;
-  flex-shrink: 0;
 }
 
 .subtitle {
   font-size: var(--am-text-12);
   color: var(--am-text-tertiary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
