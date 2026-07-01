@@ -505,35 +505,44 @@
 .fxNode {
   position: absolute;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: 1px;
-  padding: 4px 10px;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
   background: linear-gradient(180deg,
-    var(--am-surface-2, #232733) 0%,
-    var(--am-surface-1, #1b1e26) 100%);
+    var(--am-surface-3) 0%,
+    var(--am-surface-2) 100%);
   border: 1px solid var(--am-border-default);
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--am-text-secondary);
   cursor: grab;
   z-index: 4;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--am-elev-2);
   transition: border-color var(--am-dur-fast), color var(--am-dur-fast),
     box-shadow var(--am-dur-fast), transform var(--am-dur-fast);
 }
 .fxNode:active { cursor: grabbing; }
 .fxNode:hover {
-  border-color: var(--am-accent, #6ea8fe);
+  border-color: var(--am-border-strong);
   color: var(--am-text-primary);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--am-elev-3);
 }
+.nodeSelected.fxNode {
+  border-color: var(--am-accent);
+  box-shadow: 0 0 0 1px var(--am-accent), var(--am-elev-2);
+}
+/* Small "FX" type chip. */
 .fxNodeKind {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-default);
   font-size: 8px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--am-text-tertiary);
 }
@@ -543,14 +552,13 @@
 .floatFx {
   position: absolute;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: 1px;
-  padding: 4px 10px;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
   background: var(--am-surface-1, #1b1e26);
   border: 1px dashed var(--am-text-tertiary);
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--am-text-secondary);
@@ -615,25 +623,36 @@
 }
 
 .fxNodeLabel {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--am-text-primary);
+  padding-right: 8px;
 }
+/* Remove tucks into the top-right corner, revealed on hover. */
 .fxNodeRemove {
-  flex: none;
-  width: 16px;
-  height: 16px;
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  width: 15px;
+  height: 15px;
   display: grid;
   place-items: center;
   border: none;
   border-radius: 4px;
   background: transparent;
   color: var(--am-text-tertiary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--am-dur-fast), background var(--am-dur-fast),
+    color var(--am-dur-fast);
 }
+.fxNode:hover .fxNodeRemove,
+.floatFx:hover .fxNodeRemove { opacity: 1; }
 .fxNodeRemove:hover {
   background: rgba(239, 68, 68, 0.15);
   color: var(--am-meter-clip, #ef4444);

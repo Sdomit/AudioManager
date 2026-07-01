@@ -121,8 +121,8 @@ const GROUP_H = 56;
 const COL_PAD = 18;
 const COL_GAP_BETWEEN = 200; // horizontal space between input column and bus column for wires
 // On-canvas per-input effect boxes (chained off the input, before its wires).
-const FX_W = 120;
-const FX_H = 36;
+const FX_W = 144;
+const FX_H = 40;
 const FX_GAP = 28;
 const MIN_CANVAS_W = COL_PAD + INPUT_W + COL_GAP_BETWEEN + BUS_W + COL_PAD;
 const MIN_CANVAS_H = 300;
@@ -1890,7 +1890,7 @@ export function NodeView({
     for (const w of wires) {
       if (!w.input) continue;
       const flowing =
-        !!w.bus && w.bus.enabled && !w.edge.muted && !w.input.muted && w.input.level > 0.05;
+        !!w.bus && !w.edge.muted && !w.input.muted && w.input.level > 0.02;
       const prev = m.get(w.input.id);
       if (!prev) {
         m.set(w.input.id, { color: w.color, flowing, speed: w.input.level });
@@ -2049,9 +2049,11 @@ export function NodeView({
             const id = w.edge.id;
             const isHover = hoverWire === id;
             const isSelected = selectedWire === id;
+            // Flow reflects signal presence: the input feeds the bus whether or
+            // not the bus has an output device, so don't gate on bus.enabled.
             const isLevelFlow =
               !!w.bus && !!w.input &&
-              w.bus.enabled && !w.edge.muted && !w.input.muted && w.input.level > 0.05;
+              !w.edge.muted && !w.input.muted && w.input.level > 0.02;
             return (
               <Wire
                 key={id}
