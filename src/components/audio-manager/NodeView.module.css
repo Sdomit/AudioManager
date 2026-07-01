@@ -335,6 +335,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Reserve room for the absolutely-positioned FX + REC badges (top-right) so a
+     long title truncates with an ellipsis instead of running under them. */
+  padding-right: 68px;
 }
 
 .nodeSub {
