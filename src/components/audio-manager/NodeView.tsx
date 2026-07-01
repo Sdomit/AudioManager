@@ -2022,7 +2022,7 @@ export function NodeView({
         }}
       >
       <div className={styles.canvas} style={{ width: canvasW, height: canvasH }}>
-        <ColumnLabel x={COL_PAD} label="Inputs (drag to rearrange)" />
+        <ColumnLabel x={COL_PAD} label="Inputs" hint="drag to rearrange" />
         <ColumnLabel x={busColumnX} label="Buses" />
 
         {/* SVG wires layer */}
@@ -2598,10 +2598,11 @@ export function NodeView({
 
 /* ── Sub-components ──────────────────────────────────────────────────── */
 
-function ColumnLabel({ x, label }: { x: number; label: string }) {
+function ColumnLabel({ x, label, hint }: { x: number; label: string; hint?: string }) {
   return (
     <div className={styles.columnLabel} style={{ left: x }}>
-      {label}
+      <span className={styles.columnLabelText}>{label}</span>
+      {hint && <span className={styles.columnLabelHint}>{hint}</span>}
     </div>
   );
 }
