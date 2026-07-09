@@ -1,0 +1,45 @@
+name: release
+
+# Tag a commit `vX.Y.Z` to build the Windows installer and publish a draft release.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # VS2026 ships CMake 4.x; opus (via webrtc/audiopus_sys) needs the < 3.5 policy shim.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "AudioManager ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false

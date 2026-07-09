@@ -2,9 +2,21 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## 0.1.0 — first packaged release
+
+First Windows installer (NSIS, per-user, no admin). Not yet code-signed —
+SmartScreen shows an unknown-publisher warning; see [docs/INSTALL.md](docs/INSTALL.md).
+Virtual audio cable is optional (use a third-party cable such as VB-Cable); the
+branded AudioManager Virtual Cable ships separately pending driver signing.
 
 ### Added
+- Streaming DSP: compressor, noise gate, limiter, high-pass, ducking, automix
+- Advanced metering: RMS, LUFS, spectrum analyzer
+- Recording with selectable WAV bit depth (32-bit float / 24-bit / 16-bit PCM)
+- Binaural 3D position pad
+- Preset snapshots, device templates, console view, keyboard shortcuts
+- Mini Controller: OS volume/mic knobs, global hotkey (Ctrl+Shift+P), phone remote
+- Phone as a routable mixer input over the local network
 - Pro UI cleanup: Bus matrix cards with enhanced visual hierarchy
 - Virtual audio cable device detection (frontend-only)
 - B1 "Stream Output" labeling and guidance for streaming workflows
@@ -209,4 +221,4 @@ All notable changes to this project are documented here.
 
 ## License
 
-(To be determined)
+See [LICENSE](LICENSE).

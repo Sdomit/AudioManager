@@ -144,9 +144,9 @@ export function CablePanel({ open }: CablePanelProps) {
 
   if (result?.kind === "unavailable") {
     tone = "neutral";
-    headline = "Helper not found";
+    headline = "Optional add-on";
     detail =
-      "Install the AudioManager Virtual Cable. Its helper (amvc-helper) was not detected on this system.";
+      "Branded virtual cable ships separately. AudioManager routes through any virtual audio device — install a third-party cable such as VB-Cable to send audio between apps.";
   } else if (result?.kind === "ok") {
     const { status, found, expected } = result;
 
