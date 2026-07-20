@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-20
+## [0.1.1] - 2026-07-20
 
 ### Release notes
 - Refreshed the AudioManager brand across the app window, installer, Windows shortcuts, and generated icon sizes.
