@@ -72,7 +72,13 @@ function Strip({
       <div className={`${styles.stateDot} ${styles[`dot_${bus.state}`]}`} aria-hidden />
 
       <div className={styles.meterWrap}>
-        <MeterCanvas level={bus.level} width={20} height={160} variant="bus" />
+        <MeterCanvas
+          level={bus.level}
+          width={20}
+          height={160}
+          variant="bus"
+          orientation="vertical"
+        />
       </div>
 
       <div className={styles.dbVal}>{active ? fmtDb(bus.level) : "—"}</div>

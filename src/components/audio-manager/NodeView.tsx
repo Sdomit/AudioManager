@@ -1485,7 +1485,7 @@ export function NodeView({
     return () => wrap.removeEventListener("wheel", onWheel);
   }, []);
 
-  // ── Del / Backspace removes multi-selected inputs; Esc clears ────────
+  // ── Del / Backspace removes selected inputs; Esc clears ───────────────
   useEffect(() => {
     const isEditable = (t: EventTarget | null) => {
       const el = t as HTMLElement | null;
@@ -1506,7 +1506,14 @@ export function NodeView({
       }
       if (e.key === "Delete" || e.key === "Backspace") {
         if (!onRemoveInput) return;
-        const ids = Array.from(selInputsRef.current);
+        // A regular click selects the input in the detail panel but is not a
+        // Shift multi-select. Treat it as the delete target too, so Delete
+        // works naturally for the common one-node case.
+        const ids = selInputsRef.current.size > 0
+          ? Array.from(selInputsRef.current)
+          : selection.kind === "input"
+            ? [selection.inputId]
+            : [];
         if (ids.length === 0) return;
         e.preventDefault();
         for (const id of ids) onRemoveInput(id);
@@ -1515,7 +1522,7 @@ export function NodeView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [clearMultiSelect, onRemoveInput]);
+  }, [clearMultiSelect, onRemoveInput, selection]);
 
   // ── Spacebar (hold for hand-tool pan cursor) ─────────────────────────
   useEffect(() => {

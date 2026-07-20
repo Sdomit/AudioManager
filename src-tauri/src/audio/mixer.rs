@@ -15,10 +15,10 @@ use crate::audio::dsp::{
 };
 use crate::audio::loopback::{self, Subscription};
 use crate::audio::meters::{verdict_for, LoudnessSnapshot, StreamAnalyzer, SILENCE_FLOOR_DB};
-use crate::audio::spectrum::SpectrumBins;
 use crate::audio::recorder::{ActiveTap, CallbackTapKind, TapCommand, MAX_ACTIVE_TAPS};
 use crate::audio::remote::{self, RemoteSubscription};
 use crate::audio::source::InputSourceSpec;
+use crate::audio::spectrum::SpectrumBins;
 
 // ~85 ms at 48 kHz stereo.
 const RING_SIZE: usize = 16384;
@@ -297,7 +297,8 @@ impl MixerEngine {
     /// layer from device ids) plus per-group params. Lock-free; applied on the
     /// callback's next block. Groups beyond the published count are disabled.
     pub fn update_automix(&self, updates: &[AutomixGroupUpdate]) {
-        self.automix_shared.publish(updates, self.sample_rate as f32);
+        self.automix_shared
+            .publish(updates, self.sample_rate as f32);
     }
 
     /// Read and reset the dropout counters, aggregated across all inputs.
@@ -645,9 +646,9 @@ pub fn start(
                             // without glitching (drift-aware SRC, #36).
                             let fill_atom = Arc::new(AtomicUsize::new(0));
                             fill_snap = Some(Arc::clone(&fill_atom));
-                            let target_for_nudge =
-                                (TARGET_LATENCY_MS / 1000.0 * out_rate as f32) as usize
-                                    * in_channels;
+                            let target_for_nudge = (TARGET_LATENCY_MS / 1000.0 * out_rate as f32)
+                                as usize
+                                * in_channels;
                             let mut producer = producer;
                             let peak = Arc::clone(&shared_for_thread);
                             let mut resampler = crate::audio::resampler::Resampler::new(
@@ -686,7 +687,8 @@ pub fn start(
                                                 &mut producer,
                                                 &out[..in_channels],
                                                 in_channels,
-                                            ) as u32;
+                                            )
+                                                as u32;
                                         });
                                     }
                                     store_max(&peak[i].input_peak, block_peak);
@@ -732,25 +734,26 @@ pub fn start(
                                     i,
                                 )
                             }
-                            InputSourceSpec::ProcessByName { image_name, include_tree } => {
-                                match crate::audio::session::resolve_pid_for_image(image_name) {
-                                    Ok(Some(pid)) => loopback::subscribe_process(
-                                        pid,
-                                        *include_tree,
-                                        out_sample_rate.0,
-                                        Arc::clone(&shared_for_thread),
-                                        i,
-                                    ),
-                                    Ok(None) => Err(EngineError {
-                                        message: format!(
-                                            "App '{image_name}' is not currently playing \
+                            InputSourceSpec::ProcessByName {
+                                image_name,
+                                include_tree,
+                            } => match crate::audio::session::resolve_pid_for_image(image_name) {
+                                Ok(Some(pid)) => loopback::subscribe_process(
+                                    pid,
+                                    *include_tree,
+                                    out_sample_rate.0,
+                                    Arc::clone(&shared_for_thread),
+                                    i,
+                                ),
+                                Ok(None) => Err(EngineError {
+                                    message: format!(
+                                        "App '{image_name}' is not currently playing \
                                              audio. Start playback in the app, then enable \
                                              this input."
-                                        ),
-                                    }),
-                                    Err(e) => Err(e),
-                                }
-                            }
+                                    ),
+                                }),
+                                Err(e) => Err(e),
+                            },
                             // The outer arm guarantees a loopback variant here;
                             // Device and RemotePhone have their own arms.
                             _ => unreachable!(),
@@ -827,10 +830,8 @@ pub fn start(
                 .iter()
                 .map(|(_, _, _, dsp)| Arc::new(InputDspShared::new(dsp, sr)))
                 .collect();
-            let mut dsp_slots: Vec<InputDspSlots> = in_specs
-                .iter()
-                .map(|_| InputDspSlots::new(sr))
-                .collect();
+            let mut dsp_slots: Vec<InputDspSlots> =
+                in_specs.iter().map(|_| InputDspSlots::new(sr)).collect();
             let dsp_shared_cb: Vec<Arc<InputDspShared>> =
                 dsp_shared_arcs.iter().map(Arc::clone).collect();
 
@@ -979,7 +980,9 @@ pub fn start(
                             );
                             if drop_n > 0 {
                                 let dropped = consumers[i].0.discard(drop_n);
-                                slots[i].overrun.fetch_add(dropped as u32, Ordering::Relaxed);
+                                slots[i]
+                                    .overrun
+                                    .fetch_add(dropped as u32, Ordering::Relaxed);
                             }
 
                             let got = consumers[i].0.pop_slice(&mut input_scratch[i][..need]);
@@ -999,10 +1002,7 @@ pub fn start(
                             // is_enabled check is hoisted; inner loop has no dispatch.
                             dsp_shared_cb[i].reload_if_changed(&mut dsp_slots[i]);
                             if need > 0 {
-                                dsp_slots[i].process_block(
-                                    &mut input_scratch[i][..need],
-                                    in_ch,
-                                );
+                                dsp_slots[i].process_block(&mut input_scratch[i][..need], in_ch);
                             }
                         }
 
@@ -1052,8 +1052,12 @@ pub fn start(
                                 // Read one input frame from the pre-drained scratch,
                                 // bounded by the frames actually drained so an
                                 // oversized output block can never index past it.
-                                let (s0, s1) =
-                                    read_scratch_frame(&input_scratch[i], f, in_ch, avail_frames[i]);
+                                let (s0, s1) = read_scratch_frame(
+                                    &input_scratch[i],
+                                    f,
+                                    in_ch,
+                                    avail_frames[i],
+                                );
 
                                 // DSP already applied block-wide above (process_block).
                                 // s0/s1 read from the processed scratch buffer.
@@ -1063,11 +1067,12 @@ pub fn start(
                                 // (ITD/ILD/front-back). This supersedes the stereo
                                 // pan stage, which process_block skipped. Otherwise
                                 // the legs pass through unchanged (cl/cr == s0/s1).
-                                let (cl, cr) = if out_channels == 2 && dsp_slots[i].binaural_active() {
-                                    dsp_slots[i].binaural_frame(s0, s1)
-                                } else {
-                                    (s0, s1)
-                                };
+                                let (cl, cr) =
+                                    if out_channels == 2 && dsp_slots[i].binaural_active() {
+                                        dsp_slots[i].binaural_frame(s0, s1)
+                                    } else {
+                                        (s0, s1)
+                                    };
 
                                 // Track post-stereo/post-binaural per-channel peak
                                 // (#feature10). Pre-fader: `g` is applied at mix time
@@ -1362,7 +1367,14 @@ mod tests {
 
     #[test]
     fn start_rejects_empty_inputs() {
-        let result = start("fake_output", &[], 1.0, false, BusDspConfig::default(), None);
+        let result = start(
+            "fake_output",
+            &[],
+            1.0,
+            false,
+            BusDspConfig::default(),
+            None,
+        );
         assert!(result.is_err());
         assert!(result.err().unwrap().message.contains("No inputs"));
     }
@@ -1371,7 +1383,14 @@ mod tests {
     fn start_rejects_more_than_max_inputs() {
         // MAX_INPUTS + 1 inputs — must fail before any CPAL call.
         let inputs = fake_inputs(MAX_INPUTS + 1);
-        let result = start("fake_output", &inputs, 1.0, false, BusDspConfig::default(), None);
+        let result = start(
+            "fake_output",
+            &inputs,
+            1.0,
+            false,
+            BusDspConfig::default(),
+            None,
+        );
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         assert!(
@@ -1385,7 +1404,14 @@ mod tests {
         // MAX_INPUTS inputs must pass the limit check and fail on the CPAL
         // device lookup ("fake_output" not found), not on the limit guard.
         let inputs = fake_inputs(MAX_INPUTS);
-        let result = start("fake_output", &inputs, 1.0, false, BusDspConfig::default(), None);
+        let result = start(
+            "fake_output",
+            &inputs,
+            1.0,
+            false,
+            BusDspConfig::default(),
+            None,
+        );
         assert!(result.is_err());
         let msg = result.err().unwrap().message;
         // Must NOT be the limit error — should be a device-not-found error.
@@ -1496,7 +1522,10 @@ mod tests {
         assert!(clipped);
 
         let (input_peaks2, output_peak2, clipped2) = engine.read_and_reset_meters();
-        assert_eq!(input_peaks2, vec![InputMeter::default(), InputMeter::default()]);
+        assert_eq!(
+            input_peaks2,
+            vec![InputMeter::default(), InputMeter::default()]
+        );
         assert_eq!(output_peak2, 0.0);
         assert!(!clipped2);
     }
@@ -1556,14 +1585,26 @@ mod tests {
         let in_ch = 2;
         let avail = RING_SIZE / in_ch; // = need / in_ch when block exceeds scratch
         assert_eq!(read_scratch_frame(&scratch, 0, in_ch, avail), (0.5, 0.5));
-        assert_eq!(read_scratch_frame(&scratch, avail - 1, in_ch, avail), (0.5, 0.5));
+        assert_eq!(
+            read_scratch_frame(&scratch, avail - 1, in_ch, avail),
+            (0.5, 0.5)
+        );
         // f == avail and beyond: silence, no panic even far past the buffer.
-        assert_eq!(read_scratch_frame(&scratch, avail, in_ch, avail), (0.0, 0.0));
-        assert_eq!(read_scratch_frame(&scratch, avail + 5_000, in_ch, avail), (0.0, 0.0));
+        assert_eq!(
+            read_scratch_frame(&scratch, avail, in_ch, avail),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            read_scratch_frame(&scratch, avail + 5_000, in_ch, avail),
+            (0.0, 0.0)
+        );
         // Mono mirrors left into right.
         let mono = vec![0.3f32; RING_SIZE];
         assert_eq!(read_scratch_frame(&mono, 10, 1, RING_SIZE), (0.3, 0.3));
-        assert_eq!(read_scratch_frame(&mono, RING_SIZE, 1, RING_SIZE), (0.0, 0.0));
+        assert_eq!(
+            read_scratch_frame(&mono, RING_SIZE, 1, RING_SIZE),
+            (0.0, 0.0)
+        );
     }
 
     #[test]

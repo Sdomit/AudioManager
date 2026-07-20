@@ -16,6 +16,8 @@ interface BusRailProps {
   onContextMenu?: (id: BusId, x: number, y: number) => void;
   /** Card grid vs console faders. Toggled from the top bar. */
   viewMode: "card" | "console";
+  /** Float the console above the routing workspace instead of reserving a rail. */
+  floating?: boolean;
 }
 
 /**
@@ -33,12 +35,17 @@ export function BusRail({
   onSelectDevice,
   onContextMenu,
   viewMode,
+  floating = false,
 }: BusRailProps) {
   const a = buses.filter((b) => b.id.startsWith("A"));
   const b = buses.filter((b) => b.id.startsWith("B"));
 
   return (
-    <div className={styles.rail} role="region" aria-label="Output buses">
+    <div
+      className={`${styles.rail} ${floating ? styles.consoleFloating : ""}`}
+      role="region"
+      aria-label="Output buses"
+    >
       {viewMode === "console" ? (
         <ConsoleView
           buses={buses}

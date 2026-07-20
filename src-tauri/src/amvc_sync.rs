@@ -79,8 +79,12 @@ const PKEY_DEVICE_DEVICEDESC: PROPERTYKEY = PROPERTYKEY {
 /// Factory name for each slot — used to restore defaults. `target_name` re-adds
 /// the "AudioManager" prefix, yielding the original endpoint names.
 #[cfg(windows)]
-const FACTORY_LABELS: [&str; 4] =
-    ["Cable 1 Playback", "Cable 2 Playback", "Stream Output", "Voice Output"];
+const FACTORY_LABELS: [&str; 4] = [
+    "Cable 1 Playback",
+    "Cable 2 Playback",
+    "Stream Output",
+    "Voice Output",
+];
 
 /// One of the four routable AMVC render endpoints, in bus order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -176,7 +180,10 @@ pub fn target_name(bus_label: &str) -> String {
 #[cfg(windows)]
 fn validate_labels(bus_names: &[String]) -> Result<[String; 4], String> {
     if bus_names.len() != 4 {
-        return Err(format!("expected 4 bus names (A1,A2,B1,B2), got {}", bus_names.len()));
+        return Err(format!(
+            "expected 4 bus names (A1,A2,B1,B2), got {}",
+            bus_names.len()
+        ));
     }
     Ok([
         bus_names[0].clone(),
@@ -225,13 +232,23 @@ pub fn build_plan(bus_names: &[String]) -> Result<SyncPlan, String> {
             let current: String = props.get_value(DESC_VALUE).unwrap_or_default();
             let target = target_name(&labels[slot.idx()]);
             let needs_change = current != target;
-            endpoints.push(EndpointPlan { guid, slot, current, target, needs_change });
+            endpoints.push(EndpointPlan {
+                guid,
+                slot,
+                current,
+                target,
+                needs_change,
+            });
         }
     }
     endpoints.sort_by_key(|e| e.slot.idx());
     let aligned = endpoints.iter().all(|e| !e.needs_change);
     let can_write = probe_write(&render);
-    Ok(SyncPlan { endpoints, aligned, can_write })
+    Ok(SyncPlan {
+        endpoints,
+        aligned,
+        can_write,
+    })
 }
 
 /// Build a VT_LPWSTR PROPVARIANT pointing at a fresh CoTaskMem copy of `s`.
@@ -252,7 +269,9 @@ unsafe fn propvariant_string(s: &str) -> PROPVARIANT {
                 wReserved1: 0,
                 wReserved2: 0,
                 wReserved3: 0,
-                Anonymous: PROPVARIANT_0_0_0 { pwszVal: PWSTR(mem) },
+                Anonymous: PROPVARIANT_0_0_0 {
+                    pwszVal: PWSTR(mem),
+                },
             }),
         },
     }
@@ -290,7 +309,9 @@ fn com_apply_targets(plan: &SyncPlan) -> Result<u32, String> {
         let collection = enumerator
             .EnumAudioEndpoints(eRender, DEVICE_STATE(0x0000_000F))
             .map_err(|e| format!("enumerate render endpoints: {e}"))?;
-        let count = collection.GetCount().map_err(|e| format!("endpoint count: {e}"))?;
+        let count = collection
+            .GetCount()
+            .map_err(|e| format!("endpoint count: {e}"))?;
 
         let mut renamed = 0u32;
         for i in 0..count {
@@ -318,7 +339,9 @@ fn com_apply_targets(plan: &SyncPlan) -> Result<u32, String> {
             let set = store_w.SetValue(&PKEY_DEVICE_DEVICEDESC, &pv);
             let _ = PropVariantClear(&mut pv);
             set.map_err(|e| format!("set DeviceDesc to '{target}': {e}"))?;
-            store_w.Commit().map_err(|e| format!("commit rename '{target}': {e}"))?;
+            store_w
+                .Commit()
+                .map_err(|e| format!("commit rename '{target}': {e}"))?;
             renamed += 1;
         }
         Ok(renamed)
@@ -344,7 +367,11 @@ pub fn com_read_friendly_names() -> Result<Vec<(String, String)>, String> {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let id = device.GetId().ok().and_then(|p| p.to_string().ok()).unwrap_or_default();
+            let id = device
+                .GetId()
+                .ok()
+                .and_then(|p| p.to_string().ok())
+                .unwrap_or_default();
             if let Ok(store) = device.OpenPropertyStore(windows::Win32::System::Com::STGM_READ) {
                 if let Some(name) = read_friendly_name(&store) {
                     out.push((id, name));
@@ -469,7 +496,10 @@ mod tests {
         assert_eq!(target_name("B1 Stream"), "AudioManager B1 Stream");
         assert_eq!(target_name("  A1 Monitor "), "AudioManager A1 Monitor");
         // Already branded → unchanged (no double prefix).
-        assert_eq!(target_name("AudioManager B1 Stream"), "AudioManager B1 Stream");
+        assert_eq!(
+            target_name("AudioManager B1 Stream"),
+            "AudioManager B1 Stream"
+        );
     }
 
     /// Manual probe against the live registry (read-only, no elevation).
@@ -507,9 +537,9 @@ mod tests {
     #[ignore]
     fn com_dump_names() {
         use windows::core::GUID;
+        use windows::Win32::Foundation::PROPERTYKEY;
         use windows::Win32::Media::Audio::eCapture;
         use windows::Win32::System::Com::STGM_READ;
-        use windows::Win32::Foundation::PROPERTYKEY;
 
         const PKEY_DEVICE_DEVICEDESC: PROPERTYKEY = PROPERTYKEY {
             fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
@@ -534,7 +564,11 @@ mod tests {
             if pwsz.is_null() {
                 return "<empty>".into();
             }
-            unsafe { PCWSTR(pwsz.0).to_string().unwrap_or_else(|_| "<bad utf16>".into()) }
+            unsafe {
+                PCWSTR(pwsz.0)
+                    .to_string()
+                    .unwrap_or_else(|_| "<bad utf16>".into())
+            }
         }
 
         unsafe {
@@ -549,13 +583,17 @@ mod tests {
                     .expect("enumerate");
                 let count = collection.GetCount().expect("count");
                 for i in 0..count {
-                    let Ok(device) = collection.Item(i) else { continue };
+                    let Ok(device) = collection.Item(i) else {
+                        continue;
+                    };
                     let id = device
                         .GetId()
                         .ok()
                         .and_then(|p| p.to_string().ok())
                         .unwrap_or_default();
-                    let Ok(store) = device.OpenPropertyStore(STGM_READ) else { continue };
+                    let Ok(store) = device.OpenPropertyStore(STGM_READ) else {
+                        continue;
+                    };
                     let friendly = read_str(&store, &PKEY_Device_FriendlyName);
                     let desc = read_str(&store, &PKEY_DEVICE_DEVICEDESC);
                     let iface = read_str(&store, &PKEY_DEVICEINTERFACE_FRIENDLYNAME);
@@ -592,7 +630,11 @@ mod tests {
         eprintln!("--- live COM friendly names after apply ---");
         match com_read_friendly_names() {
             Ok(list) => {
-                for (id, name) in list.iter().filter(|(_, n)| n.to_lowercase().contains("audiomanager") || n.to_lowercase().contains("a1 ") || n.to_lowercase().contains("b1 ")) {
+                for (id, name) in list.iter().filter(|(_, n)| {
+                    n.to_lowercase().contains("audiomanager")
+                        || n.to_lowercase().contains("a1 ")
+                        || n.to_lowercase().contains("b1 ")
+                }) {
                     eprintln!("  {name}  [{}]", id.split('.').last().unwrap_or(""));
                 }
             }
@@ -616,7 +658,9 @@ mod tests {
     fn target_keeps_detection_substring() {
         // Detection matches lowercase "audiomanager " — every target must keep it.
         for label in ["A1 Monitor", "A2 Speakers", "B1 Stream", "B2 Record"] {
-            assert!(target_name(label).to_ascii_lowercase().contains("audiomanager "));
+            assert!(target_name(label)
+                .to_ascii_lowercase()
+                .contains("audiomanager "));
         }
     }
 }

@@ -279,11 +279,25 @@ export interface BusStatus {
   latency_mode?: string | null;
 }
 
-export interface SystemStatus {
+/** Non-destructive configuration and engine-state snapshot. */
+export interface SystemSnapshot {
   buses: BusStatus[];
   inputs: InputChannel[];
-  input_peaks: InputPeakStatus[];
   last_error: string | null;
+}
+
+/** Destructive interval telemetry; one frontend coordinator owns these reads. */
+export interface MeterSnapshot {
+  buses: BusMeterSnapshot[];
+  input_peaks: InputPeakStatus[];
+}
+
+export interface BusMeterSnapshot {
+  id: BusId;
+  output_peak: number;
+  clipped_recently: boolean;
+  underruns: number;
+  overruns: number;
 }
 
 export interface InputSend {

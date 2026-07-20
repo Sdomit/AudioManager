@@ -14,7 +14,15 @@ export function MiniWindow() {
   return (
     <div className={styles.root}>
       <div className={styles.titlebar} data-tauri-drag-region>
-        <span className={styles.title}>Mini Controller</span>
+        <span className={styles.titleBrand}>
+          <img
+            className={styles.titleLogo}
+            src="/brand/audiomanager-icon-source.png"
+            alt=""
+            aria-hidden
+          />
+          <span className={styles.title}>AudioManager Mini Controller</span>
+        </span>
         <button
           type="button"
           className={styles.close}

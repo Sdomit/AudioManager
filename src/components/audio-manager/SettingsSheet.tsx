@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { version as appVersion } from "../../../package.json";
 
+import * as ipc from "../../ipc/commands";
 import type { DeviceInfo } from "../../types/engine";
 import type { Density } from "./types";
 import styles from "./SettingsSheet.module.css";
@@ -17,9 +19,10 @@ interface SettingsSheetProps {
   outputDevices: DeviceInfo[];
 }
 
-type Tab = "devices" | "cable" | "appearance" | "about";
+type Tab = "general" | "devices" | "cable" | "appearance" | "about";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "general", label: "General" },
   { id: "devices", label: "Audio devices" },
   { id: "cable", label: "Virtual cable" },
   { id: "appearance", label: "Appearance" },
@@ -50,6 +53,32 @@ export function SettingsSheet({
   outputDevices,
 }: SettingsSheetProps) {
   const [tab, setTab] = useState<Tab>("devices");
+  const [launchAtLogin, setLaunchAtLogin] = useState(true);
+  const [startupError, setStartupError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void ipc.appGetLaunchAtLogin()
+      .then((enabled) => {
+        if (!cancelled) setLaunchAtLogin(enabled);
+      })
+      .catch((error) => {
+        if (!cancelled) setStartupError(error instanceof Error ? error.message : "Could not load startup setting.");
+      });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  const toggleLaunchAtLogin = async (enabled: boolean) => {
+    setStartupError(null);
+    setLaunchAtLogin(enabled);
+    try {
+      await ipc.appSetLaunchAtLogin(enabled);
+    } catch (error) {
+      setLaunchAtLogin(!enabled);
+      setStartupError(error instanceof Error ? error.message : "Could not update Windows startup.");
+    }
+  };
 
   // Close on Escape.
   useEffect(() => {
@@ -103,6 +132,25 @@ export function SettingsSheet({
         </nav>
 
         <div role="tabpanel" className={styles.panel}>
+          {tab === "general" && (
+            <section>
+              <h3 className={styles.sectionTitle}>Startup</h3>
+              <label className={styles.settingRow}>
+                <span className={styles.settingCopy}>
+                  <strong>Launch AudioManager when I sign in</strong>
+                  <span>Starts the app automatically for this Windows account.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={launchAtLogin}
+                  onChange={(e) => void toggleLaunchAtLogin(e.target.checked)}
+                  aria-label="Launch AudioManager when I sign in"
+                />
+              </label>
+              {startupError && <p className={`${styles.error} ${styles.spaced}`}>{startupError}</p>}
+            </section>
+          )}
+
           {tab === "devices" && (
             <section>
               <DeviceList
@@ -134,9 +182,9 @@ export function SettingsSheet({
                 </>
               ) : (
                 <p className={styles.subtle}>
-                  No virtual cable detected. Install one (e.g. the bundled
-                  AudioManager Virtual Cable / VB-CABLE) to route a bus into other
-                  apps, then assign it to a bus output in the mixer.
+                  No virtual cable detected. Install VB-CABLE separately to route a
+                  bus into other apps, then assign its CABLE Input device to a bus
+                  output in the mixer.
                 </p>
               )}
             </section>
@@ -177,6 +225,19 @@ export function SettingsSheet({
               <p className={styles.subtle}>
                 A flexible audio router and mixer — route mics, system audio, and
                 phones through buses with per-input DSP, monitoring, and recording.
+              </p>
+              <p className={`${styles.muted} ${styles.spaced}`}>
+                Version {appVersion}
+              </p>
+              <p className={`${styles.muted} ${styles.spaced}`}>
+                <a
+                  href="https://www.sarmaddomit.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.link}
+                >
+                  www.sarmaddomit.com
+                </a>
               </p>
               <p className={`${styles.muted} ${styles.spaced}`}>
                 <a

@@ -120,6 +120,45 @@
   color: var(--am-meter-clip, #ef4444);
 }
 
+.settingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-md);
+  background: var(--am-surface-1);
+  cursor: pointer;
+}
+
+.settingCopy {
+  display: grid;
+  gap: 3px;
+}
+
+.settingCopy strong {
+  font-size: 13px;
+}
+
+.settingCopy span {
+  color: var(--am-text-secondary);
+  font-size: 12px;
+}
+
+.settingRow input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--am-accent);
+  cursor: pointer;
+}
+
+.settingRow:has(input:focus-visible) {
+  outline: 2px solid var(--am-accent);
+  outline-offset: 2px;
+}
+
 .deviceGroup {
   margin-bottom: 12px;
 }

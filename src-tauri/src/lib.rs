@@ -1,5 +1,6 @@
 mod amvc;
 mod amvc_sync;
+mod app_settings;
 mod audio;
 mod net;
 mod presets;
@@ -11,19 +12,19 @@ use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-use audio::bus::{BusConfig, BusId, BusStatus};
+use audio::bus::{BusConfig, BusId, BusRuntime, BusStatus};
 use audio::device_watch::{self, DeviceDiff, DeviceSnapshot};
 use audio::devices::{DeviceInfo, DeviceListError};
-use audio::endpoint_ctl;
 use audio::dsp::{AutomixConfig, AutomixGroupUpdate, BusDspConfig, DspConfig, MAX_AUTOMIX_GROUPS};
+use audio::endpoint_ctl;
 use audio::graph::InputChannel;
 use audio::mixer::{EngineError, MixerEngine, MixerInput};
-use audio::source::InputSourceSpec;
 use audio::recorder::{
     self, CallbackTapKind, RecordFormat, RecorderSettings, RecordingFile, RecordingInfo,
     StartRecorderRequest, TapSpec,
 };
 use audio::routing::Route;
+use audio::source::InputSourceSpec;
 use presets::{PresetFileV2, PresetLoadResult, PresetLoadWarning, PresetSummary};
 use state::{AppInner, AppState, AutomixGroupDef};
 
@@ -216,6 +217,47 @@ fn rebuild_bus(inner: &mut AppInner, bus_id: BusId) -> Result<(), EngineError> {
     rebuild_bus_filtered(inner, bus_id, None)
 }
 
+/// Read structural bus state without consuming the interval meter/xrun
+/// accumulators. Loudness is a rolling snapshot rather than interval telemetry,
+/// so it remains available to the slower structural refresh.
+fn structural_bus_status(bus: &BusRuntime) -> BusStatus {
+    let mut status = bus.status_from_meters(0.0, false);
+    if let Some(engine) = bus.engine.as_ref() {
+        status.loudness = engine.read_loudness();
+    }
+    status
+}
+
+/// Apply a structural bus setting only if its rebuilt engine can be restored.
+/// Rebuilds stop the current engine first, so rollback must also rebuild the
+/// previous configuration rather than merely assigning the old fields back.
+fn rebuild_bus_with_config_change<F>(
+    inner: &mut AppInner,
+    bus_id: BusId,
+    change: F,
+) -> Result<(), EngineError>
+where
+    F: FnOnce(&mut BusConfig),
+{
+    let previous = inner
+        .buses
+        .get(&bus_id)
+        .map(|bus| bus.config.clone())
+        .ok_or_else(|| EngineError {
+            message: format!("Unknown bus: {bus_id:?}"),
+        })?;
+    change(&mut inner.buses.get_mut(&bus_id).expect("bus exists").config);
+
+    if let Err(err) = rebuild_bus(inner, bus_id) {
+        inner.buses.get_mut(&bus_id).expect("bus exists").config = previous;
+        let _ = rebuild_bus(inner, bus_id);
+        return Err(store_last_error(inner, err));
+    }
+
+    inner.last_error = None;
+    Ok(())
+}
+
 /// Like `rebuild_bus`, but when `available_inputs` is given, inputs absent
 /// from the set are silently skipped instead of failing the whole engine
 /// start. Used by the hotplug watcher: when an input device unplugs, the
@@ -286,7 +328,11 @@ fn rebuild_bus_filtered(
             let input_errors: Vec<String> = engine
                 .inputs
                 .iter()
-                .filter_map(|i| i.error.as_ref().map(|e| format!("{}: {}", i.device_name, e)))
+                .filter_map(|i| {
+                    i.error
+                        .as_ref()
+                        .map(|e| format!("{}: {}", i.device_name, e))
+                })
                 .collect();
             let live_inputs = engine.inputs.iter().filter(|i| i.error.is_none()).count();
             if live_inputs == 0 && !input_errors.is_empty() {
@@ -364,7 +410,9 @@ fn ensure_input_source(device_id: &str) -> Result<(), EngineError> {
             if inputs.iter().any(|device| device.id == name) {
                 Ok(())
             } else {
-                Err(EngineError { message: format!("Input device not found: {name}") })
+                Err(EngineError {
+                    message: format!("Input device not found: {name}"),
+                })
             }
         }
         InputSourceSpec::SystemLoopback
@@ -419,10 +467,7 @@ fn legacy_routes(inner: &AppInner) -> Vec<Route> {
     inner.graph.to_legacy_routes_a1(output, running)
 }
 
-fn apply_preset_state(
-    inner: &mut AppInner,
-    preset: &PresetFileV2,
-) -> Result<(), EngineError> {
+fn apply_preset_state(inner: &mut AppInner, preset: &PresetFileV2) -> Result<(), EngineError> {
     tear_down_all_engines(inner);
     for bus in inner.buses.values_mut() {
         bus.last_error = None;
@@ -430,9 +475,12 @@ fn apply_preset_state(
     inner.graph.clear();
 
     for bus_preset in &preset.buses {
-        let bus = inner.buses.get_mut(&bus_preset.id).ok_or_else(|| EngineError {
-            message: format!("Unknown bus: {:?}", bus_preset.id),
-        })?;
+        let bus = inner
+            .buses
+            .get_mut(&bus_preset.id)
+            .ok_or_else(|| EngineError {
+                message: format!("Unknown bus: {:?}", bus_preset.id),
+            })?;
         bus.config.name = bus_preset.name.clone();
         bus.config.output_device_id = bus_preset.output.as_ref().map(|output| output.id.clone());
         bus.config.volume = BusConfig::clamp_volume(bus_preset.volume);
@@ -454,10 +502,11 @@ fn apply_preset_state(
             inner.graph.add_input(&input_preset.device.id);
         }
 
-        if !inner
-            .graph
-            .set_input_gain(&input_preset.device.id, input_preset.gain, input_preset.muted)
-        {
+        if !inner.graph.set_input_gain(
+            &input_preset.device.id,
+            input_preset.gain,
+            input_preset.muted,
+        ) {
             return Err(EngineError {
                 message: format!("Failed to apply preset input '{}'", input_preset.device.id),
             });
@@ -468,7 +517,10 @@ fn apply_preset_state(
             .set_input_dsp(&input_preset.device.id, input_preset.dsp.clone());
 
         for send in &input_preset.sends {
-            if !inner.graph.set_send(&input_preset.device.id, send.bus_id, send.enabled) {
+            if !inner
+                .graph
+                .set_send(&input_preset.device.id, send.bus_id, send.enabled)
+            {
                 return Err(EngineError {
                     message: format!(
                         "Failed to apply preset send '{}:{:?}'",
@@ -476,10 +528,12 @@ fn apply_preset_state(
                     ),
                 });
             }
-            if !inner
-                .graph
-                .set_send_gain(&input_preset.device.id, send.bus_id, send.volume, send.muted)
-            {
+            if !inner.graph.set_send_gain(
+                &input_preset.device.id,
+                send.bus_id,
+                send.volume,
+                send.muted,
+            ) {
                 return Err(EngineError {
                     message: format!(
                         "Failed to apply preset send gain '{}:{:?}'",
@@ -531,12 +585,30 @@ struct InputPeakStatus {
     channels: u16,
 }
 
+/// Configuration and lifecycle state that can be polled without consuming
+/// interval telemetry. Meter and xrun values belong to [`MeterSnapshot`].
 #[derive(serde::Serialize)]
-struct SystemStatus {
+struct SystemSnapshot {
     buses: Vec<BusStatus>,
     inputs: Vec<InputChannel>,
-    input_peaks: Vec<InputPeakStatus>,
     last_error: Option<String>,
+}
+
+/// Interval telemetry. Reading this payload intentionally resets peak and xrun
+/// accumulators, so the frontend must have exactly one polling owner.
+#[derive(serde::Serialize)]
+struct MeterSnapshot {
+    buses: Vec<BusMeterSnapshot>,
+    input_peaks: Vec<InputPeakStatus>,
+}
+
+#[derive(serde::Serialize)]
+struct BusMeterSnapshot {
+    id: BusId,
+    output_peak: f32,
+    clipped_recently: bool,
+    underruns: u64,
+    overruns: u64,
 }
 
 // ── Phase 1 passthrough (compat: A1 only) ─────────────────────────────────────
@@ -588,7 +660,11 @@ fn get_passthrough_status(state: tauri::State<AppState>) -> PassthroughStatus {
             input_device: engine.inputs.first().map(|i| i.device_name.clone()),
             output_device: Some(engine.output_device_name.clone()),
         },
-        None => PassthroughStatus { running: false, input_device: None, output_device: None },
+        None => PassthroughStatus {
+            running: false,
+            input_device: None,
+            output_device: None,
+        },
     }
 }
 
@@ -612,14 +688,20 @@ fn get_engine_status(state: tauri::State<AppState>) -> EngineStatus {
                 input_peaks: input_meters.iter().map(|m| m.capture).collect(),
                 output_peak,
                 clipped_recently,
-                last_error: a1.and_then(|b| b.last_error.clone()).or(inner.last_error.clone()),
+                last_error: a1
+                    .and_then(|b| b.last_error.clone())
+                    .or(inner.last_error.clone()),
             }
         }
         None => {
             let a1_err = a1.and_then(|b| b.last_error.clone());
             let any_err = a1_err.clone().or(inner.last_error.clone());
             EngineStatus {
-                status: if any_err.is_some() { "error" } else { "stopped" },
+                status: if any_err.is_some() {
+                    "error"
+                } else {
+                    "stopped"
+                },
                 output_device: None,
                 active_inputs: vec![],
                 input_peaks: vec![],
@@ -645,7 +727,8 @@ fn save_preset(
     name: String,
 ) -> Result<PresetSummary, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    let preset = presets::build_preset_v2(&name, &inner.buses, &inner.graph, &inner.automix_groups)?;
+    let preset =
+        presets::build_preset_v2(&name, &inner.buses, &inner.graph, &inner.automix_groups)?;
     let path = presets::preset_file_path(&app, &preset.name)?;
     presets::write_preset_file(&path, &preset)?;
     inner.last_error = None;
@@ -771,7 +854,10 @@ fn set_route_gain(
         ));
     }
 
-    if !inner.graph.set_send_gain(&input_id, BusId::A1, volume, muted) {
+    if !inner
+        .graph
+        .set_send_gain(&input_id, BusId::A1, volume, muted)
+    {
         return Err(new_last_error(
             &mut inner,
             format!("Route not found: {input_id} → {output_id}"),
@@ -939,7 +1025,10 @@ fn replace_input(
         affected.push(BusId::A1);
     }
 
-    if !inner.graph.replace_input_device(&old_device_id, &new_device_id) {
+    if !inner
+        .graph
+        .replace_input_device(&old_device_id, &new_device_id)
+    {
         return Err(new_last_error(
             &mut inner,
             format!("Cannot replace input '{old_device_id}' with '{new_device_id}'"),
@@ -1099,6 +1188,11 @@ fn set_send(
     enabled: bool,
 ) -> Result<Vec<InputChannel>, EngineError> {
     let mut inner = state.inner.lock().unwrap();
+    let previous = inner
+        .graph
+        .get_send(&device_id, bus_id)
+        .map(|send| send.enabled)
+        .ok_or_else(|| new_last_error(&mut inner, format!("Input not found: {device_id}")))?;
     if !inner.graph.set_send(&device_id, bus_id, enabled) {
         return Err(new_last_error(
             &mut inner,
@@ -1106,6 +1200,11 @@ fn set_send(
         ));
     }
     if let Err(err) = rebuild_bus(&mut inner, bus_id) {
+        // A rebuild tears down the old engine before it attempts the new one.
+        // Restore both the graph setting and the prior live engine so a failed
+        // optimistic UI update cannot reappear during the next snapshot poll.
+        inner.graph.set_send(&device_id, bus_id, previous);
+        let _ = rebuild_bus(&mut inner, bus_id);
         return Err(store_last_error(&mut inner, err));
     }
 
@@ -1150,11 +1249,30 @@ fn set_send_gain(
 #[tauri::command]
 fn list_buses(state: tauri::State<AppState>) -> Vec<BusStatus> {
     let inner = state.inner.lock().unwrap();
-    inner.buses.values().map(|b| b.read_status()).collect()
+    inner
+        .buses
+        .values()
+        .map(structural_bus_status)
+        .collect()
 }
 
 #[tauri::command]
-fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
+fn get_system_snapshot(state: tauri::State<AppState>) -> SystemSnapshot {
+    let inner = state.inner.lock().unwrap();
+
+    SystemSnapshot {
+        buses: inner
+            .buses
+            .values()
+            .map(structural_bus_status)
+            .collect(),
+        inputs: inner.graph.list_inputs(),
+        last_error: inner.last_error.clone(),
+    }
+}
+
+#[tauri::command]
+fn drain_meter_snapshot(state: tauri::State<AppState>) -> MeterSnapshot {
     let inner = state.inner.lock().unwrap();
 
     // Per-device meter aggregate (a device may feed more than one bus engine;
@@ -1170,37 +1288,31 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
     let mut buses = Vec::with_capacity(inner.buses.len());
 
     for bus in inner.buses.values() {
-        let (output_peak, clipped_recently, underruns, overruns, loudness) =
-            match bus.engine.as_ref() {
-                Some(engine) => {
-                    let (input_meters, output_peak, clipped_recently) =
-                        engine.read_and_reset_meters();
-                    for (idx, info) in engine.inputs.iter().enumerate() {
-                        let m = input_meters.get(idx).copied().unwrap_or_default();
-                        let agg = input_peaks_by_device
-                            .entry(info.device_name.clone())
-                            .or_default();
-                        agg.capture = agg.capture.max(m.capture);
-                        agg.peak_l = agg.peak_l.max(m.peak_l);
-                        agg.peak_r = agg.peak_r.max(m.peak_r);
-                        agg.channels = agg.channels.max(info.channels);
-                    }
-                    let (un, ov) = engine.read_and_reset_xruns();
-                    (output_peak, clipped_recently, un, ov, engine.read_loudness())
+        let (output_peak, clipped_recently, underruns, overruns) = match bus.engine.as_ref() {
+            Some(engine) => {
+                let (input_meters, output_peak, clipped_recently) = engine.read_and_reset_meters();
+                for (idx, info) in engine.inputs.iter().enumerate() {
+                    let m = input_meters.get(idx).copied().unwrap_or_default();
+                    let agg = input_peaks_by_device
+                        .entry(info.device_name.clone())
+                        .or_default();
+                    agg.capture = agg.capture.max(m.capture);
+                    agg.peak_l = agg.peak_l.max(m.peak_l);
+                    agg.peak_r = agg.peak_r.max(m.peak_r);
+                    agg.channels = agg.channels.max(info.channels);
                 }
-                None => (
-                    0.0,
-                    false,
-                    0,
-                    0,
-                    audio::meters::LoudnessSnapshot::default(),
-                ),
-            };
-        let mut status = bus.status_from_meters(output_peak, clipped_recently);
-        status.underruns = underruns;
-        status.overruns = overruns;
-        status.loudness = loudness;
-        buses.push(status);
+                let (un, ov) = engine.read_and_reset_xruns();
+                (output_peak, clipped_recently, un, ov)
+            }
+            None => (0.0, false, 0, 0),
+        };
+        buses.push(BusMeterSnapshot {
+            id: bus.config.id,
+            output_peak,
+            clipped_recently,
+            underruns,
+            overruns,
+        });
     }
 
     // Idle-input metering taps (#feature-idle-meter): give an unrouted input a
@@ -1231,12 +1343,15 @@ fn get_system_status(state: tauri::State<AppState>) -> SystemStatus {
         })
         .collect();
 
-    SystemStatus {
-        buses,
-        inputs: inner.graph.list_inputs(),
-        input_peaks,
-        last_error: inner.last_error.clone(),
-    }
+    MeterSnapshot { buses, input_peaks }
+}
+
+/// Compatibility alias for integrations that used the original combined
+/// command. It is deliberately non-destructive; new callers should use the
+/// explicit snapshot commands above.
+#[tauri::command]
+fn get_system_status(state: tauri::State<AppState>) -> SystemSnapshot {
+    get_system_snapshot(state)
 }
 
 /// Return the current spectrum magnitude bins (dBFS) for a bus.
@@ -1259,19 +1374,11 @@ fn set_bus_device(
     output_device_id: Option<String>,
 ) -> Result<BusStatus, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    {
-        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
-            message: format!("Unknown bus: {bus_id:?}"),
-        })?;
-        bus.config.output_device_id = output_device_id;
-    }
-    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
-        let _ = store_last_error(&mut inner, err.clone());
-        let bus = inner.buses.get(&bus_id).expect("bus exists");
-        return Ok(bus.read_status());
-    }
+    rebuild_bus_with_config_change(&mut inner, bus_id, |config| {
+        config.output_device_id = output_device_id;
+    })?;
     let bus = inner.buses.get(&bus_id).expect("bus exists");
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 #[tauri::command]
@@ -1291,7 +1398,7 @@ fn set_bus_volume(
     if let Some(engine) = bus.engine.as_ref() {
         engine.update_bus_volume(volume, muted);
     }
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 #[tauri::command]
@@ -1301,19 +1408,11 @@ fn set_bus_enabled(
     enabled: bool,
 ) -> Result<BusStatus, EngineError> {
     let mut inner = state.inner.lock().unwrap();
-    {
-        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
-            message: format!("Unknown bus: {bus_id:?}"),
-        })?;
-        bus.config.enabled = enabled;
-    }
-    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
-        let _ = store_last_error(&mut inner, err.clone());
-        let bus = inner.buses.get(&bus_id).expect("bus exists");
-        return Ok(bus.read_status());
-    }
+    rebuild_bus_with_config_change(&mut inner, bus_id, |config| {
+        config.enabled = enabled;
+    })?;
     let bus = inner.buses.get(&bus_id).expect("bus exists");
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 #[tauri::command]
@@ -1324,14 +1423,16 @@ fn rename_bus(
 ) -> Result<BusStatus, EngineError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(EngineError { message: "Bus name cannot be empty".to_string() });
+        return Err(EngineError {
+            message: "Bus name cannot be empty".to_string(),
+        });
     }
     let mut inner = state.inner.lock().unwrap();
     let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
         message: format!("Unknown bus: {bus_id:?}"),
     })?;
     bus.config.name = trimmed.to_string();
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 /// Set the output callback buffer size in frames. `None` reverts to the driver
@@ -1351,19 +1452,11 @@ fn set_bus_buffer_size(
         }
     }
     let mut inner = state.inner.lock().unwrap();
-    {
-        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
-            message: format!("Unknown bus: {bus_id:?}"),
-        })?;
-        bus.config.buffer_size_frames = frames;
-    }
-    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
-        let _ = store_last_error(&mut inner, err.clone());
-        let bus = inner.buses.get(&bus_id).expect("bus exists");
-        return Ok(bus.read_status());
-    }
+    rebuild_bus_with_config_change(&mut inner, bus_id, |config| {
+        config.buffer_size_frames = frames;
+    })?;
     let bus = inner.buses.get(&bus_id).expect("bus exists");
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 /// Set a bus's output latency mode (#35) — a named preset over the raw buffer
@@ -1379,19 +1472,11 @@ fn set_bus_latency_mode(
         message: format!("unknown latency mode: {mode}"),
     })?;
     let mut inner = state.inner.lock().unwrap();
-    {
-        let bus = inner.buses.get_mut(&bus_id).ok_or_else(|| EngineError {
-            message: format!("Unknown bus: {bus_id:?}"),
-        })?;
-        bus.config.buffer_size_frames = parsed.frames();
-    }
-    if let Err(err) = rebuild_bus(&mut inner, bus_id) {
-        let _ = store_last_error(&mut inner, err.clone());
-        let bus = inner.buses.get(&bus_id).expect("bus exists");
-        return Ok(bus.read_status());
-    }
+    rebuild_bus_with_config_change(&mut inner, bus_id, |config| {
+        config.buffer_size_frames = parsed.frames();
+    })?;
     let bus = inner.buses.get(&bus_id).expect("bus exists");
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 /// Update a running engine's DSP parameters for one input, live. Stores the
@@ -1454,7 +1539,7 @@ fn update_bus_dsp(
     if let Some(engine) = bus.engine.as_ref() {
         engine.update_bus_dsp(&config);
     }
-    Ok(bus.read_status())
+    Ok(structural_bus_status(bus))
 }
 
 // ── Automix groups (live sound gate, Feature B) ───────────────────────────────
@@ -1588,9 +1673,7 @@ fn resolve_tap(
                 message: format!("Unknown bus: {bus_id:?}"),
             })?;
             let engine = bus.engine.as_ref().ok_or_else(|| EngineError {
-                message: format!(
-                    "Bus {bus_id:?} is not running. Enable a routed input first."
-                ),
+                message: format!("Bus {bus_id:?} is not running. Enable a routed input first."),
             })?;
             Ok((
                 *bus_id,
@@ -1608,9 +1691,7 @@ fn resolve_tap(
                 message: format!("Bus {bus_id:?} is not running"),
             })?;
             let (idx, channels) = engine.input_index(device_id).ok_or_else(|| EngineError {
-                message: format!(
-                    "Input '{device_id}' is not active on bus {bus_id:?}"
-                ),
+                message: format!("Input '{device_id}' is not active on bus {bus_id:?}"),
             })?;
             Ok((
                 *bus_id,
@@ -1644,9 +1725,7 @@ fn resolve_tap(
                 }
             }
             Err(EngineError {
-                message: format!(
-                    "Input '{device_id}' is not active on any running bus"
-                ),
+                message: format!("Input '{device_id}' is not active on any running bus"),
             })
         }
     }
@@ -1714,10 +1793,7 @@ fn start_master_recording(
             "Master record: no buses are running.",
         ));
     }
-    let session = format!(
-        "master_{}",
-        chrono::Local::now().format("%Y-%m-%d_%H%M%S")
-    );
+    let session = format!("master_{}", chrono::Local::now().format("%Y-%m-%d_%H%M%S"));
     let mut out = Vec::with_capacity(running_buses.len());
     for bus_id in running_buses {
         match start_recording_inner(
@@ -1742,10 +1818,7 @@ fn start_master_recording(
 }
 
 #[tauri::command]
-fn stop_recording(
-    state: tauri::State<AppState>,
-    id: String,
-) -> Result<RecordingInfo, EngineError> {
+fn stop_recording(state: tauri::State<AppState>, id: String) -> Result<RecordingInfo, EngineError> {
     let mut inner = state.inner.lock().unwrap();
     let handle = inner.recorders.remove(&id).ok_or_else(|| EngineError {
         message: format!("Recording '{id}' not found"),
@@ -1773,9 +1846,7 @@ fn list_active_recordings(state: tauri::State<AppState>) -> Vec<RecordingInfo> {
 }
 
 #[tauri::command]
-fn list_recording_files(
-    app: tauri::AppHandle,
-) -> Result<Vec<RecordingFile>, EngineError> {
+fn list_recording_files(app: tauri::AppHandle) -> Result<Vec<RecordingFile>, EngineError> {
     let dir = resolve_recordings_dir(&app)?;
     recorder::list_recording_files(&dir)
 }
@@ -1787,10 +1858,7 @@ fn get_recordings_dir(app: tauri::AppHandle) -> Result<String, EngineError> {
 }
 
 #[tauri::command]
-fn set_recordings_dir(
-    app: tauri::AppHandle,
-    path: String,
-) -> Result<String, EngineError> {
+fn set_recordings_dir(app: tauri::AppHandle, path: String) -> Result<String, EngineError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err(EngineError {
@@ -2083,14 +2151,17 @@ mod tests {
 ///   (filtered rebuild keeps the rest of the mix alive).
 /// * Input added → rebuild enabled buses that have an enabled send from it
 ///   but whose engine is not currently carrying it.
-fn handle_device_diff(inner: &mut AppInner, diff: &DeviceDiff, available_inputs: &BTreeSet<String>) {
+fn handle_device_diff(
+    inner: &mut AppInner,
+    diff: &DeviceDiff,
+    available_inputs: &BTreeSet<String>,
+) {
     for removed in &diff.removed_outputs {
         let affected: Vec<BusId> = inner
             .buses
             .iter()
             .filter(|(_, b)| {
-                b.engine.is_some()
-                    && b.config.output_device_id.as_deref() == Some(removed.as_str())
+                b.engine.is_some() && b.config.output_device_id.as_deref() == Some(removed.as_str())
             })
             .map(|(id, _)| *id)
             .collect();
@@ -2278,8 +2349,7 @@ fn phone_accept_client(
     state: tauri::State<AppState>,
     session_id: String,
 ) -> Result<(), EngineError> {
-    let persisted =
-        net::session::accept(&session_id).map_err(|message| EngineError { message })?;
+    let persisted = net::session::accept(&session_id).map_err(|message| EngineError { message })?;
     // Surface the phone as a normal mixer input. Adding it to the graph does not
     // route it anywhere (no sends yet), so no bus rebuild is needed — the user
     // wires it to buses like any other input. Done even when persistence failed,
@@ -2287,7 +2357,12 @@ fn phone_accept_client(
     let device_id = format!("{}{session_id}", audio::source::PHONE_PREFIX);
     {
         let mut inner = state.inner.lock().unwrap();
-        if !inner.graph.list_inputs().iter().any(|c| c.device_id == device_id) {
+        if !inner
+            .graph
+            .list_inputs()
+            .iter()
+            .any(|c| c.device_id == device_id)
+        {
             inner.graph.add_input(&device_id);
             // Auto-name the phone input with its hostname (#feature8). Only on
             // first add, so a user rename survives a later reconnect.
@@ -2366,10 +2441,7 @@ fn disconnect_phone(
 /// the still-present entry and defeat the kick. A non-durable revoke (disk write
 /// failed) is surfaced AFTER the live kick — the device is gone this session but
 /// could resurrect from the stale file on next launch, so the caller must see it.
-fn revoke_phone(
-    state: &tauri::State<AppState>,
-    session_id: &str,
-) -> Result<(), EngineError> {
+fn revoke_phone(state: &tauri::State<AppState>, session_id: &str) -> Result<(), EngineError> {
     let durable = net::paired::forget(session_id);
     // Kick: "session-removed" tells the phone to clear its saved creds (a plain
     // disconnect uses "disconnected" and keeps trust).
@@ -2404,10 +2476,7 @@ fn phone_list_paired() -> Vec<net::paired::PairedDeviceStatus> {
 /// cannot auto-reconnect, end any live session (pushes `bye`), and drop its
 /// mixer input. forget-before-remove, same as phone_remove_session.
 #[tauri::command]
-fn phone_forget(
-    state: tauri::State<AppState>,
-    session_id: String,
-) -> Result<(), EngineError> {
+fn phone_forget(state: tauri::State<AppState>, session_id: String) -> Result<(), EngineError> {
     revoke_phone(&state, &session_id)
 }
 
@@ -2427,7 +2496,30 @@ fn phone_set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), Engin
     let dir = app_local_dir(&app)?;
     let mut settings = net::PhoneSettings::load_or_default(&dir);
     settings.autostart = enabled;
-    settings.save(&dir).map_err(|message| EngineError { message })
+    settings
+        .save(&dir)
+        .map_err(|message| EngineError { message })
+}
+
+/// Whether AudioManager should launch automatically when the current Windows
+/// user signs in. Defaults to enabled for new installs.
+#[tauri::command]
+fn app_get_launch_at_login(app: tauri::AppHandle) -> Result<bool, EngineError> {
+    let dir = app_local_dir(&app)?;
+    Ok(app_settings::AppSettings::load_or_default(&dir).launch_at_login)
+}
+
+/// Persist the desktop launch preference and apply it to the current user's
+/// Windows startup registry entry immediately.
+#[tauri::command]
+fn app_set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), EngineError> {
+    let dir = app_local_dir(&app)?;
+    app_settings::sync_windows_autostart(enabled).map_err(|message| EngineError { message })?;
+    let mut settings = app_settings::AppSettings::load_or_default(&dir);
+    settings.launch_at_login = enabled;
+    settings
+        .save(&dir)
+        .map_err(|message| EngineError { message })
 }
 
 /// Set a phone session's latency mode ("fastest" | "balanced" | "stable"). The
@@ -2485,6 +2577,12 @@ pub fn run() {
             // Panic-free by contract — any failure leaves an empty store and the
             // app still launches with default QR pairing intact.
             if let Ok(dir) = app.path().app_local_data_dir() {
+                let desktop_settings = app_settings::AppSettings::load_or_default(&dir);
+                if let Err(e) =
+                    app_settings::sync_windows_autostart(desktop_settings.launch_at_login)
+                {
+                    eprintln!("[startup] could not update Windows startup registration: {e}");
+                }
                 net::paired::init(dir.join(net::paired::STORE_FILE_NAME));
                 // Periodically flush in-memory last_seen bumps and prune expired
                 // devices, off the async runtime. The store file inherits the
@@ -2530,11 +2628,29 @@ pub fn run() {
                 // Ctrl+Alt+M is the documented default but is commonly taken by
                 // other apps, so fall back to the first candidate that registers.
                 let candidates: [(Shortcut, &str); 5] = [
-                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyP), "Ctrl+Shift+P"),
-                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM), "Ctrl+Alt+M"),
-                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F10), "Ctrl+Shift+F10"),
-                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F9), "Ctrl+Alt+F9"),
-                    (Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT), Code::KeyM), "Ctrl+Shift+Alt+M"),
+                    (
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyP),
+                        "Ctrl+Shift+P",
+                    ),
+                    (
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM),
+                        "Ctrl+Alt+M",
+                    ),
+                    (
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F10),
+                        "Ctrl+Shift+F10",
+                    ),
+                    (
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F9),
+                        "Ctrl+Alt+F9",
+                    ),
+                    (
+                        Shortcut::new(
+                            Some(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT),
+                            Code::KeyM,
+                        ),
+                        "Ctrl+Shift+Alt+M",
+                    ),
                 ];
                 let gs = app.global_shortcut();
                 let mut chosen: Option<&str> = None;
@@ -2591,6 +2707,8 @@ pub fn run() {
             set_send,
             set_send_gain,
             list_buses,
+            get_system_snapshot,
+            drain_meter_snapshot,
             get_system_status,
             get_spectrum_data,
             set_bus_device,
@@ -2635,6 +2753,8 @@ pub fn run() {
             phone_forget,
             phone_get_autostart,
             phone_set_autostart,
+            app_get_launch_at_login,
+            app_set_launch_at_login,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

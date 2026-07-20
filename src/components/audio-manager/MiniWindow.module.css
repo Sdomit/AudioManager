@@ -21,6 +21,20 @@
   cursor: grabbing;
 }
 
+.titleBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--am-space-2);
+  min-width: 0;
+}
+
+.titleLogo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
 .title {
   font-size: var(--am-text-12);
   font-weight: 600;

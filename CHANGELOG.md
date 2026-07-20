@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-20
+
+### Release notes
+- Refreshed the AudioManager brand across the app window, installer, Windows shortcuts, and generated icon sizes.
+- Corrected live meter ownership and protected routing/device updates with rollback handling.
+- Added startup preference support and tightened production security configuration.
+- Improved the streaming workflow documentation for VB-CABLE: install VB-CABLE separately from VB-Audio, restart Windows, use `CABLE Input` for AudioManager B1, and use `CABLE Output` in OBS, Discord, or Zoom.
+- AudioManager does not bundle, install, or manage the VB-CABLE driver.
+
 ### Added
 - Pro UI cleanup: Bus matrix cards with enhanced visual hierarchy
 - Virtual audio cable device detection (frontend-only)

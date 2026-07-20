@@ -10,6 +10,7 @@
     "dev:phone": "vite build --watch --config vite.phone.config.ts",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "test": "vitest run"
   },
   "dependencies": {

@@ -412,6 +412,7 @@ export function AudioManager() {
 
       // V → toggle bus rail view mode (card ↔ console).
       if (e.key === "v" || e.key === "V") {
+        if (cur.state.routingView !== "nodes") return;
         e.preventDefault();
         setBusViewMode((m) => (m === "card" ? "console" : "card"));
         return;
@@ -520,7 +521,12 @@ export function AudioManager() {
         onSetDefaultPreset={am.setDefaultPreset}
         onDensityChange={am.setDensity}
         busViewMode={busViewMode}
-        onToggleBusView={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
+        onToggleBusView={() => {
+          if (state.routingView === "nodes") {
+            setBusViewMode((m) => (m === "card" ? "console" : "card"));
+          }
+        }}
+        consoleAvailable={state.routingView === "nodes"}
         onOpenStreamSetup={am.openStreamSetup}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenTemplates={() => setTemplateDialogOpen(true)}
@@ -563,6 +569,7 @@ export function AudioManager() {
         onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
         viewMode={busViewMode}
+        floating={busViewMode === "console" && state.routingView === "nodes"}
       />
 
       <main className={styles.main}>
@@ -595,7 +602,10 @@ export function AudioManager() {
           view={state.routingView}
           selection={state.selection}
           activeRecordings={state.activeRecordings}
-          onViewChange={am.setRoutingView}
+          onViewChange={(view) => {
+            if (view !== "nodes") setBusViewMode("card");
+            am.setRoutingView(view);
+          }}
           onToggleSend={am.toggleSend}
           onSendGainChange={am.setSendGain}
           onSendMuted={am.setSendMuted}

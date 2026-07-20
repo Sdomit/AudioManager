@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(a1.len(), 1);
         assert_eq!(a1[0].0, "mic");
         assert!((a1[0].1 - 1.0).abs() < f32::EPSILON); // unity
-        // Persisted A1 send is still disabled (no routing mutation).
+                                                       // Persisted A1 send is still disabled (no routing mutation).
         assert!(!graph.get_send("mic", BusId::A1).unwrap().enabled);
         // Monitor does not leak into other buses.
         assert!(graph.effective_inputs_for_bus(BusId::A2).is_empty());
@@ -489,7 +489,7 @@ mod tests {
         let mut graph = AudioGraph::new();
         graph.add_input("mic");
         graph.set_send("mic", BusId::A1, true); // unity send, unity fader
-        // Default boost is unity → effective gain 1.0.
+                                                // Default boost is unity → effective gain 1.0.
         assert!((graph.effective_inputs_for_bus(BusId::A1)[0].1 - 1.0).abs() < f32::EPSILON);
 
         // 3x boost → 300% effective gain.
@@ -544,7 +544,10 @@ mod tests {
         let mut graph = AudioGraph::new();
         graph.add_input("mic");
         graph.set_label("mic", Some("Name".into()));
-        assert_eq!(graph.get_input("mic").unwrap().label.as_deref(), Some("Name"));
+        assert_eq!(
+            graph.get_input("mic").unwrap().label.as_deref(),
+            Some("Name")
+        );
         graph.set_label("mic", Some("   ".into()));
         assert_eq!(graph.get_input("mic").unwrap().label, None);
     }

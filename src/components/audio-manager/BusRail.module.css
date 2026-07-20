@@ -10,6 +10,29 @@
   overflow-y: visible;
 }
 
+/* In Nodes + Console mode, the mixer becomes a raised control dock over the
+   routing canvas. Flow and Matrix retain the conventional rail layout. */
+.consoleFloating {
+  position: absolute;
+  z-index: 20;
+  top: 176px;
+  right: var(--am-space-4);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: var(--am-space-2);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--am-surface-1) 90%, transparent);
+  border: 1px solid var(--am-border-default);
+  border-radius: var(--am-radius-lg);
+  box-shadow: var(--am-elev-3);
+  backdrop-filter: blur(14px);
+}
+
+.consoleFloating .console {
+  flex: none;
+  padding: 0;
+}
+
 .group {
   display: flex;
   flex-direction: column;
@@ -47,4 +70,13 @@
     gap: var(--am-space-2);
   }
   .groupCards { gap: var(--am-space-2); }
+}
+
+@media (max-width: 700px) {
+  .consoleFloating {
+    left: var(--am-space-3);
+    right: var(--am-space-3);
+    max-width: none;
+    overflow-x: auto;
+  }
 }

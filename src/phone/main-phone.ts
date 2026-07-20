@@ -558,7 +558,7 @@ function renderShell(state: PhoneState, reason: string | null, handlers?: Handle
   app.innerHTML = `
     <main class="screen">
       <div class="topbar">
-        <span class="brand">AudioManager</span>
+        <img class="brandLogo" src="./brand/audiomanager-compact.png" alt="AudioManager" />
         <span class="pill ${pillTone}"><span class="pdot"></span>${pillLabel}</span>
       </div>
       ${nameBlock}

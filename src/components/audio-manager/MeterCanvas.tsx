@@ -11,6 +11,8 @@ interface MeterCanvasProps {
   peakHold?: boolean;
   /** Compact mode for input rows */
   variant?: "bus" | "input";
+  /** Console strips fill vertically from the bottom, like a physical meter. */
+  orientation?: "horizontal" | "vertical";
 }
 
 /**
@@ -28,6 +30,7 @@ export function MeterCanvas({
   height = 12,
   peakHold = true,
   variant: _variant = "bus",
+  orientation = "horizontal",
 }: MeterCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const currentRef = useRef(level);
@@ -80,7 +83,10 @@ export function MeterCanvas({
     const clip = styles.getPropertyValue("--am-meter-clip").trim() || "#EF4444";
     const trackBg = styles.getPropertyValue("--am-meter-track").trim() || "rgba(255,255,255,0.05)";
 
-    const gradient = ctx.createLinearGradient(0, 0, w, 0);
+    const vertical = orientation === "vertical";
+    const gradient = vertical
+      ? ctx.createLinearGradient(0, h, 0, 0)
+      : ctx.createLinearGradient(0, 0, w, 0);
     // Stops approximate dB regions: 0=-inf, 0.7=-6, 0.9=-3, 1.0=0/clip
     gradient.addColorStop(0.00, low);
     gradient.addColorStop(0.60, low);
@@ -111,34 +117,49 @@ export function MeterCanvas({
       roundRect(ctx, 0, 0, w, h, h / 2);
       ctx.fill();
 
-      // Level fill (clamped to width)
+      // Level fill. Console strips rise bottom-to-top; all other meters read
+      // left-to-right so the shared renderer preserves both conventions.
       const fill = Math.max(0, Math.min(1, currentRef.current));
       if (fill > 0.001) {
         ctx.save();
         roundRect(ctx, 0, 0, w, h, h / 2);
         ctx.clip();
         ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, w * fill, h);
+        if (vertical) {
+          ctx.fillRect(0, h * (1 - fill), w, h * fill);
+        } else {
+          ctx.fillRect(0, 0, w * fill, h);
+        }
         ctx.restore();
       }
 
       // Peak hold marker
       if (peakHold && peakRef.current > 0.02) {
-        const x = Math.min(w - 2, w * peakRef.current);
         ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
-        ctx.fillRect(x - 1, 1, 2, h - 2);
+        if (vertical) {
+          const y = Math.max(1, h - h * Math.min(1, peakRef.current));
+          ctx.fillRect(1, y - 1, w - 2, 2);
+        } else {
+          const x = Math.min(w - 2, w * peakRef.current);
+          ctx.fillRect(x - 1, 1, 2, h - 2);
+        }
       }
 
-      // 0 dB tick at 1.0 (visual indicator just inside the right edge)
+      // 0 dB tick just inside the meter's high end.
       ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
-      const tickX = w * 0.92;
-      ctx.fillRect(tickX, 0, 1, h);
+      if (vertical) {
+        const tickY = h * 0.08;
+        ctx.fillRect(0, tickY, w, 1);
+      } else {
+        const tickX = w * 0.92;
+        ctx.fillRect(tickX, 0, 1, h);
+      }
 
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [cssWidth, height, peakHold]);
+  }, [cssWidth, height, orientation, peakHold]);
 
   return (
     <canvas
@@ -147,7 +168,12 @@ export function MeterCanvas({
       // would flood SR output. The parent (BusCard / InputRow) carries
       // the level in its aria-label which is announced on focus.
       aria-hidden="true"
-      style={{ display: "block", width: "100%", flex: 1, minWidth: 0 }}
+      style={{
+        display: "block",
+        width: orientation === "vertical" ? width : "100%",
+        flex: orientation === "vertical" ? "0 0 auto" : 1,
+        minWidth: orientation === "vertical" ? width : 0,
+      }}
     />
   );
 }

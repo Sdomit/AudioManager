@@ -252,9 +252,17 @@ mod tests {
         g.set(true, 0b11, coeffs());
         // 0.2 vs 0.05 → levels 0.2/0.05 → shares 0.8 / 0.2.
         let out = converge(&mut g, &[0.2, 0.05]);
-        assert!(out[0] > out[1], "loud {} should beat quiet {}", out[0], out[1]);
+        assert!(
+            out[0] > out[1],
+            "loud {} should beat quiet {}",
+            out[0],
+            out[1]
+        );
         assert!((out[0] - 0.8).abs() < 0.03, "loud share = {}", out[0]);
-        assert!(out[1] >= db_to_lin(-60.0), "quiet must stay above the floor");
+        assert!(
+            out[1] >= db_to_lin(-60.0),
+            "quiet must stay above the floor"
+        );
         assert!(out[0] <= 1.0 && out[1] <= 1.0);
     }
 
@@ -286,8 +294,8 @@ mod tests {
         let mut g = AutomixGroup::new();
         g.set(true, 0b11, coeffs());
         converge(&mut g, &[0.2, 0.05]); // slot 1 driven down toward the floor
-        // Re-scope to a single member: state must reset so slot 1 isn't left with
-        // a stale suppressed gain.
+                                        // Re-scope to a single member: state must reset so slot 1 isn't left with
+                                        // a stale suppressed gain.
         g.set(true, 0b01, coeffs());
         let out = converge(&mut g, &[0.1, 0.1]);
         assert!((out[0] - 1.0).abs() < 0.02);

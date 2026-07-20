@@ -235,7 +235,10 @@ pub fn ensure_server(app_local_data: &Path) -> Result<u16, String> {
                 // ephemeral fallback (requested 0) the OS picks the real port.
                 let actual = bound.port();
                 let mut slot = server_slot().lock().unwrap();
-                *slot = Some(RunningServer { port: actual, handle });
+                *slot = Some(RunningServer {
+                    port: actual,
+                    handle,
+                });
                 return Ok(actual);
             }
             Ok(None) => {

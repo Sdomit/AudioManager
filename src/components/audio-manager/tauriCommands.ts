@@ -31,7 +31,7 @@ import type {
 /* ── Reads ──────────────────────────────────────────────────────────────── */
 
 /**
- * Single round-trip hydrate. Calls get_system_status + list_presets in
+ * Single round-trip hydrate. Calls get_system_snapshot + list_presets in
  * parallel and adapts all four UI collections in one shot. Cheaper than
  * four separate invokes (which would all touch the same AppState lock).
  */
@@ -42,20 +42,13 @@ export async function hydrate(): Promise<{
   presets: Preset[];
 }> {
   const [status, presets] = await Promise.all([
-    ipc.getSystemStatus(),
+    ipc.getSystemSnapshot(),
     ipc.listPresets(),
   ]);
 
-  const meterByDevice = new Map<string, (typeof status.input_peaks)[number]>();
-  for (const p of status.input_peaks) {
-    meterByDevice.set(p.device_id, p);
-  }
-
   const sends = adaptSendsFromInputs(status.inputs);
   const buses = status.buses.map((b) => adaptBus(b, busHasAnySend(sends, b.id)));
-  const inputs = status.inputs.map((ch) =>
-    adaptInput(ch, meterByDevice.get(ch.device_id)),
-  );
+  const inputs = status.inputs.map((ch) => adaptInput(ch));
   const adaptedPresets = presets.map(adaptPreset);
 
   return { buses, inputs, sends, presets: adaptedPresets };
@@ -82,14 +75,14 @@ export async function listPresets(): Promise<Preset[]> {
 }
 
 /**
- * Lightweight meter poll. Calls `get_system_status` only (no presets,
+ * Lightweight meter poll. Calls `drain_meter_snapshot` only (no presets,
  * no device enumeration) and returns just what the meter loop needs:
  *
  *   - busLevels:  per-bus output peak in [0..1]
  *   - inputLevels: per-input peak in [0..1]
  *
- * Cheap enough to call at 30 Hz. Backend `read_and_reset_meters()` is
- * an atomic read; the round-trip is dominated by Tauri IPC marshalling.
+ * This is intentionally the UI's sole destructive telemetry read. The
+ * structural hydrate path uses a non-destructive snapshot instead.
  *
  * Bus state (enabled, error, output_device) transitions are NOT
  * surfaced here — Phase E uses a slower full-refresh interval for
@@ -100,7 +93,7 @@ export async function pollMeters(): Promise<{
   busLevels: Record<BusId, number>;
   inputLevels: Record<string, InputMeterLevel>;
 }> {
-  const status = await ipc.getSystemStatus();
+  const status = await ipc.drainMeterSnapshot();
   const busLevels: Record<BusId, number> = {} as Record<BusId, number>;
   for (const b of status.buses) {
     busLevels[b.id] = Math.max(0, b.output_peak);

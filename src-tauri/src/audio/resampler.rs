@@ -380,7 +380,11 @@ mod tests {
             // anchor is the older frame of the interpolation pair: Fast anchors
             // at index 0, Quality at index 1 (hist[1] after a 3-frame priming
             // over inputs 0,1,2).
-            let base = if quality == ResampleQuality::Fast { 0.0 } else { 1.0 };
+            let base = if quality == ResampleQuality::Fast {
+                0.0
+            } else {
+                1.0
+            };
             let skip = 64usize;
             let used = outputs.len() - 2 * skip;
             let mut err_sq = 0.0f64;
@@ -415,7 +419,10 @@ mod tests {
         let mut rs = Resampler::new(44_100, 48_000, 1, ResampleQuality::Quality);
         let before = rs.step;
         rs.nudge_ratio(2000, 1440);
-        assert!(rs.step > before, "step must increase when ring is over-full");
+        assert!(
+            rs.step > before,
+            "step must increase when ring is over-full"
+        );
     }
 
     #[test]
@@ -517,7 +524,10 @@ mod tests {
         let nf = collect_mono_linear(&mut faster, &inputs).len();
         let nb = collect_mono_linear(&mut base, &inputs).len();
         let ns = collect_mono_linear(&mut slower, &inputs).len();
-        assert!(nf > nb && nb > ns, "−ppm→more, +ppm→fewer outputs: {nf} {nb} {ns}");
+        assert!(
+            nf > nb && nb > ns,
+            "−ppm→more, +ppm→fewer outputs: {nf} {nb} {ns}"
+        );
     }
 
     #[test]
