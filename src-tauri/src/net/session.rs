@@ -260,8 +260,7 @@ pub fn create_session(label: Option<String>) -> (String, String) {
     // v4 (uniformly random). If token generation ever changes to a lower-entropy
     // or predictable scheme, paired.rs must reintroduce a salt + slow KDF.
     debug_assert!(
-        uuid::Uuid::parse_str(&token).map(|u| u.get_version())
-            == Ok(Some(uuid::Version::Random)),
+        uuid::Uuid::parse_str(&token).map(|u| u.get_version()) == Ok(Some(uuid::Version::Random)),
         "pairing token must be a uuid v4 (122-bit random); paired.rs hashing depends on it"
     );
     let session = PhoneSession {
@@ -290,7 +289,9 @@ pub enum HelloOutcome {
     /// Re-hello of an accepted session: resume without re-confirmation.
     ResumeAccepted,
     UnknownSession,
-    BadToken { session_invalidated: bool },
+    BadToken {
+        session_invalidated: bool,
+    },
     /// A live connection already owns this session (single-peer rule).
     Busy,
 }
@@ -433,9 +434,7 @@ pub fn accept(session_id: &str) -> Result<bool, String> {
                     s.client_os.as_deref(),
                 )
             }
-            other => {
-                return Err(format!("session not awaiting acceptance (state {other:?})"))
-            }
+            other => return Err(format!("session not awaiting acceptance (state {other:?})")),
         }
     };
     // Persist trust. Runs on the Tauri command thread (phone_accept_client), so
@@ -757,7 +756,9 @@ mod tests {
         for _ in 1..MAX_TOKEN_ATTEMPTS {
             let (outcome, _, _rx) = hello(&sid, "wrong");
             match outcome {
-                HelloOutcome::BadToken { session_invalidated } => {
+                HelloOutcome::BadToken {
+                    session_invalidated,
+                } => {
                     assert!(!session_invalidated)
                 }
                 _ => panic!("expected BadToken"),
@@ -873,8 +874,14 @@ mod tests {
         ));
         // Registry is empty (as after an app restart): a normal hello would miss.
         let (tx, _rx) = unbounded_channel();
-        let (outcome, epoch) =
-            try_resume_trusted("sid-r", "tok-r", "browser", "Android", Some("Live Name"), tx);
+        let (outcome, epoch) = try_resume_trusted(
+            "sid-r",
+            "tok-r",
+            "browser",
+            "Android",
+            Some("Live Name"),
+            tx,
+        );
         assert!(matches!(outcome, HelloOutcome::ResumeAccepted));
         assert_eq!(epoch, 1);
         let st = status("sid-r").unwrap();
@@ -886,7 +893,11 @@ mod tests {
     fn resume_uses_stored_label_when_hello_omits_name() {
         let _g = setup();
         crate::net::paired::upsert(crate::net::paired::device_from_pairing(
-            "sid-l", "tok-l", "Stored Label", None, None,
+            "sid-l",
+            "tok-l",
+            "Stored Label",
+            None,
+            None,
         ));
         let (tx, _rx) = unbounded_channel();
         let (outcome, _e) = try_resume_trusted("sid-l", "tok-l", "browser", "iOS", None, tx);

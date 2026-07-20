@@ -55,13 +55,13 @@ fn unpack_order(v: u32) -> [DspStage; 6] {
     }
     out
 }
+use super::automix::{AutomixCoeffs, AutomixGroup, AutomixGroupUpdate, MAX_AUTOMIX_GROUPS};
 use super::denoise::Denoiser;
 use super::dynamics::{Compressor, CompressorCoeffs, Limiter, LimiterCoeffs};
 use super::filter::{
     high_pass_coeffs, high_pass_coeffs_q, high_shelf_coeffs, low_pass_coeffs, low_shelf_coeffs,
     notch_coeffs, peaking_coeffs, BiquadFilter,
 };
-use super::automix::{AutomixCoeffs, AutomixGroup, AutomixGroupUpdate, MAX_AUTOMIX_GROUPS};
 use super::gate::{GateCoeffs, NoiseGate};
 use super::DspEffect;
 
@@ -246,7 +246,8 @@ impl AtomicEar {
     fn new() -> Self {
         // Flat passthrough until the first `write_fields` (which always has the
         // engine sample rate). Biquad passthrough is `[1, 0, 0, 0, 0]`.
-        let passthrough = || std::array::from_fn(|i| AtomicF32::new(if i == 0 { 1.0 } else { 0.0 }));
+        let passthrough =
+            || std::array::from_fn(|i| AtomicF32::new(if i == 0 { 1.0 } else { 0.0 }));
         Self {
             delay_samples: AtomicF32::new(0.0),
             shelf: passthrough(),
@@ -466,10 +467,11 @@ impl InputDspShared {
     }
 
     fn write_fields(&self, cfg: &DspConfig, sr: f32) {
-        self.denoise_enabled
-            .store(cfg.denoise.enabled, RELAXED);
-        self.denoise_use_dfn
-            .store(cfg.denoise.backend == DenoiseBackend::DeepFilterNet, RELAXED);
+        self.denoise_enabled.store(cfg.denoise.enabled, RELAXED);
+        self.denoise_use_dfn.store(
+            cfg.denoise.backend == DenoiseBackend::DeepFilterNet,
+            RELAXED,
+        );
         self.order.store(pack_order(&cfg.order), RELAXED);
         self.hpf.store(
             cfg.hpf.enabled,
@@ -512,8 +514,10 @@ impl InputDspShared {
             ),
         );
         self.stereo.store(cfg.stereo);
-        self.spatial
-            .store(cfg.spatial.enabled, BinauralCoeffs::compute(&cfg.spatial, sr));
+        self.spatial.store(
+            cfg.spatial.enabled,
+            BinauralCoeffs::compute(&cfg.spatial, sr),
+        );
     }
 
     fn read_fields(&self) -> InputDspSnapshot {

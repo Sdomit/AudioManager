@@ -144,7 +144,11 @@ fn persist() -> Result<bool, String> {
     let (snapshot, path, loaded_ok) = {
         let mut state = state().lock().unwrap();
         state.dirty = false;
-        (snapshot_file(&state.devices), state.path.clone(), state.loaded_ok)
+        (
+            snapshot_file(&state.devices),
+            state.path.clone(),
+            state.loaded_ok,
+        )
     };
     // Never overwrite a store we could not authoritatively load (corrupt at
     // boot): the file is left intact for recovery.
@@ -415,7 +419,12 @@ pub fn verify(id: &str, token: &str) -> bool {
 /// The persisted friendly label for `id`, if trusted. Fallback for a resuming
 /// hello that omits `name`. In-memory; no disk IO.
 pub fn label_of(id: &str) -> Option<String> {
-    state().lock().unwrap().devices.get(id).map(|d| d.label.clone())
+    state()
+        .lock()
+        .unwrap()
+        .devices
+        .get(id)
+        .map(|d| d.label.clone())
 }
 
 /// Snapshot for the UI. No token/digest leaves this module.
@@ -503,7 +512,9 @@ fn maintain() {
     {
         let mut state = state().lock().unwrap();
         let before = state.devices.len();
-        state.devices.retain(|_, d| !is_expired(now, d.last_seen_utc));
+        state
+            .devices
+            .retain(|_, d| !is_expired(now, d.last_seen_utc));
         if state.devices.len() != before {
             state.dirty = true;
         }
@@ -566,7 +577,9 @@ mod tests {
     fn sha256_hex_is_lowercase_hex_64() {
         let h = sha256_hex("00112233445566778899aabbccddeeff");
         assert_eq!(h.len(), 64);
-        assert!(h.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        assert!(h
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
         // Deterministic + matches a known SHA-256 vector for the empty string.
         assert_eq!(
             sha256_hex(""),
@@ -578,7 +591,13 @@ mod tests {
     fn verify_round_trips_and_rejects_wrong_token_or_id() {
         let _g = setup();
         init(unique_path());
-        let dev = device_from_pairing("sid1", "tok-secret", "My Phone", Some("browser"), Some("iOS"));
+        let dev = device_from_pairing(
+            "sid1",
+            "tok-secret",
+            "My Phone",
+            Some("browser"),
+            Some("iOS"),
+        );
         upsert(dev);
 
         assert!(verify("sid1", "tok-secret"));
@@ -592,7 +611,11 @@ mod tests {
 
     #[test]
     fn corrupt_zero_byte_and_garbage_files_yield_empty_and_are_left_intact() {
-        for raw in [b"".as_slice(), b"{ not json".as_slice(), b"\x00\x01\x02".as_slice()] {
+        for raw in [
+            b"".as_slice(),
+            b"{ not json".as_slice(),
+            b"\x00\x01\x02".as_slice(),
+        ] {
             let _g = setup();
             let path = unique_path();
             write_raw(&path, raw);
@@ -601,7 +624,11 @@ mod tests {
             assert!(list().is_empty(), "corrupt store must load empty");
             assert!(!has_trusted_devices(), "corrupt store is not authoritative");
             // File untouched: a transient glitch must not wipe trust.
-            assert_eq!(fs::read(&path).unwrap(), raw, "corrupt file must be left intact");
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                raw,
+                "corrupt file must be left intact"
+            );
         }
     }
 
@@ -612,7 +639,10 @@ mod tests {
         write_raw(&path, br#"{"schema_version":999,"devices":[]}"#);
         init(path.clone());
         assert!(!has_trusted_devices());
-        assert_eq!(fs::read(&path).unwrap(), br#"{"schema_version":999,"devices":[]}"#);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            br#"{"schema_version":999,"devices":[]}"#
+        );
     }
 
     #[test]
@@ -684,8 +714,7 @@ mod tests {
         let ids: Vec<String> = list().into_iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["fresh".to_string()]);
         // The prune was persisted, so the stale entry is gone from disk too.
-        let on_disk: PairedStoreFile =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let on_disk: PairedStoreFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(on_disk.devices.len(), 1);
         assert_eq!(on_disk.devices[0].id, "fresh");
     }
@@ -705,8 +734,7 @@ mod tests {
         assert_eq!(revoke_epoch(), epoch0 + 1); // no bump when nothing removed
 
         // Revocation is durable on disk.
-        let on_disk: PairedStoreFile =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let on_disk: PairedStoreFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert!(on_disk.devices.is_empty());
     }
 
@@ -767,6 +795,9 @@ mod tests {
 
         // No stray temp file left behind.
         let tmp = path.with_extension("json.tmp");
-        assert!(!tmp.exists(), "temp file must not survive a successful write");
+        assert!(
+            !tmp.exists(),
+            "temp file must not survive a successful write"
+        );
     }
 }

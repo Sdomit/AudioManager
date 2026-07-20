@@ -34,26 +34,12 @@
 .wordmark {
   display: flex;
   align-items: center;
-  gap: var(--am-space-2);
 }
 
-.wordmarkDot {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--am-accent);
-  color: var(--am-text-on-accent);
-  border-radius: var(--am-radius-md);
-  box-shadow: 0 0 0 3px var(--am-accent-muted);
-}
-
-.wordmarkText {
-  font-size: var(--am-text-14);
-  font-weight: 600;
-  letter-spacing: var(--am-tracking-tight);
-  color: var(--am-text-primary);
+.wordmarkLogo {
+  display: block;
+  width: auto;
+  height: 32px;
 }
 
 /* ── Preset menu ───────────────────────────────────────────────────── */

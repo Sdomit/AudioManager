@@ -25,7 +25,7 @@ This installs Node dependencies and pulls Rust dependencies (via `cargo`).
 ### Start Dev Mode
 
 ```bash
-pnpm tauri dev
+pnpm tauri:dev
 ```
 
 - Vite dev server runs on `http://localhost:1420` with hot reload

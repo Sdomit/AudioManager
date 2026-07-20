@@ -196,14 +196,32 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
       // accent for each bus survives every backend hydrate. Adapter
       // can't know about localStorage; merge here.
       const overrides = readBusRoleOverridesFromStorage();
+      const previousBuses = new Map(state.buses.map((bus) => [bus.id, bus]));
       const busesWithOverrides = action.buses.map((b) => {
         const ov = overrides[b.id];
-        return ov ? { ...b, role: ov } : b;
+        const previous = previousBuses.get(b.id);
+        const withCurrentMeters = previous
+          ? { ...b, level: previous.level, clipUntil: previous.clipUntil }
+          : b;
+        return ov ? { ...withCurrentMeters, role: ov } : withCurrentMeters;
+      });
+      const previousInputs = new Map(state.inputs.map((input) => [input.id, input]));
+      const inputsWithCurrentMeters = action.inputs.map((input) => {
+        const previous = previousInputs.get(input.id);
+        return previous
+          ? {
+              ...input,
+              level: previous.level,
+              levelL: previous.levelL,
+              levelR: previous.levelR,
+              channels: previous.channels,
+            }
+          : input;
       });
       return {
         ...state,
         buses: busesWithOverrides,
-        inputs: action.inputs,
+        inputs: inputsWithCurrentMeters,
         sends: action.sends,
         presets: action.presets,
         selection,
@@ -655,14 +673,15 @@ export function useAudioManager(): UseAudioManager {
 
   // Phase E: real meter loop.
   //
-  // Backend doesn't emit events — it's poll-based via get_system_status.
+  // Backend doesn't emit events — it is polled through separate structural and
+  // destructive-meter snapshot commands.
   // We run TWO intervals:
   //
   //   1. METER_POLL_MS (~33 ms / 30 Hz) — fast path. pollMeters() calls
-  //      get_system_status and dispatches tick_meters with only the
+  //      drain_meter_snapshot and dispatches tick_meters with only the
   //      level/peak maps. Backend reads + resets atomics; very cheap.
   //
-  //   2. STATE_REFRESH_MS (~1000 ms) — slow path. Full hydrate to pick
+  //   2. STATE_REFRESH_MS (~1000 ms) — slow path. Non-destructive hydrate to pick
   //      up out-of-band state changes (device errors surfacing on the
   //      audio thread, devices being unplugged, etc). Keeps bus.state,
   //      bus.error, bus.enabled in sync without paying for the heavier

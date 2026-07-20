@@ -680,12 +680,21 @@ mod tests {
         assert!(!DenoiseBackend::DeepFilterNet.is_available());
         assert!(DenoiseBackend::Rnnoise.is_available());
 
-        let mut d = DenoiseConfig { enabled: true, backend: DenoiseBackend::DeepFilterNet };
+        let mut d = DenoiseConfig {
+            enabled: true,
+            backend: DenoiseBackend::DeepFilterNet,
+        };
         d.clamp();
         assert_eq!(d.backend, DenoiseBackend::Rnnoise);
 
         // And it flows through the parent chain clamp.
-        let mut cfg = DspConfig { denoise: DenoiseConfig { enabled: true, backend: DenoiseBackend::DeepFilterNet }, ..DspConfig::default() };
+        let mut cfg = DspConfig {
+            denoise: DenoiseConfig {
+                enabled: true,
+                backend: DenoiseBackend::DeepFilterNet,
+            },
+            ..DspConfig::default()
+        };
         cfg.clamp();
         assert_eq!(cfg.denoise.backend, DenoiseBackend::Rnnoise);
     }
@@ -943,7 +952,13 @@ mod tests {
         // version field's default is the legacy 0 marker (migrated to current on
         // clamp), so an empty object is the default chain at version 0.
         let c: DspConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(c, DspConfig { version: 0, ..DspConfig::default() });
+        assert_eq!(
+            c,
+            DspConfig {
+                version: 0,
+                ..DspConfig::default()
+            }
+        );
     }
 
     #[test]

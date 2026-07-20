@@ -266,7 +266,11 @@ mod tests {
         let bare = r#"{"v":1,"type":"stats","micLevel":0.0,"visible":false}"#;
         assert!(matches!(
             parse_client_message(bare),
-            Ok(ClientMessage::Stats { muted: None, battery_saver: None, .. })
+            Ok(ClientMessage::Stats {
+                muted: None,
+                battery_saver: None,
+                ..
+            })
         ));
     }
 

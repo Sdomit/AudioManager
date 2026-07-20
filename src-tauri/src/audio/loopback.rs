@@ -129,7 +129,12 @@ mod imp {
             let mut map = manager().lock().unwrap();
             match map.get(&key).map(|mc| mc.failed.load(Ordering::Acquire)) {
                 Some(false) => {
-                    map.get(&key).expect("present").subs.lock().unwrap().push(sub);
+                    map.get(&key)
+                        .expect("present")
+                        .subs
+                        .lock()
+                        .unwrap()
+                        .push(sub);
                     return Ok((consumer, LOOPBACK_CHANNELS, Subscription { key, id }));
                 }
                 Some(true) => {
@@ -198,15 +203,27 @@ mod imp {
                     matches!(map.get(&key), Some(mc) if !mc.failed.load(Ordering::Acquire));
                 if attach_to_winner {
                     let our_sub = subs.lock().unwrap().pop().expect("our subscriber");
-                    map.get(&key).expect("winner present").subs.lock().unwrap().push(our_sub);
+                    map.get(&key)
+                        .expect("winner present")
+                        .subs
+                        .lock()
+                        .unwrap()
+                        .push(our_sub);
                     drop(map);
                     stop.store(true, Ordering::Release);
                     let _ = handle.join();
                 } else {
                     // No entry, or a `failed` leftover: publish ours and reap any
                     // dead thread we displace (already exited, so join is instant).
-                    let prev =
-                        map.insert(key.clone(), ManagedCapture { stop, failed, subs, thread: Some(handle) });
+                    let prev = map.insert(
+                        key.clone(),
+                        ManagedCapture {
+                            stop,
+                            failed,
+                            subs,
+                            thread: Some(handle),
+                        },
+                    );
                     drop(map);
                     if let Some(mut d) = prev {
                         if let Some(h) = d.thread.take() {

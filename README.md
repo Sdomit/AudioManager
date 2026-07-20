@@ -71,14 +71,14 @@ For the full design and audio pipeline, see [ARCHITECTURE.md](docs/ARCHITECTURE.
 
 ## Getting Started
 
-**Prerequisites:** Windows 10+, Node.js 18+ with pnpm, Rust 1.70+.
+**Prerequisites:** Windows 10/11 x64, Node.js 18+ with pnpm, Rust 1.70+.
 
 ```bash
 # Install dependencies
 pnpm install
 
-# Dev mode (live reload)
-pnpm tauri dev
+# Dev mode (live reload; uses the development CSP)
+pnpm tauri:dev
 
 # Build for release
 pnpm build tauri
@@ -93,7 +93,7 @@ For detailed setup, see [SETUP.md](docs/SETUP.md).
 
 Use **B1** (Stream Output) with a virtual audio cable to send audio into OBS, Discord, Zoom, or any app.
 
-1. Install a virtual audio cable ([VB-Cable](https://vb-audio.com/Cable/) or [Virtual Audio Cable](https://virtualaudiocable.org/))
+1. Download and install [VB-CABLE](https://vb-audio.com/Cable/) from VB-Audio as an administrator, then restart Windows
 2. Assign **B1** to the cable's playback device (usually **CABLE Input**)
 3. In your streaming app, select the matching recording device (usually **CABLE Output**)
 4. Route audio to B1 in the input matrix
@@ -127,30 +127,13 @@ After launching the app:
 - B1 stream output does not play on your computer, it only routes to the virtual cable
 - Audio routes exactly as configured: input to B1 with B1 assigned to speakers will feed back
 
-## Virtual Audio Driver
+## VB-CABLE
 
-AudioManager has a sibling project — **[AudioManagerVirtualCable](https://github.com/Sdomit/AudioManagerVirtualCable)** — that will replace the need for third-party virtual cables like VB-Cable.
-
-When complete, it will expose AudioManager-owned endpoints directly to Windows so any app (OBS, Discord, Zoom, games, browsers) can select them as normal playback or recording devices — no extra software required.
-
-**Planned devices:**
-
-| Device | Type | Use |
-| --- | --- | --- |
-| AudioManager Cable 1 Playback / Recording | render + capture | general routing |
-| AudioManager Cable 2 Playback / Recording | render + capture | second independent cable |
-| AudioManager Stream Output | render | dedicated stream bus → OBS |
-| AudioManager Voice Output | render | dedicated voice bus → Discord / Zoom |
-
-**Current status:** the user-mode bridge (WASAPI loopback capture, PCM ring transport, JSON health status) and the helper (device detection, install-status, `pnputil` ops) are implemented in Rust and unit-tested. The **kernel driver** — the part that creates the branded Windows devices — is not yet built. It is blocked on toolchain setup (VS + WDK) and driver signing (EV cert + Microsoft Partner Center attestation).
-
-AudioManager already detects third-party virtual cables by name and will detect these devices the same way once the driver ships. The integration is optional — AudioManager runs fully without it.
-
-> See [AudioManagerVirtualCable](https://github.com/Sdomit/AudioManagerVirtualCable) for architecture, signing docs, and build instructions.
+AudioManager supports [VB-CABLE](https://vb-audio.com/Cable/) for sending B1 to OBS, Discord, Zoom, and similar apps. VB-CABLE is a separate third-party Windows driver: it is **not included, installed, or managed** by the AudioManager installer. Download it from VB-Audio, run its setup as an administrator, and restart Windows before selecting its devices in AudioManager.
 
 ## Known Limitations
 
-- Virtual audio driver in progress — see above; third-party cables (VB-Cable etc.) required in the meantime
+- VB-CABLE is installed separately; the AudioManager installer does not include third-party audio drivers
 - No ASIO support (uses WASAPI)
 - No sample-rate conversion (device sample rates must match)
 - Windows first (macOS / Linux untested)

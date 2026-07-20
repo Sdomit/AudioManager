@@ -99,8 +99,7 @@ pub async fn answer_offer(
         })
     }));
 
-    let offer =
-        RTCSessionDescription::offer(offer_sdp).map_err(|e| format!("parse offer: {e}"))?;
+    let offer = RTCSessionDescription::offer(offer_sdp).map_err(|e| format!("parse offer: {e}"))?;
     pc.set_remote_description(offer)
         .await
         .map_err(|e| format!("set remote: {e}"))?;
@@ -218,7 +217,13 @@ async fn read_track(
 
 /// Peak-meter and push a decoded block into the mixer feed. `adaptive` gates the
 /// remote drift compensator (Podcast mode only).
-fn emit_pcm(decoded: Option<usize>, pcm: &[f32], stats: &PhoneStats, session_id: &str, adaptive: bool) {
+fn emit_pcm(
+    decoded: Option<usize>,
+    pcm: &[f32],
+    stats: &PhoneStats,
+    session_id: &str,
+    adaptive: bool,
+) {
     let Some(n) = decoded else { return };
     // decode_float returns samples per channel; the buffer holds
     // `n * DECODE_CHANNELS` interleaved samples.
@@ -236,7 +241,12 @@ fn emit_pcm(decoded: Option<usize>, pcm: &[f32], stats: &PhoneStats, session_id:
 
 /// Decode one Opus payload into `pcm`. `fec` reconstructs the *previous* lost
 /// frame from this packet's in-band FEC. Returns per-channel sample count.
-fn decode_payload(decoder: &mut Decoder, payload: &[u8], pcm: &mut [f32], fec: bool) -> Option<usize> {
+fn decode_payload(
+    decoder: &mut Decoder,
+    payload: &[u8],
+    pcm: &mut [f32],
+    fec: bool,
+) -> Option<usize> {
     let pkt = Packet::try_from(payload).ok()?;
     let out = MutSignals::try_from(&mut pcm[..]).ok()?;
     decoder.decode_float(Some(pkt), out, fec).ok()

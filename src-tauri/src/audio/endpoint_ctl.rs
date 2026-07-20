@@ -36,7 +36,9 @@ pub struct EndpointError {
 
 impl<E: std::fmt::Display> From<E> for EndpointError {
     fn from(e: E) -> Self {
-        Self { message: e.to_string() }
+        Self {
+            message: e.to_string(),
+        }
     }
 }
 
@@ -57,7 +59,6 @@ mod imp {
     use std::ffi::c_void;
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-    use windows_core::{interface, GUID, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR};
     use windows::Win32::Media::Audio::{
         eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole, IMMDevice,
         IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
@@ -65,9 +66,11 @@ mod imp {
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED, STGM_READ,
     };
+    use windows_core::{interface, IUnknown, IUnknown_Vtbl, GUID, HRESULT, PCWSTR};
 
     /// CLSID_PolicyConfigClient — the COM object that exposes `IPolicyConfig`.
-    const CLSID_POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+    const CLSID_POLICY_CONFIG_CLIENT: GUID =
+        GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
 
     /// `IPolicyConfig` (Win7+ variant, IID f8679f50-…). Undocumented; not in the
     /// `windows` crate. Every method before `SetDefaultEndpoint` is declared
@@ -174,7 +177,11 @@ mod imp {
                     continue;
                 }
                 let is_default = default_id.as_deref() == Some(id.as_str());
-                out.push(EndpointInfo { id, name: friendly_name(&dev), is_default });
+                out.push(EndpointInfo {
+                    id,
+                    name: friendly_name(&dev),
+                    is_default,
+                });
             }
             Ok(out)
         }
@@ -245,7 +252,12 @@ mod imp {
                 let list = list_endpoints(dir).expect("list endpoints");
                 println!("== {:?}: {} endpoint(s) ==", dir, list.len());
                 for e in &list {
-                    println!("  {}{} [{}]", if e.is_default { "* " } else { "  " }, e.name, e.id);
+                    println!(
+                        "  {}{} [{}]",
+                        if e.is_default { "* " } else { "  " },
+                        e.name,
+                        e.id
+                    );
                 }
                 if let Some(def) = list.iter().find(|e| e.is_default) {
                     let v = get_endpoint_volume(&def.id).expect("get volume");
@@ -257,7 +269,9 @@ mod imp {
                     set_endpoint_volume(&def.id, v.volume).expect("set volume (no-op)");
                     set_endpoint_mute(&def.id, v.muted).expect("set mute (no-op)");
                     set_default_endpoint(&def.id).expect("set default (no-op, IPolicyConfig)");
-                    println!("  no-op round-trip OK (vol get/set, mute set, IPolicyConfig set-default)");
+                    println!(
+                        "  no-op round-trip OK (vol get/set, mute set, IPolicyConfig set-default)"
+                    );
                 }
                 let dflt = default_endpoint_id(dir).expect("default id");
                 println!("  default_endpoint_id = {dflt:?}");
@@ -276,7 +290,9 @@ mod stub {
     use super::*;
 
     fn unsupported<T>() -> Result<T, EndpointError> {
-        Err(EndpointError { message: "endpoint control is Windows-only".into() })
+        Err(EndpointError {
+            message: "endpoint control is Windows-only".into(),
+        })
     }
 
     pub fn list_endpoints(_dir: Direction) -> Result<Vec<EndpointInfo>, EndpointError> {

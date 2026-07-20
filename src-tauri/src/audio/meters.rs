@@ -49,7 +49,15 @@ struct KBiquad {
 
 impl Default for KBiquad {
     fn default() -> Self {
-        Self { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0, z1: [0.0; 2], z2: [0.0; 2] }
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            z1: [0.0; 2],
+            z2: [0.0; 2],
+        }
     }
 }
 
@@ -220,7 +228,11 @@ fn tp_phases() -> [[f32; 8]; 4] {
 
 impl Default for TruePeakMeter {
     fn default() -> Self {
-        Self { phases: tp_phases(), hist: [[0.0; 8]; 2], max: 0.0 }
+        Self {
+            phases: tp_phases(),
+            hist: [[0.0; 8]; 2],
+            max: 0.0,
+        }
     }
 }
 
@@ -466,7 +478,10 @@ mod tests {
         }
         assert_eq!(an.rms_db(), SILENCE_FLOOR_DB);
         assert_eq!(an.lufs_short(), SILENCE_FLOOR_DB);
-        assert_eq!(verdict_for(an.lufs_short(), SILENCE_FLOOR_DB), LoudnessVerdict::NoSignal);
+        assert_eq!(
+            verdict_for(an.lufs_short(), SILENCE_FLOOR_DB),
+            LoudnessVerdict::NoSignal
+        );
     }
 
     #[test]
@@ -502,7 +517,10 @@ mod tests {
             tp.process(0, 0.5);
         }
         let max = tp.take_max();
-        assert!((max - 0.5).abs() < 0.02, "DC true peak ≈ sample peak, got {max}");
+        assert!(
+            (max - 0.5).abs() < 0.02,
+            "DC true peak ≈ sample peak, got {max}"
+        );
     }
 
     #[test]
@@ -526,7 +544,10 @@ mod tests {
 
     #[test]
     fn verdict_thresholds() {
-        assert_eq!(verdict_for(SILENCE_FLOOR_DB, SILENCE_FLOOR_DB), LoudnessVerdict::NoSignal);
+        assert_eq!(
+            verdict_for(SILENCE_FLOOR_DB, SILENCE_FLOOR_DB),
+            LoudnessVerdict::NoSignal
+        );
         assert_eq!(verdict_for(-30.0, -12.0), LoudnessVerdict::TooQuiet);
         assert_eq!(verdict_for(-16.0, -3.0), LoudnessVerdict::Healthy);
         assert_eq!(verdict_for(-10.0, -3.0), LoudnessVerdict::TooHot);

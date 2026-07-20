@@ -27,7 +27,8 @@ import type {
   RecordingFile,
   RecordingInfo,
   Route,
-  SystemStatus,
+  MeterSnapshot,
+  SystemSnapshot,
   TapSpec,
 } from "../types/engine";
 // ── Device enumeration ────────────────────────────────────────────────────────
@@ -190,16 +191,19 @@ export const setSendGain = (
 
 // ── Phase 8A: output buses ────────────────────────────────────────────────────
 
-/**
- * Read the current status of every bus (A1/A2/B1/B2). Resets per-bus output
- * peak/clip atomics — pick either this OR getEngineStatus per polling cycle,
- * not both.
- */
+/** Read current bus configuration and lifecycle state without consuming meters. */
 export const listBuses = (): Promise<BusStatus[]> =>
   invoke<BusStatus[]>("list_buses");
 
-export const getSystemStatus = (): Promise<SystemStatus> =>
-  invoke<SystemStatus>("get_system_status");
+/** Compatibility alias. New UI code should use the explicit snapshot calls. */
+export const getSystemStatus = (): Promise<SystemSnapshot> =>
+  invoke<SystemSnapshot>("get_system_status");
+
+export const getSystemSnapshot = (): Promise<SystemSnapshot> =>
+  invoke<SystemSnapshot>("get_system_snapshot");
+
+export const drainMeterSnapshot = (): Promise<MeterSnapshot> =>
+  invoke<MeterSnapshot>("drain_meter_snapshot");
 
 export const getSpectrumData = (busId: BusId): Promise<number[]> =>
   invoke<number[]>("get_spectrum_data", { busId });
@@ -409,3 +413,11 @@ export const phoneGetAutostart = (): Promise<boolean> =>
 
 export const phoneSetAutostart = (enabled: boolean): Promise<void> =>
   invoke<void>("phone_set_autostart", { enabled });
+
+/** Whether AudioManager launches automatically when the Windows user signs in. */
+export const appGetLaunchAtLogin = (): Promise<boolean> =>
+  invoke<boolean>("app_get_launch_at_login");
+
+/** Persist the Windows startup preference and apply it immediately. */
+export const appSetLaunchAtLogin = (enabled: boolean): Promise<void> =>
+  invoke<void>("app_set_launch_at_login", { enabled });

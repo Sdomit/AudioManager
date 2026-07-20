@@ -120,10 +120,7 @@ fn mime_for(path: &str) -> &'static str {
 
 // ── Signaling socket ──────────────────────────────────────────────────────────
 
-async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-) -> Response {
+async fn ws_upgrade(ws: WebSocketUpgrade, ConnectInfo(peer): ConnectInfo<SocketAddr>) -> Response {
     if !allow_handshake(peer.ip()) {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
@@ -145,7 +142,11 @@ async fn handle_socket(socket: WebSocket) {
     let hello = match parse_client_message(&first) {
         Ok(msg @ ClientMessage::Hello { .. }) => msg,
         Ok(_) => {
-            let _ = send(&mut sink, &ServerMessage::error("malformed", "expected hello")).await;
+            let _ = send(
+                &mut sink,
+                &ServerMessage::error("malformed", "expected hello"),
+            )
+            .await;
             return;
         }
         Err(ProtocolError::Version { got }) => {
@@ -205,7 +206,9 @@ async fn handle_socket(socket: WebSocket) {
             .await;
             return;
         }
-        HelloOutcome::BadToken { session_invalidated } => {
+        HelloOutcome::BadToken {
+            session_invalidated,
+        } => {
             let detail = if session_invalidated {
                 "too many bad tokens — session invalidated, pair again"
             } else {
@@ -412,10 +415,7 @@ async fn handle_socket(socket: WebSocket) {
     session::handle_disconnect(&session_id, epoch);
 }
 
-async fn send(
-    sink: &mut (impl SinkExt<Message> + Unpin),
-    msg: &ServerMessage,
-) -> Result<(), ()> {
+async fn send(sink: &mut (impl SinkExt<Message> + Unpin), msg: &ServerMessage) -> Result<(), ()> {
     sink.send(Message::Text(encode_server_message(msg).into()))
         .await
         .map_err(|_| ())
@@ -440,29 +440,31 @@ fn endpoint_state_message() -> ServerMessage {
         ("mic", endpoint_ctl::Direction::Capture),
     ]
     .into_iter()
-    .map(|(target, dir)| match endpoint_ctl::default_endpoint_id(dir) {
-        Ok(Some(id)) => {
-            let vol = endpoint_ctl::get_endpoint_volume(&id).ok();
-            let name = endpoint_ctl::list_endpoints(dir)
-                .ok()
-                .and_then(|l| l.into_iter().find(|e| e.id == id).map(|e| e.name))
-                .unwrap_or_default();
-            EndpointStateView {
-                target: target.to_string(),
-                name,
-                volume: vol.as_ref().map(|v| v.volume).unwrap_or(0.0),
-                muted: vol.as_ref().map(|v| v.muted).unwrap_or(false),
-                available: vol.is_some(),
+    .map(
+        |(target, dir)| match endpoint_ctl::default_endpoint_id(dir) {
+            Ok(Some(id)) => {
+                let vol = endpoint_ctl::get_endpoint_volume(&id).ok();
+                let name = endpoint_ctl::list_endpoints(dir)
+                    .ok()
+                    .and_then(|l| l.into_iter().find(|e| e.id == id).map(|e| e.name))
+                    .unwrap_or_default();
+                EndpointStateView {
+                    target: target.to_string(),
+                    name,
+                    volume: vol.as_ref().map(|v| v.volume).unwrap_or(0.0),
+                    muted: vol.as_ref().map(|v| v.muted).unwrap_or(false),
+                    available: vol.is_some(),
+                }
             }
-        }
-        _ => EndpointStateView {
-            target: target.to_string(),
-            name: String::new(),
-            volume: 0.0,
-            muted: false,
-            available: false,
+            _ => EndpointStateView {
+                target: target.to_string(),
+                name: String::new(),
+                volume: 0.0,
+                muted: false,
+                available: false,
+            },
         },
-    })
+    )
     .collect();
     ServerMessage::EndpointState { endpoints }
 }

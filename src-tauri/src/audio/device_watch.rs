@@ -120,7 +120,10 @@ mod tests {
         let prev = snap(&["AudioManager Cable 1"], &["AudioManager Cable 1"]);
         let next = snap(&[], &["AudioManager Cable 1"]);
         let diff = diff_snapshots(&prev, &next);
-        assert_eq!(diff.removed_inputs, vec!["AudioManager Cable 1".to_string()]);
+        assert_eq!(
+            diff.removed_inputs,
+            vec!["AudioManager Cable 1".to_string()]
+        );
         assert!(diff.removed_outputs.is_empty());
     }
 

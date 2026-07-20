@@ -577,9 +577,16 @@ fn recording_status_error(error: Option<String>, dropped_samples: u64) -> Option
 }
 
 #[inline]
-fn add_written_bytes(bytes_written: &Arc<AtomicU64>, successful_samples: usize, format: RecordFormat) {
+fn add_written_bytes(
+    bytes_written: &Arc<AtomicU64>,
+    successful_samples: usize,
+    format: RecordFormat,
+) {
     if successful_samples > 0 {
-        bytes_written.fetch_add(successful_samples as u64 * format.bytes_per_sample(), Ordering::Relaxed);
+        bytes_written.fetch_add(
+            successful_samples as u64 * format.bytes_per_sample(),
+            Ordering::Relaxed,
+        );
     }
 }
 

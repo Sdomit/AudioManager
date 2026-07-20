@@ -400,7 +400,10 @@ mod tests {
         let mut jb = JitterBuffer::new();
         jb.insert(200, frame(1));
         jb.insert(201, frame(2));
-        assert_eq!(drain(&mut jb, 0), vec![Tick::Decode(frame(1)), Tick::Decode(frame(2))]);
+        assert_eq!(
+            drain(&mut jb, 0),
+            vec![Tick::Decode(frame(1)), Tick::Decode(frame(2))]
+        );
         // 200 arrives again, already played -> dropped, not replayed.
         jb.insert(200, frame(9));
         assert_eq!(jb.late_drops, 1);
@@ -431,7 +434,9 @@ mod tests {
             vec![
                 Tick::Decode(frame(10)),
                 Tick::Decode(frame(11)),
-                Tick::RecoverFec { next_payload: frame(13) }, // reconstruct 12 from 13
+                Tick::RecoverFec {
+                    next_payload: frame(13)
+                }, // reconstruct 12 from 13
             ]
         );
         assert_eq!(jb.fec_recovered, 1);

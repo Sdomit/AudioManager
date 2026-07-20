@@ -123,13 +123,13 @@ pub struct PresetLoadData {
 pub fn normalize_preset_name(name: &str) -> Result<String, EngineError> {
     let normalized = name.trim();
     if normalized.is_empty() {
-        return Err(EngineError { message: "Preset name cannot be empty".to_string() });
+        return Err(EngineError {
+            message: "Preset name cannot be empty".to_string(),
+        });
     }
     if normalized.chars().count() > MAX_PRESET_NAME_LEN {
         return Err(EngineError {
-            message: format!(
-                "Preset name is too long (max {MAX_PRESET_NAME_LEN} characters)"
-            ),
+            message: format!("Preset name is too long (max {MAX_PRESET_NAME_LEN} characters)"),
         });
     }
     Ok(normalized.to_string())
@@ -169,7 +169,10 @@ pub fn write_preset_file(path: &Path, preset: &PresetFileV2) -> Result<(), Engin
     })?;
 
     fs::write(&tmp_path, &bytes).map_err(|e| EngineError {
-        message: format!("Failed to write temporary preset file '{}': {e}", tmp_path.display()),
+        message: format!(
+            "Failed to write temporary preset file '{}': {e}",
+            tmp_path.display()
+        ),
     })?;
 
     if path.exists() {
@@ -334,9 +337,22 @@ pub fn build_preset_v2(
     graph: &AudioGraph,
     automix_groups: &[crate::state::AutomixGroupDef],
 ) -> Result<PresetFileV2, EngineError> {
-    let input_names = list_input_devices().ok().map(index_by_id).unwrap_or_default();
-    let output_names = list_output_devices().ok().map(index_by_id).unwrap_or_default();
-    build_preset_v2_with_maps(name, buses, graph, automix_groups, &input_names, &output_names)
+    let input_names = list_input_devices()
+        .ok()
+        .map(index_by_id)
+        .unwrap_or_default();
+    let output_names = list_output_devices()
+        .ok()
+        .map(index_by_id)
+        .unwrap_or_default();
+    build_preset_v2_with_maps(
+        name,
+        buses,
+        graph,
+        automix_groups,
+        &input_names,
+        &output_names,
+    )
 }
 
 pub fn migrate_v1_to_v2(
@@ -363,7 +379,10 @@ pub fn migrate_v1_to_v2(
         }
 
         if let Some(existing) = inputs_by_id.get_mut(&route.input.id) {
-            if let Some(a1_send) = existing.sends.iter_mut().find(|send| send.bus_id == BusId::A1)
+            if let Some(a1_send) = existing
+                .sends
+                .iter_mut()
+                .find(|send| send.bus_id == BusId::A1)
             {
                 warnings.push(PresetLoadWarning {
                     code: "v1_route_collapsed".to_string(),
@@ -437,7 +456,11 @@ pub fn load_preset_with_warnings(
     };
 
     warnings.extend(build_load_warnings(&preset_v2)?);
-    Ok(PresetLoadData { summary, preset_v2, warnings })
+    Ok(PresetLoadData {
+        summary,
+        preset_v2,
+        warnings,
+    })
 }
 
 pub fn delete_preset_file(app: &AppHandle, name: &str) -> Result<(), EngineError> {
@@ -625,7 +648,11 @@ fn normalize_sends(input_id: &str, sends: &mut Vec<PresetSendV2>) -> Result<(), 
 
     let mut normalized = Vec::with_capacity(BusId::ALL.len());
     for bus_id in BusId::ALL {
-        normalized.push(by_bus.remove(&bus_id).unwrap_or_else(|| default_send(bus_id)));
+        normalized.push(
+            by_bus
+                .remove(&bus_id)
+                .unwrap_or_else(|| default_send(bus_id)),
+        );
     }
     *sends = normalized;
     Ok(())
@@ -645,13 +672,17 @@ fn build_preset_v2_with_maps(
         let runtime = buses.get(&bus_id).ok_or_else(|| EngineError {
             message: format!("Missing bus runtime for '{}'", bus_id_str(bus_id)),
         })?;
-        let output = runtime.config.output_device_id.as_ref().map(|output_id| PresetDeviceRef {
-            id: output_id.clone(),
-            name: output_names
-                .get(output_id)
-                .cloned()
-                .unwrap_or_else(|| output_id.clone()),
-        });
+        let output = runtime
+            .config
+            .output_device_id
+            .as_ref()
+            .map(|output_id| PresetDeviceRef {
+                id: output_id.clone(),
+                name: output_names
+                    .get(output_id)
+                    .cloned()
+                    .unwrap_or_else(|| output_id.clone()),
+            });
         buses_v2.push(PresetBusV2 {
             id: bus_id,
             name: runtime.config.name.clone(),
@@ -712,7 +743,8 @@ fn build_load_warnings(preset: &PresetFileV2) -> Result<Vec<PresetLoadWarning>, 
 
     let input_map = index_device_info(&inputs);
     let output_map = index_device_info(&outputs);
-    let bus_map: HashMap<BusId, &PresetBusV2> = preset.buses.iter().map(|bus| (bus.id, bus)).collect();
+    let bus_map: HashMap<BusId, &PresetBusV2> =
+        preset.buses.iter().map(|bus| (bus.id, bus)).collect();
 
     let mut warnings = Vec::<PresetLoadWarning>::new();
 
@@ -744,7 +776,10 @@ fn build_load_warnings(preset: &PresetFileV2) -> Result<Vec<PresetLoadWarning>, 
         if maybe_input.is_none() {
             warnings.push(PresetLoadWarning {
                 code: "missing_device".to_string(),
-                message: format!("Input '{}' is unavailable on this system.", input.device.name),
+                message: format!(
+                    "Input '{}' is unavailable on this system.",
+                    input.device.name
+                ),
             });
             continue;
         }
@@ -847,9 +882,8 @@ fn safe_file_stem(name: &str) -> String {
     }
 
     let reserved = [
-        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6",
-        "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7",
-        "lpt8", "lpt9",
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
     ];
 
     if reserved.contains(&out.as_str()) {
@@ -885,7 +919,10 @@ mod tests {
 
     #[test]
     fn normalize_preset_name_trims_whitespace() {
-        assert_eq!(normalize_preset_name("  Podcast Setup  ").unwrap(), "Podcast Setup");
+        assert_eq!(
+            normalize_preset_name("  Podcast Setup  ").unwrap(),
+            "Podcast Setup"
+        );
     }
 
     #[test]
@@ -950,7 +987,10 @@ mod tests {
         dsp.gate.enabled = true;
         dsp.compressor.ratio = 3.0;
         let input = PresetInputV2 {
-            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            device: PresetDeviceRef {
+                id: "mic".to_string(),
+                name: "Mic".to_string(),
+            },
             gain: 1.0,
             muted: false,
             sends: default_sends(),
@@ -975,7 +1015,10 @@ mod tests {
             DspStage::Denoise,
         ];
         let input = PresetInputV2 {
-            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            device: PresetDeviceRef {
+                id: "mic".to_string(),
+                name: "Mic".to_string(),
+            },
             gain: 1.0,
             muted: false,
             sends: default_sends(),
@@ -1012,7 +1055,10 @@ mod tests {
         bus_dsp.eq.bands[2].kind = BandKind::LowPass;
 
         let input = PresetInputV2 {
-            device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+            device: PresetDeviceRef {
+                id: "mic".to_string(),
+                name: "Mic".to_string(),
+            },
             gain: 1.0,
             muted: false,
             sends: default_sends(),
@@ -1064,7 +1110,8 @@ mod tests {
 
         // A preset saved before Feature B has no `automix_groups` key; it must
         // still deserialize, with an empty group list (serde default).
-        let legacy = r#"{"schema_version":2,"name":"legacy","saved_at_utc":"0","buses":[],"inputs":[]}"#;
+        let legacy =
+            r#"{"schema_version":2,"name":"legacy","saved_at_utc":"0","buses":[],"inputs":[]}"#;
         let legacy_back: PresetFileV2 = serde_json::from_str(legacy).unwrap();
         assert!(legacy_back.automix_groups.is_empty());
     }
@@ -1127,14 +1174,20 @@ mod tests {
             buses: default_buses(),
             inputs: vec![
                 PresetInputV2 {
-                    device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+                    device: PresetDeviceRef {
+                        id: "mic".to_string(),
+                        name: "Mic".to_string(),
+                    },
                     gain: 1.0,
                     muted: false,
                     sends: default_sends(),
                     dsp: DspConfig::default(),
                 },
                 PresetInputV2 {
-                    device: PresetDeviceRef { id: " mic ".to_string(), name: "Mic 2".to_string() },
+                    device: PresetDeviceRef {
+                        id: " mic ".to_string(),
+                        name: "Mic 2".to_string(),
+                    },
                     gain: 1.0,
                     muted: false,
                     sends: default_sends(),
@@ -1155,7 +1208,10 @@ mod tests {
             saved_at_utc: "0".to_string(),
             buses: default_buses(),
             inputs: vec![PresetInputV2 {
-                device: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
+                device: PresetDeviceRef {
+                    id: "mic".to_string(),
+                    name: "Mic".to_string(),
+                },
                 gain: 1.0,
                 muted: false,
                 sends: vec![default_send(BusId::A1), default_send(BusId::A1)],
@@ -1187,7 +1243,10 @@ mod tests {
                 buffer_size_frames: None,
             }],
             inputs: vec![PresetInputV2 {
-                device: PresetDeviceRef { id: " mic ".to_string(), name: "".to_string() },
+                device: PresetDeviceRef {
+                    id: " mic ".to_string(),
+                    name: "".to_string(),
+                },
                 gain: 3.0,
                 muted: false,
                 sends: vec![PresetSendV2 {
@@ -1218,8 +1277,14 @@ mod tests {
             name: "legacy".to_string(),
             saved_at_utc: "0".to_string(),
             routes: vec![PresetRouteV1 {
-                input: PresetDeviceRef { id: "mic".to_string(), name: "Mic".to_string() },
-                output: PresetDeviceRef { id: "spk".to_string(), name: "Speaker".to_string() },
+                input: PresetDeviceRef {
+                    id: "mic".to_string(),
+                    name: "Mic".to_string(),
+                },
+                output: PresetDeviceRef {
+                    id: "spk".to_string(),
+                    name: "Speaker".to_string(),
+                },
                 enabled: true,
                 volume: 0.7,
                 muted: true,
@@ -1232,21 +1297,27 @@ mod tests {
         let a1 = v2.buses.iter().find(|bus| bus.id == BusId::A1).unwrap();
         assert_eq!(a1.output.as_ref().unwrap().id, "spk");
         assert!(a1.enabled);
-        assert!(v2.buses.iter().filter(|bus| bus.id != BusId::A1).all(|bus| !bus.enabled));
+        assert!(v2
+            .buses
+            .iter()
+            .filter(|bus| bus.id != BusId::A1)
+            .all(|bus| !bus.enabled));
 
         assert_eq!(v2.inputs.len(), 1);
         let input = &v2.inputs[0];
-        let a1_send = input.sends.iter().find(|send| send.bus_id == BusId::A1).unwrap();
+        let a1_send = input
+            .sends
+            .iter()
+            .find(|send| send.bus_id == BusId::A1)
+            .unwrap();
         assert!(a1_send.enabled);
         assert!((a1_send.volume - 0.7).abs() < f32::EPSILON);
         assert!(a1_send.muted);
-        assert!(
-            input
-                .sends
-                .iter()
-                .filter(|send| send.bus_id != BusId::A1)
-                .all(|send| !send.enabled)
-        );
+        assert!(input
+            .sends
+            .iter()
+            .filter(|send| send.bus_id != BusId::A1)
+            .all(|send| !send.enabled));
     }
 
     #[test]

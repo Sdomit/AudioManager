@@ -177,7 +177,10 @@ mod tests {
         assert!(d.is_supported());
         let mut buf = vec![0.7f32; 100];
         d.process(&mut buf, 1);
-        assert!(buf.iter().all(|&s| s == 0.0), "primed output must be silent");
+        assert!(
+            buf.iter().all(|&s| s == 0.0),
+            "primed output must be silent"
+        );
     }
 
     #[test]
@@ -205,8 +208,16 @@ mod tests {
         d.process(&mut buf, 2);
         assert_eq!(buf.len(), 50_000 * 2);
         assert!(buf.iter().all(|s| s.is_finite()));
-        assert_eq!(d.out[0].capacity(), cap_l, "RT path must not reallocate (L)");
-        assert_eq!(d.out[1].capacity(), cap_r, "RT path must not reallocate (R)");
+        assert_eq!(
+            d.out[0].capacity(),
+            cap_l,
+            "RT path must not reallocate (L)"
+        );
+        assert_eq!(
+            d.out[1].capacity(),
+            cap_r,
+            "RT path must not reallocate (R)"
+        );
     }
 
     #[test]
@@ -246,6 +257,9 @@ mod tests {
         d.set_use_dfn(true);
         let mut buf = vec![0.7f32; 100];
         d.process(&mut buf, 1);
-        assert!(buf.iter().all(|&s| s == 0.0), "fallback keeps primed silence");
+        assert!(
+            buf.iter().all(|&s| s == 0.0),
+            "fallback keeps primed silence"
+        );
     }
 }

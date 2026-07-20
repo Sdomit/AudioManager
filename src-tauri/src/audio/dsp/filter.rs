@@ -277,15 +277,21 @@ mod tests {
         );
         assert_eq!(
             low_shelf_coeffs(200.0, 6.0, 48_000.0),
-            BiquadFilter::low_shelf(200.0, 6.0, 48_000.0).coeffs.as_array()
+            BiquadFilter::low_shelf(200.0, 6.0, 48_000.0)
+                .coeffs
+                .as_array()
         );
         assert_eq!(
             high_shelf_coeffs(8_000.0, -4.0, 48_000.0),
-            BiquadFilter::high_shelf(8_000.0, -4.0, 48_000.0).coeffs.as_array()
+            BiquadFilter::high_shelf(8_000.0, -4.0, 48_000.0)
+                .coeffs
+                .as_array()
         );
         assert_eq!(
             notch_coeffs(1_000.0, 4.0, 48_000.0),
-            BiquadFilter::notch(1_000.0, 4.0, 48_000.0).coeffs.as_array()
+            BiquadFilter::notch(1_000.0, 4.0, 48_000.0)
+                .coeffs
+                .as_array()
         );
     }
 

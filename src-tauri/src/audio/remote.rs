@@ -211,7 +211,9 @@ pub fn push_decoded_48k(session_id: &str, samples: &[f32], block_peak: f32, adap
                 // Surface phone overruns in the per-input overrun telemetry every
                 // device/loopback input feeds (get_system_status), not only the
                 // feed-local ring_glitches counter.
-                sub.peak[sub.index].overrun.fetch_add(dropped, Ordering::Relaxed);
+                sub.peak[sub.index]
+                    .overrun
+                    .fetch_add(dropped, Ordering::Relaxed);
                 if si == 0 {
                     overflow += dropped as u64;
                 }
@@ -318,9 +320,15 @@ mod tests {
             push_decoded_48k("sess-drift", &[0.2; 2], 0.2, true);
         }
         let (glitches, trim) = drift_stats("sess-drift").unwrap();
-        assert!(trim > 0, "over-full ring should trim playout faster (trim>0), got {trim}");
+        assert!(
+            trim > 0,
+            "over-full ring should trim playout faster (trim>0), got {trim}"
+        );
         assert!(trim <= MAX_TRIM_PPM, "trim must stay clamped");
-        assert!(glitches > 0, "a never-drained ring should record overflow drops");
+        assert!(
+            glitches > 0,
+            "a never-drained ring should record overflow drops"
+        );
     }
 
     #[test]

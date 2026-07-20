@@ -86,10 +86,7 @@ fn analysis_loop(mut consumer: ringbuf::Consumer<f32>, bins: Arc<SpectrumBins>) 
 
     // Precomputed Hann window.
     let hann: Vec<f32> = (0..FFT_SIZE)
-        .map(|i| {
-            0.5 - 0.5
-                * (2.0 * std::f32::consts::PI * i as f32 / FFT_SIZE as f32).cos()
-        })
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / FFT_SIZE as f32).cos())
         .collect();
 
     // Circular sample buffer; write_pos advances mod FFT_SIZE.
@@ -114,7 +111,10 @@ fn analysis_loop(mut consumer: ringbuf::Consumer<f32>, bins: Arc<SpectrumBins>) 
                 let mut fft_buf: Vec<Complex<f32>> = (0..FFT_SIZE)
                     .map(|i| {
                         let idx = (write_pos + i) % FFT_SIZE;
-                        Complex { re: buf[idx] * hann[i], im: 0.0 }
+                        Complex {
+                            re: buf[idx] * hann[i],
+                            im: 0.0,
+                        }
                     })
                     .collect();
 

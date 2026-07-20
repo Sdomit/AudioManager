@@ -16,17 +16,26 @@ use serde::Serialize;
 /// the helper as unavailable. Bounds the worst case so a hung helper can never
 /// wedge the query path.
 const HELPER_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Status JSON is tiny. Bound the pipe reader so a compromised or malfunctioning
+/// helper cannot make the desktop process retain unbounded output.
+const MAX_HELPER_STATUS_BYTES: u64 = 256 * 1024;
 
-fn resolve_helper_program() -> PathBuf {
+fn resolve_helper_program() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let sibling = dir.join("amvc-helper.exe");
             if sibling.is_file() {
-                return sibling;
+                return Some(sibling);
             }
         }
     }
-    PathBuf::from("amvc-helper")
+    None
+}
+
+fn helper_program() -> Result<PathBuf, String> {
+    resolve_helper_program().ok_or_else(|| {
+        "amvc-helper.exe was not found beside the installed AudioManager executable".to_string()
+    })
 }
 
 /// Outcome returned to the frontend by `query_amvc_helper`.
@@ -88,7 +97,8 @@ struct HelperOutput {
 /// `Unavailable` variant to surface directly. Blocking — call off the main
 /// thread (see `query_amvc_helper`).
 fn capture_helper_status(timeout: Duration) -> Result<Vec<u8>, AmvcQueryResult> {
-    let mut child = Command::new(resolve_helper_program())
+    let program = helper_program().map_err(|reason| AmvcQueryResult::Unavailable { reason })?;
+    let mut child = Command::new(program)
         .args(["status", "--json"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -99,11 +109,13 @@ fn capture_helper_status(timeout: Duration) -> Result<Vec<u8>, AmvcQueryResult> 
 
     // Drain stdout on a separate thread so a large write can't deadlock the
     // child against a full pipe buffer while we poll for exit.
-    let mut stdout = child.stdout.take().expect("stdout was piped");
+    let stdout = child.stdout.take().expect("stdout was piped");
     let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
+        let mut buf = Vec::with_capacity(MAX_HELPER_STATUS_BYTES as usize + 1);
+        stdout
+            .take(MAX_HELPER_STATUS_BYTES + 1)
+            .read_to_end(&mut buf)
+            .map(|_| buf)
     });
 
     let start = Instant::now();
@@ -134,7 +146,18 @@ fn capture_helper_status(timeout: Duration) -> Result<Vec<u8>, AmvcQueryResult> 
         });
     }
 
-    Ok(reader.join().unwrap_or_default())
+    match reader.join() {
+        Ok(Ok(stdout)) if stdout.len() <= MAX_HELPER_STATUS_BYTES as usize => Ok(stdout),
+        Ok(Ok(_)) => Err(AmvcQueryResult::Unavailable {
+            reason: format!("helper status output exceeded {MAX_HELPER_STATUS_BYTES} bytes"),
+        }),
+        Ok(Err(e)) => Err(AmvcQueryResult::Unavailable {
+            reason: format!("failed reading helper output: {e}"),
+        }),
+        Err(_) => Err(AmvcQueryResult::Unavailable {
+            reason: "helper output reader panicked".to_string(),
+        }),
+    }
 }
 
 pub fn run_helper_status() -> AmvcQueryResult {
@@ -174,7 +197,7 @@ pub fn run_helper_status() -> AmvcQueryResult {
 /// If the binary is absent, returns an error string (not a Tauri error) so
 /// the frontend can show an appropriate message without crashing.
 pub fn spawn_helper_install() -> Result<(), String> {
-    Command::new(resolve_helper_program())
+    Command::new(helper_program()?)
         .arg("install")
         .spawn()
         .map(|_| ())
@@ -214,7 +237,8 @@ pub async fn amvc_set_device_enabled(enabled: bool) -> Result<(), String> {
         "disable-device"
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let out = std::process::Command::new(resolve_helper_program())
+        let program = helper_program()?;
+        let out = std::process::Command::new(program)
             .args([op, "--execute"])
             .output()
             .map_err(|e| format!("failed to launch amvc-helper: {e}"))?;
