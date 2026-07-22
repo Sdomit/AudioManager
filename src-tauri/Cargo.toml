@@ -58,7 +58,7 @@ wasapi = "0.23"
 sysinfo = "0.39"
 # Read AMVC render-endpoint names from HKLM MMDevices (cheap, no elevation) for
 # sync planning. The authoritative *write* goes through MMDevice COM below.
-winreg = "0.52"
+winreg = "0.55"
 # Rename endpoints via IPropertyStore::SetValue + Commit (writes AND fires the
 # property-change notification, unlike a raw registry write). Matches wasapi's
 # windows version so features unify with no extra crate instance.
