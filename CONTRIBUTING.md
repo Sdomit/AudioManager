@@ -2,10 +2,14 @@
 
 ## Current contribution status
 
-AudioManager is not accepting external code contributions yet. The owner must
-first choose a license and contributor-rights policy (DCO or CLA) that supports
-the intended product model. Please do not submit a source-code pull request
-until this file is updated with that policy.
+AudioManager source code is licensed under [Apache-2.0](LICENSE). External code
+contributions are not accepted during the current pre-1.0 phase. Please do not
+submit a source-code pull request until the owner publishes an updated
+contribution-rights policy.
+
+Bug reports, feature suggestions, and documentation feedback remain welcome.
+The owner may open this policy later with a DCO, CLA, or another documented
+contributor agreement after reviewing the release and support model.
 
 ## Feedback and issues
 

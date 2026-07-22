@@ -44,7 +44,9 @@ Create or update the `main` protection rule/ruleset with these settings:
    after review.
 3. Treat `release-candidate.yml` artifacts as candidates, not published
    software. A draft pre-release is created only when the owner manually runs
-   it with `create_draft=true`; the workflow never publishes a release.
+   it with `create_draft=true`; the workflow never publishes a release. These
+   candidates are intentionally unsigned while the signing process is being
+   established.
 4. Configure Windows code signing and verify a clean-machine install, upgrade,
    uninstall, and audio-routing test before enabling a stable channel.
 

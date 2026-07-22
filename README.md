@@ -152,17 +152,16 @@ AudioManager supports [VB-CABLE](https://vb-audio.com/Cable/) for sending B1 to 
 
 ## License
 
-No license is currently granted for this repository. The owner must select and
-commit a license before any public release or reuse permission is claimed. See
-[NOTICE](NOTICE) for the current ownership statement.
+AudioManager source code is licensed under the [Apache License, Version
+2.0](LICENSE). See [NOTICE](NOTICE) for the AudioManager name, logo, product
+artwork, website content, and third-party attribution boundaries.
 
 ## Contributing
 
-External code contributions are not accepted yet. The owner must first select a
-contribution-rights policy (DCO or CLA) that matches the future license model.
-Non-security bug reports and suggestions are welcome through
-[GitHub Issues](https://github.com/Sdomit/AudioManager/issues); see
-[CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+AudioManager is licensed under Apache-2.0, but external code contributions are
+not accepted during the current pre-1.0 phase. Non-security bug reports and
+suggestions are welcome through [GitHub Issues](https://github.com/Sdomit/AudioManager/issues);
+see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 <div align="center">
 <sub>Built with Tauri · React · TypeScript · Rust · CPAL</sub>

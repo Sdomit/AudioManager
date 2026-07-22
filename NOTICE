@@ -1,13 +1,14 @@
 AudioManager
 Copyright (c) 2026 Sarmad Domit
 
-No license is supplied with the current repository state. This notice does not
-grant permission to use, modify, redistribute, sublicense, or sell the source.
-A formal owner-selected license is required before a public release or reuse
-permission is claimed.
+The AudioManager source code is licensed under the Apache License, Version 2.0;
+see LICENSE for the complete terms. This NOTICE file records additional
+ownership and attribution boundaries and does not replace the license.
 
 The AudioManager name, logo, product artwork, website content, and other brand
-assets are not granted for use merely because the source is available.
+assets are not licensed for reuse merely because the source is available under
+Apache-2.0. Do not imply endorsement or affiliation when redistributing the
+source or a derivative work.
 Third-party components and assets remain subject to their respective licenses.
 
 The third-party virtual-audio drivers mentioned in the documentation are not

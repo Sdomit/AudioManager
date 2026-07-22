@@ -176,9 +176,9 @@ AudioManager is an early-stage project with a clear path toward professional aud
 
 ## Contributing
 
-External code contributions are not accepted yet. The owner must first select a
-license and contribution-rights policy that supports the intended product model.
-Until then, feedback is welcome through issues:
+AudioManager source code is licensed under Apache-2.0, but external code
+contributions are not accepted during the current pre-1.0 phase. Feedback is
+welcome through issues:
 
 1. Check the roadmap to understand upcoming features
 2. Open an issue to discuss a bug, idea, or proposed contribution

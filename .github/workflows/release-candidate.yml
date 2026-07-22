@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       create_draft:
-        description: Create an unsigned pre-release draft after the candidate passes (only after license review)
+        description: Create an unsigned pre-release draft after the candidate passes (maintainer review required)
         required: true
         default: false
         type: boolean
@@ -131,6 +131,7 @@ jobs:
 
 # Tag pushes produce a verified candidate only. A GitHub Release draft can be
 # created only by an explicit manual dispatch with create_draft=true; it is
-# always a pre-release and is never published by this workflow. The owner must
-# select a license, decide the release channel, configure Windows signing, and
-# complete the documented review before publication.
+# always a pre-release and is never published by this workflow. Apache-2.0 is
+# confirmed for the source, AudioManager branding remains owner-controlled,
+# external code contributions are closed for the current pre-1.0 phase, and
+# Windows signing plus the documented review are required before publication.
