@@ -10,6 +10,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,18 +24,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      # No lockfile is committed yet; `npm install` resolves from package.json.
-      # Commit a lockfile and switch to `npm ci` for reproducible installs.
-      - run: npm install
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
       - name: Type-check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
       - name: Unit tests
-        run: npm test
+        run: pnpm test
+      - name: Build desktop frontend
+        run: pnpm build
       - name: Build phone bundle
-        run: npm run build:phone
+        run: pnpm build:phone
 
   rust:
     name: Rust (windows)

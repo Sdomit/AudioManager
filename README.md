@@ -9,7 +9,7 @@
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-CPAL%20%2B%20WASAPI-CE422B?style=flat-square&logo=rust&logoColor=white)
 ![React](https://img.shields.io/badge/React-TypeScript-3178C6?style=flat-square&logo=react&logoColor=white)
-![License](https://img.shields.io/badge/License-TBD-6B7280?style=flat-square)
+![License](https://img.shields.io/badge/License-Not%20yet%20granted-6B7280?style=flat-square)
 
 <p>
   <b>Route any audio input to any output bus.</b> Per-input and per-send gain, real-time metering,<br>
@@ -81,7 +81,7 @@ pnpm install
 pnpm tauri:dev
 
 # Build for release
-pnpm build tauri
+pnpm tauri build
 
 # Run tests
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -152,11 +152,17 @@ AudioManager supports [VB-CABLE](https://vb-audio.com/Cable/) for sending B1 to 
 
 ## License
 
-License to be determined.
+No license is currently granted for this repository. The owner must select and
+commit a license before any public release or reuse permission is claimed. See
+[NOTICE](NOTICE) for the current ownership statement.
 
 ## Contributing
 
-Early-stage project. Please report issues and suggestions via [GitHub Issues](https://github.com/Sdomit/AudioManager/issues).
+External code contributions are not accepted yet. The owner must first select a
+contribution-rights policy (DCO or CLA) that matches the future license model.
+Non-security bug reports and suggestions are welcome through
+[GitHub Issues](https://github.com/Sdomit/AudioManager/issues); see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 <div align="center">
 <sub>Built with Tauri · React · TypeScript · Rust · CPAL</sub>

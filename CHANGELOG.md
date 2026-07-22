@@ -218,4 +218,5 @@ All notable changes to this project are documented here.
 
 ## License
 
-(To be determined)
+No license is currently granted. A license decision must be made and committed
+before a public release or reuse permission is claimed.

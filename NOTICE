@@ -1,0 +1,15 @@
+AudioManager
+Copyright (c) 2026 Sarmad Domit
+
+No license is supplied with the current repository state. This notice does not
+grant permission to use, modify, redistribute, sublicense, or sell the source.
+A formal owner-selected license is required before a public release or reuse
+permission is claimed.
+
+The AudioManager name, logo, product artwork, website content, and other brand
+assets are not granted for use merely because the source is available.
+Third-party components and assets remain subject to their respective licenses.
+
+The third-party virtual-audio drivers mentioned in the documentation are not
+bundled, installed, or managed by AudioManager. Their redistribution must be
+reviewed separately before any future bundle is shipped.

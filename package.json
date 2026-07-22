@@ -2,6 +2,8 @@
   "name": "audio-manager",
   "private": true,
   "version": "0.1.1",
+  "description": "Windows desktop audio routing manager",
+  "author": "Sarmad Domit",
   "type": "module",
   "scripts": {
     "dev": "vite",

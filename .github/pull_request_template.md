@@ -10,17 +10,17 @@ Closes #
 
 Run before requesting review (see docs/process-loopback-implementation-plan.md):
 
-- [ ] `npx tsc --noEmit`
+- [ ] `pnpm exec tsc --noEmit`
 - [ ] `cargo check --manifest-path src-tauri/Cargo.toml`
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml`
-- [ ] `npm test`
+- [ ] `pnpm test`
 - [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`
 - [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`
 - [ ] `git diff --check`
 
 ## Smoke test
 
-<!-- For audio paths, the manual steps you ran with `npm run tauri dev`
+<!-- For audio paths, the manual steps you ran with `pnpm tauri:dev`
      (which device/app, expected meters, teardown). -->
 
 ## Notes
