@@ -18,6 +18,7 @@ on:
 permissions:
   contents: read
   attestations: write
+  artifact-metadata: write
   id-token: write
 
 jobs:
@@ -49,13 +50,24 @@ jobs:
       - name: Verify release version
         shell: pwsh
         run: |
-          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
-            throw "Release tag must be a semantic version beginning with v."
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $semverPattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+          if ($env:RELEASE_TAG -notmatch $semverPattern) {
+            throw "Release tag must be a valid SemVer 2.0.0 version beginning with v."
           }
+
           $expected = $env:RELEASE_TAG.Substring(1)
           $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $cargoVersion = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $cargoMetadata = cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --no-deps | ConvertFrom-Json
+          $cargoPackages = @($cargoMetadata.packages | Where-Object { $_.name -eq "audio-manager" })
+          if ($cargoPackages.Count -ne 1) {
+            throw "Expected exactly one Cargo package named audio-manager, found $($cargoPackages.Count)."
+          }
+          $cargoVersion = $cargoPackages[0].version
+
           if (@($packageVersion, $tauriVersion, $cargoVersion) | Where-Object { $_ -ne $expected }) {
             throw "Version mismatch. Tag=$expected package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion"
           }
@@ -79,9 +91,13 @@ jobs:
         run: |
           $assets = Get-ChildItem src-tauri/target/release/bundle -Recurse -File
           if (-not $assets) { throw "Tauri did not produce any bundled release assets." }
-          $assets | Get-FileHash -Algorithm SHA256 | ForEach-Object {
-            "{0}  {1}" -f $_.Hash.ToLowerInvariant(), $_.Path.Substring((Get-Location).Path.Length + 1)
-          } | Set-Content checksums-sha256.txt -NoNewline
+
+          $repositoryRoot = (Get-Location).Path
+          $checksumLines = $assets | Sort-Object FullName | Get-FileHash -Algorithm SHA256 | ForEach-Object {
+            $relativePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $_.Path).Replace('\', '/')
+            "{0}  {1}" -f $_.Hash.ToLowerInvariant(), $relativePath
+          }
+          $checksumLines | Set-Content -Path checksums-sha256.txt -Encoding utf8
       - name: Generate SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
@@ -90,7 +106,11 @@ jobs:
           output-file: sbom.spdx.json
           upload-artifact: false
           upload-release-assets: false
-      - name: Attest bundled artifacts and SBOM
+      - name: Attest build provenance
+        uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
+        with:
+          subject-path: src-tauri/target/release/bundle/**/*
+      - name: Attest SBOM
         uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
         with:
           subject-path: src-tauri/target/release/bundle/**/*
