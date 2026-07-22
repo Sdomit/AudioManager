@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- Confirmed Apache-2.0 licensing for the source repository.
+- Kept external code contributions closed during the current pre-1.0 phase.
+- Documented AudioManager branding ownership and the unsigned draft pre-release
+  policy while Windows code signing is not yet configured.
+
 ## [0.1.1] - 2026-07-20
 
 ### Release notes
@@ -218,4 +223,5 @@ All notable changes to this project are documented here.
 
 ## License
 
-(To be determined)
+AudioManager source code is licensed under Apache-2.0. See [LICENSE](LICENSE)
+and [NOTICE](NOTICE) for the complete licensing and branding boundaries.

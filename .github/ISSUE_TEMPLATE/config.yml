@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Sdomit/AudioManager/security/policy
+    about: Do not report security vulnerabilities in public issues. Follow SECURITY.md.
+  - name: Support and setup guidance
+    url: https://github.com/Sdomit/AudioManager/blob/main/SUPPORT.md
+    about: Review the supported reporting and support paths before opening an issue.

@@ -1,8 +1,8 @@
 [package]
 name = "audio-manager"
 version = "0.1.1"
-description = "A Tauri App"
-authors = ["you"]
+description = "Windows desktop audio routing manager"
+authors = ["Sarmad Domit"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

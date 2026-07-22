@@ -1,0 +1,15 @@
+# The repository owner reviews all paths while AudioManager is pre-1.0.
+* @Sdomit
+
+# Release, ownership, and security-sensitive paths.
+/.github/ @Sdomit
+/LICENSE @Sdomit
+/NOTICE @Sdomit
+/SECURITY.md @Sdomit
+/CONTRIBUTING.md @Sdomit
+/CHANGELOG.md @Sdomit
+/SUPPORT.md @Sdomit
+/package.json @Sdomit
+/pnpm-lock.yaml @Sdomit
+/src-tauri/Cargo.toml @Sdomit
+/src-tauri/tauri.conf.json @Sdomit
