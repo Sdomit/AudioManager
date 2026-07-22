@@ -17,7 +17,7 @@ checks report file paths only and do not expose values.
 | Policies | Fixed in this branch | NOTICE, security, contribution, support, CODEOWNERS, and issue-routing files now document the current owner-only contribution policy. |
 | CI | Partly ready | CI has frontend/Rust checks; Rust format and Clippy remain informational pending a clean baseline. The release-candidate workflow intentionally makes them blocking, so it cannot pass until that existing baseline is corrected. |
 | Releases | Candidate/draft workflow added | No workflow previously produced checksums, an SBOM, or provenance. Tag pushes now build a candidate; an owner-only manual action can create a draft pre-release but never publish it. |
-| Branch protection | Partly enabled | CI and conversation resolution are required; admins can bypass and no PR-review policy is enabled. |
+| Branch protection | Owner action required | CI and conversation resolution are required, and the live rule currently requires one approving review; admins can bypass, but the sole-maintainer policy calls for zero required approvals until an independent reviewer is available. |
 | Sensitive data | No high-confidence finding | Targeted scan found no private-key, GitHub-token, AWS-key, or certificate file/value pattern. |
 | Local paths | No finding | Targeted scan found no user-home absolute-path pattern in tracked content. |
 

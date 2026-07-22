@@ -9,9 +9,11 @@ hardening pull request.
 - `main` already requires the CI checks `Frontend (tsc + vitest)` and `Rust
   (windows)` and requires resolved conversations.
 - Force pushes and branch deletion are blocked.
-- Administrators can still bypass branch protection; linear history, required
-  pull requests, required reviews, signed commits, CODEOWNER review, and tag
-  rulesets are not enabled.
+- Administrators can still bypass branch protection. Pull requests currently
+  require **one approving review**, while linear history, signed commits,
+  CODEOWNER review, and tag rulesets are not enabled. That one-review setting
+  blocks the sole maintainer from merging their own pull request; reduce it to
+  zero until a separate trusted reviewer is available, as described below.
 - The repository is public, so GitHub Free supports branch and tag rulesets.
 
 ## Main branch
@@ -25,7 +27,8 @@ Create or update the `main` protection rule/ruleset with these settings:
 4. Require a linear history once squash merging is the normal merge strategy.
 5. Keep required approving reviews at **zero** until a second trusted reviewer
    is available. A pull-request author cannot approve their own pull request,
-   so requiring one approval would block the sole maintainer.
+   so the current one-approval setting must be changed before the sole
+   maintainer can merge this PR.
 6. Enable required CODEOWNER review only after adding a separate trusted code
    owner. `@Sdomit` is intentionally listed now so review requests are visible,
    but it is not a substitute for independent review.
