@@ -25,7 +25,8 @@ export function StreamSetupSheet({ open, steps, onClose }: StreamSetupSheetProps
 
   const completedCount = steps.filter((s) => s.status === "ok").length;
   const totalCount = steps.length;
-  const progress = (completedCount / totalCount) * 100;
+  const progress = totalCount ? (completedCount / totalCount) * 100 : 0;
+  const remaining = totalCount - completedCount;
 
   return (
     <>
@@ -41,7 +42,7 @@ export function StreamSetupSheet({ open, steps, onClose }: StreamSetupSheetProps
           <div>
             <div className={styles.eyebrow}>Stream setup</div>
             <h2 id="stream-setup-title" className={styles.title}>
-              Going live in {totalCount - completedCount} steps
+              {remaining === 0 ? "Ready to go live" : `${remaining} ${remaining === 1 ? "step" : "steps"} to go live`}
             </h2>
           </div>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Close stream setup">
@@ -88,12 +89,6 @@ function StepItem({ step, index }: { step: StreamSetupStep; index: number }) {
       <div className={styles.stepBody}>
         <div className={styles.stepTitle}>{step.title}</div>
         <div className={styles.stepDetail}>{step.detail}</div>
-        {step.actionLabel && step.status !== "ok" && (
-          <button className={styles.stepAction}>
-            {step.actionLabel}
-            <ChevronRightIcon size={12} />
-          </button>
-        )}
       </div>
     </div>
   );

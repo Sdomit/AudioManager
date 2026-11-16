@@ -53,17 +53,25 @@
 }
 
 .removeBtn {
-  width: 28px;
+  min-width: 28px;
   height: 28px;
+  gap: var(--am-space-1);
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--am-text-tertiary);
   border-radius: var(--am-radius-md);
 }
-.removeBtn:hover {
+.removeBtn:hover,
+.removeBtnConfirm {
   color: var(--am-meter-clip);
   background: var(--am-danger-muted);
+}
+.removeBtnConfirm {
+  padding: 0 var(--am-space-2);
+  font-size: var(--am-text-12);
+  font-weight: 600;
 }
 
 /* ── Device row ─────────────────────────────────────────────────── */

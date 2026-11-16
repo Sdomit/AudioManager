@@ -13,7 +13,7 @@
  *      input.level from it.
  */
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import * as ipc from "../../ipc/commands";
 import { busRoleFor, uiVolumeToBackend } from "./adapters";
@@ -24,7 +24,7 @@ import {
   defaultLimiter,
   streamVoiceConfig,
 } from "./dspDefaults";
-import { mockStreamSetupSteps } from "./mockData";
+import { deriveStreamSetupSteps } from "./streamSetup";
 import {
   hydrate as fetchHydrate,
   loadPreset as tcLoadPreset,
@@ -124,7 +124,7 @@ const initialState: AudioManagerState = {
   defaultPresetId: readDefaultPresetIdFromStorage(),
   presetBannerVisible: false,
   streamSetupOpen: false,
-  streamSetupSteps: mockStreamSetupSteps,
+  streamSetupSteps: [],
   routingView: "nodes",
   density: "comfortable",
   selection: { kind: "none" },
@@ -1512,8 +1512,13 @@ export function useAudioManager(): UseAudioManager {
     dispatch({ type: "close_recordings_panel" });
   }, []);
 
+  const streamSetupSteps = useMemo(
+    () => deriveStreamSetupSteps(state.buses, state.inputs, state.sends),
+    [state.buses, state.inputs, state.sends],
+  );
+
   return {
-    state,
+    state: { ...state, streamSetupSteps },
     undo,
     redo,
     setBusEnabled,

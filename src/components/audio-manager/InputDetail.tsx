@@ -1,9 +1,10 @@
+import { useEffect, useState } from "react";
 import {
   iconForKind,
   iconForBusRole,
   MuteIcon,
   HeadphonesIcon,
-  XIcon,
+  TrashIcon,
   PlusIcon,
 } from "./Icon";
 import { InputDspControls, StereoSection } from "./DspControls";
@@ -78,6 +79,13 @@ export function InputDetail({
   onRename,
   onReplaceSource,
 }: InputDetailProps) {
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  useEffect(() => setConfirmRemove(false), [input.id]);
+  useEffect(() => {
+    if (!confirmRemove) return;
+    const t = window.setTimeout(() => setConfirmRemove(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirmRemove]);
   const sendMap = new Map<BusId, Send>();
   sends.forEach((s) => sendMap.set(s.busId, s));
 
@@ -104,12 +112,14 @@ export function InputDetail({
           </div>
         </div>
         <button
-          className={styles.removeBtn}
-          onClick={onRemove}
-          aria-label={`Remove ${input.name}`}
-          title="Remove input"
+          className={`${styles.removeBtn} ${confirmRemove ? styles.removeBtnConfirm : ""}`}
+          onClick={() => (confirmRemove ? onRemove() : setConfirmRemove(true))}
+          onBlur={() => setConfirmRemove(false)}
+          aria-label={confirmRemove ? `Confirm remove ${input.name}` : `Remove ${input.name}`}
+          title={confirmRemove ? "Click again to remove this input" : "Remove input"}
         >
-          <XIcon size={14} />
+          <TrashIcon size={14} />
+          {confirmRemove && <span>Remove?</span>}
         </button>
       </header>
 

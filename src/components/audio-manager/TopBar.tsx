@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useEscape } from "./useEscape";
 import {
   BroadcastIcon,
   ChainIcon,
@@ -280,6 +281,10 @@ function PresetMenu({
 
   const ctxTarget = ctxFor ? presets.find((p) => p.id === ctxFor) ?? null : null;
   const closeCtx = () => setCtxFor(null);
+  useEscape(open || ctxFor !== null, () => {
+    setOpen(false);
+    setCtxFor(null);
+  });
 
   return (
     <div className={styles.presetMenu}>

@@ -4,6 +4,7 @@ import { MeterCanvas } from "./MeterCanvas";
 import { Pill } from "./Pill";
 import { SpectrumAnalyzer } from "./SpectrumAnalyzer";
 import type { Bus } from "./types";
+import { volumeToDb } from "./units";
 import styles from "./BusCard.module.css";
 
 interface BusCardProps {
@@ -168,13 +169,19 @@ export function BusCard({
           {bus.muted ? <MuteIcon size={14} /> : <VolumeIcon size={14} />}
           <span>{bus.muted ? "Muted" : "Mute"}</span>
         </button>
-        <button
-          className={styles.moreBtn}
-          onClick={(e) => e.stopPropagation()}
-          aria-label="More options"
-        >
-          <MoreIcon size={16} />
-        </button>
+        {onContextMenu && (
+          <button
+            className={styles.moreBtn}
+            onClick={(e) => {
+              e.stopPropagation();
+              onContextMenu(e);
+            }}
+            aria-label="More options"
+            aria-haspopup="menu"
+          >
+            <MoreIcon size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -263,12 +270,4 @@ function levelToDb(level: number): string {
   const db = 20 * Math.log10(level);
   if (db < -60) return "-∞ dB";
   return `${db.toFixed(0)} dB`;
-}
-
-function volumeToDb(vol: number): string {
-  if (vol < 0.001) return "-∞ dB";
-  // Treat 0.75 ≈ 0 dB unity
-  const db = (vol - 0.75) * 80;
-  if (db < -60) return "-∞ dB";
-  return `${db > 0 ? "+" : ""}${db.toFixed(0)} dB`;
 }

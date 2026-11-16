@@ -4,6 +4,7 @@ import type { RecordFormat } from "../../types/engine";
 import { AlertIcon, RecordIcon, XIcon } from "./Icon";
 import { ElapsedTime } from "./RecordButton";
 import type { ActiveRecording, RecordingFile, TapSpec } from "./types";
+import { useEscape } from "./useEscape";
 import styles from "./RecordingsPanel.module.css";
 
 interface RecordingsPanelProps {
@@ -46,6 +47,7 @@ export function RecordingsPanel({
   const [editingDir, setEditingDir] = useState(false);
   const [dirDraft, setDirDraft] = useState("");
   const [format, setFormat] = useState<RecordFormat>("float32");
+  useEscape(open, onClose);
 
   useEffect(() => {
     if (!open) return;

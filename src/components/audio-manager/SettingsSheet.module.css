@@ -11,7 +11,7 @@
 
 .sheet {
   width: min(560px, 92vw);
-  max-height: 82vh;
+  height: min(460px, 82vh);
   overflow: auto;
   background: var(--am-surface-2);
   color: var(--am-text-primary);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { iconForBusRole, iconForKind } from "./Icon";
 import type { AudioInput, Bus, BusId, DetailSelection, Send } from "./types";
-import { gainToDb } from "./units";
+import { gainToDb, UI_UNITY } from "./units";
 import styles from "./MatrixView.module.css";
 
 interface MatrixViewProps {
@@ -83,7 +83,7 @@ export function MatrixView({
                 const cellId = `${input.id}|${bus.id}`;
                 const send = sendMap.get(cellId);
                 const enabled = !!send?.enabled;
-                const trimmed = enabled && send && Math.abs(send.gain - 0.75) > 0.02;
+                const trimmed = enabled && send && Math.abs(send.gain - UI_UNITY) > 0.02;
                 const isHover = hoverCell === cellId;
                 return (
                   <td
