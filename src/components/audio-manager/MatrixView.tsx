@@ -136,10 +136,10 @@ export function MatrixView({
 
       <div className={styles.legend}>
         <span className={styles.legendItem}>
-          <span className={`${styles.dot} ${styles.dotOn}`} /> send on
+          <span className={`${styles.dot} ${styles.dotOn}`} /> send on (bus colour)
         </span>
         <span className={styles.legendItem}>
-          <span className={`${styles.dot} ${styles.dotOn} ${styles.dotTrimmed}`} /> send on, gain trimmed
+          <span className={`${styles.dot} ${styles.dotOn} ${styles.dotTrimmed}`} /> on, gain changed from 0 dB
         </span>
         <span className={styles.legendItem}>
           <span className={styles.dot} /> off

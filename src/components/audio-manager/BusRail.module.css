@@ -10,8 +10,16 @@
   overflow-y: visible;
 }
 
-/* In Nodes + Console mode, the mixer becomes a raised control dock over the
-   routing canvas. Flow and Matrix retain the conventional rail layout. */
+.loading {
+  flex: 1;
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--am-text-12);
+  color: var(--am-text-tertiary);
+}
+
 .group {
   display: flex;
   flex-direction: column;

@@ -139,3 +139,10 @@
 .chip:hover .chipAction {
   opacity: 1;
 }
+
+.emptyHint {
+  margin: var(--am-space-6, 24px) auto;
+  font-size: var(--am-text-12);
+  color: var(--am-text-tertiary);
+  text-align: center;
+}

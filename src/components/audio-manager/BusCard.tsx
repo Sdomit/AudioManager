@@ -97,24 +97,26 @@ export function BusCard({
         </div>
       </div>
 
-      {/* RMS + LUFS-M — only when loudness data is flowing */}
-      {bus.loudness && (bus.state === "running" || bus.state === "clipping") && (
-        <div className={styles.loudnessRow}>
-          <span>
-            <span className={styles.loudnessLabel}>RMS</span>
-            {fmtLoudnessDb(bus.loudness.rms_db)}
-          </span>
-          <span>
-            <span className={styles.loudnessLabel}>LUFS-M</span>
-            {bus.loudness.lufs_momentary.toFixed(1)}
-          </span>
-        </div>
-      )}
+      {/* Live block reserves its height so cards don't jump when audio starts. */}
+      <div className={styles.liveBlock}>
+        {bus.loudness && (bus.state === "running" || bus.state === "clipping") && (
+          <div className={styles.loudnessRow}>
+            <span>
+              <span className={styles.loudnessLabel}>RMS</span>
+              {fmtLoudnessDb(bus.loudness.rms_db)}
+            </span>
+            <span>
+              <span className={styles.loudnessLabel}>LUFS-M</span>
+              {bus.loudness.lufs_momentary.toFixed(1)}
+            </span>
+          </div>
+        )}
 
-      {/* Spectrum analyzer — only when audio is flowing */}
-      {(bus.state === "running" || bus.state === "clipping") && (
-        <SpectrumAnalyzer busId={bus.id} width={meterWidth} />
-      )}
+        {/* Spectrum analyzer — only when audio is flowing */}
+        {(bus.state === "running" || bus.state === "clipping") && (
+          <SpectrumAnalyzer busId={bus.id} width={meterWidth} />
+        )}
+      </div>
 
       {/* Error message (only if errored) */}
       {bus.state === "error" && (
@@ -193,7 +195,7 @@ function StatePill({ state }: { state: Bus["state"] }) {
   switch (state) {
     case "running":      return <Pill tone="success">Live</Pill>;
     case "clipping":     return <Pill tone="danger">Clip</Pill>;
-    case "silent":       return <Pill tone="warning">Silent</Pill>;
+    case "silent":       return <Pill tone="neutral">Silent</Pill>;
     case "error":        return <Pill tone="danger" icon={<AlertIcon size={10} />}>Error</Pill>;
     case "unconfigured": return <Pill tone="neutral">No device</Pill>;
     case "idle":

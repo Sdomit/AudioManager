@@ -57,6 +57,16 @@ fn collect_render_sessions() -> Result<(Vec<(u32, String)>, sysinfo::System), En
         if pid == 0 || pid == self_pid || !seen.insert(pid) {
             continue;
         }
+        // Our own WebView2 renderer is a child process; hide it from the picker.
+        let parent_of = |p: u32| {
+            system
+                .process(Pid::from_u32(p))?
+                .parent()
+                .map(|pp| pp.as_u32())
+        };
+        if is_descendant(pid, self_pid, &parent_of) {
+            continue;
+        }
         let name = system
             .process(Pid::from_u32(pid))
             .map(|p| p.name().to_string_lossy().to_string())
@@ -189,10 +199,39 @@ where
     cur
 }
 
+/// True when `ancestor` appears in `start`'s parent chain. Bounded to 64 hops
+/// so a malformed or cyclic tree can never spin.
+#[cfg(any(windows, test))]
+fn is_descendant<F>(start: u32, ancestor: u32, parent_of: &F) -> bool
+where
+    F: Fn(u32) -> Option<u32>,
+{
+    let mut cur = start;
+    for _ in 0..64 {
+        match parent_of(cur) {
+            Some(p) if p == ancestor => return true,
+            Some(p) if p != cur => cur = p,
+            _ => return false,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn is_descendant_finds_webview_grandchild_and_ignores_others() {
+        // app(10) -> msedgewebview2(20) -> msedgewebview2(30); 40 is unrelated.
+        let t: HashMap<u32, u32> = [(20, 10), (30, 20), (40, 1), (1, 1)].into_iter().collect();
+        let parent_of = |pid: u32| t.get(&pid).copied();
+        assert!(is_descendant(30, 10, &parent_of));
+        assert!(is_descendant(20, 10, &parent_of));
+        assert!(!is_descendant(40, 10, &parent_of));
+        assert!(!is_descendant(10, 10, &parent_of));
+    }
 
     #[test]
     fn walk_to_root_climbs_browser_tree_to_main_process() {

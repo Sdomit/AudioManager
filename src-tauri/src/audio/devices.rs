@@ -28,6 +28,10 @@ fn collect(
     default_name: Option<String>,
     is_input: bool,
 ) -> Vec<DeviceInfo> {
+    // Ids are device names, so same-named endpoints (e.g. two identical
+    // monitors) are not separately addressable; list each name once.
+    // ponytail: name-as-id, switch to endpoint ids to expose duplicates.
+    let mut seen = std::collections::HashSet::new();
     devices
         .filter_map(|d| {
             let name = d.name().ok()?;
@@ -44,6 +48,7 @@ fn collect(
                 channels: config.channels(),
             })
         })
+        .filter(|d| seen.insert(d.id.clone()))
         .collect()
 }
 

@@ -330,7 +330,7 @@ function StatePill({ state }: { state: Bus["state"] }) {
   switch (state) {
     case "running":      return <Pill tone="success">Live</Pill>;
     case "clipping":     return <Pill tone="danger">Clipping</Pill>;
-    case "silent":       return <Pill tone="warning">Silent</Pill>;
+    case "silent":       return <Pill tone="neutral">Silent</Pill>;
     case "error":        return <Pill tone="danger" icon={<AlertIcon size={10} />}>Error</Pill>;
     case "unconfigured": return <Pill tone="neutral">No device</Pill>;
     case "idle":

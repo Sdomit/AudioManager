@@ -31,6 +31,9 @@ export function FlowView({
 
   return (
     <div className={styles.flow}>
+      {inputs.length === 0 && (
+        <p className={styles.emptyHint}>Routes appear here once you add an input.</p>
+      )}
       {inputs.map((input) => (
         <FlowRow
           key={input.id}

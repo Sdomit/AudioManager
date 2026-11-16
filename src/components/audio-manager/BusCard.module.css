@@ -135,6 +135,14 @@
 }
 
 /* ── Loudness row (RMS + LUFS-M) ───────────────────────────────────── */
+.liveBlock {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--am-space-2);
+  min-height: 80px;
+}
+
 .loudnessRow {
   display: flex;
   gap: var(--am-space-5);

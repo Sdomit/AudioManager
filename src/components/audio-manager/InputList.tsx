@@ -88,12 +88,14 @@ export function InputList({
         )}
       </div>
 
-      <footer className={styles.footer}>
-        <button className={styles.addBtn} onClick={onAddInput}>
-          <PlusIcon size={14} />
-          <span>Add input</span>
-        </button>
-      </footer>
+      {!empty && (
+        <footer className={styles.footer}>
+          <button className={styles.addBtn} onClick={onAddInput}>
+            <PlusIcon size={14} />
+            <span>Add input</span>
+          </button>
+        </footer>
+      )}
     </section>
   );
 }
