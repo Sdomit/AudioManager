@@ -14,7 +14,7 @@ export function faderDb(g: number): number {
 }
 
 export function gainToDb(g: number): string {
-  if (g < 0.001) return "-∞ dB";
+  if (!(g > 0)) return "-∞ dB";
   const db = faderDb(g);
   if (db < -60) return "-∞ dB";
   const r = Math.round(db);

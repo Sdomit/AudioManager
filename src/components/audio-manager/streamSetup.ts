@@ -8,7 +8,7 @@ export function deriveStreamSetupSteps(
 ): StreamSetupStep[] {
   // Role overrides are cosmetic; B1 is the stream bus the engine routes to capture apps.
   const bus = buses.find((b) => b.id === "B1");
-  if (!bus) return [];
+  if (!bus) return [{ id: "busdevice", title: "Stream bus has an output", status: "pending", detail: "Waiting for the audio engine to report the B1 bus." }];
   const name = `${bus.id} ${bus.label}`;
 
   const device: StreamSetupStep = bus.device
@@ -21,8 +21,8 @@ export function deriveStreamSetupSteps(
     ? { id: "vcable", title: "Output is a virtual cable", status: "ok", detail: "Capture apps can record this bus." }
     : { id: "vcable", title: "Output is a virtual cable", status: "warning", detail: `${bus.device} looks like a physical device. OBS/Discord can only pick up this bus through a virtual cable.` };
 
-  const routedIds = new Set(sends.filter((s) => s.busId === bus.id && s.enabled && !s.muted).map((s) => s.inputId));
-  const routed = inputs.filter((i) => routedIds.has(i.id)).map((i) => i.name);
+  const routedIds = new Set(sends.filter((s) => s.busId === bus.id && s.enabled && !s.muted && s.gain > 0).map((s) => s.inputId));
+  const routed = inputs.filter((i) => routedIds.has(i.id) && !i.muted && i.gain > 0).map((i) => i.name);
   const routing: StreamSetupStep = routed.length
     ? { id: "routing", title: "Inputs routed to Stream", status: "ok", detail: `${routed.join(", ")}.` }
     : { id: "routing", title: "Inputs routed to Stream", status: "warning", detail: `Nothing is sent to ${name} yet. Turn on its send for your mic.` };

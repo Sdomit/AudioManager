@@ -4,7 +4,7 @@ import type { AudioInput, Bus, Send } from "./types";
 
 const bus = (over: Partial<Bus>): Bus =>
   ({ id: "B1", role: "stream", label: "Stream", device: null, enabled: false, muted: false, ...over }) as Bus;
-const mic = { id: "mic", name: "Mic" } as AudioInput;
+const mic = { id: "mic", name: "Mic", gain: 0.5, muted: false } as AudioInput;
 const send: Send = { inputId: "mic", busId: "B1", enabled: true, gain: 0.5, muted: false };
 
 describe("deriveStreamSetupSteps", () => {
@@ -40,6 +40,15 @@ describe("deriveStreamSetupSteps", () => {
     const steps = deriveStreamSetupSteps([a1, b1], [mic], [{ ...send, busId: "A1" }]);
     expect(steps.find((s) => s.id === "busdevice")?.status).toBe("error");
     expect(steps.find((s) => s.id === "routing")?.status).toBe("warning");
+  });
+
+  it("does not count a muted input as routed", () => {
+    const steps = deriveStreamSetupSteps([bus({ device: "CABLE Input", enabled: true })], [{ ...mic, muted: true }], [send]);
+    expect(steps.find((s) => s.id === "routing")?.status).toBe("warning");
+  });
+
+  it("is not ready before the buses load", () => {
+    expect(deriveStreamSetupSteps([], [], []).map((s) => s.status)).toEqual(["pending"]);
   });
 
   it("warns when the stream bus goes to a physical device", () => {

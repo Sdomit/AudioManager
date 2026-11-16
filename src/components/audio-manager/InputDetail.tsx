@@ -80,6 +80,7 @@ export function InputDetail({
   onReplaceSource,
 }: InputDetailProps) {
   const [confirmRemove, setConfirmRemove] = useState(false);
+  useEffect(() => setConfirmRemove(false), [input.id]);
   useEffect(() => {
     if (!confirmRemove) return;
     const t = window.setTimeout(() => setConfirmRemove(false), 3000);

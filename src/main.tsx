@@ -5,7 +5,8 @@ import App from "./App";
 if (import.meta.env.PROD) {
   document.addEventListener("contextmenu", (e) => {
     const t = e.target as HTMLElement | null;
-    if (!t?.closest("input, textarea, [contenteditable='true']")) e.preventDefault();
+    const textEntry = "input:not([type]), input[type='text'], input[type='search'], input[type='number'], textarea, [contenteditable='true']";
+    if (!t?.closest(textEntry)) e.preventDefault();
   });
 }
 
