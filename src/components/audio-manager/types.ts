@@ -282,6 +282,8 @@ export interface AudioManagerActions {
   closeRecordingsPanel: () => void;
 }
 
+export type ThemePref = "dark" | "light" | "system";
+
 export interface AudioManagerState {
   /** Initial backend hydrate: still loading, done, or failed (with message). */
   engine: { status: "loading" | "ready" | "error"; error: string | null };

@@ -63,6 +63,8 @@
   --am-meter-high:       #F97316;
   --am-meter-clip:       #EF4444;
   --am-meter-track:      rgba(255, 255, 255, 0.05);
+  --am-meter-peak:       rgba(255, 255, 255, 0.78);
+  --am-meter-tick:       rgba(255, 255, 255, 0.16);
 
   /* ── Node-canvas grid dots (theme-aware; light overrides below) ─────── */
   --am-grid-dot:         rgba(255, 255, 255, 0.055);
@@ -196,7 +198,9 @@
   --am-info:             #1D4ED8;
   --am-info-muted:       rgba(29, 78, 216, 0.12);
 
-  --am-meter-track:      rgba(15, 23, 42, 0.10);
+  --am-meter-track:      rgba(15, 23, 42, 0.16);
+  --am-meter-peak:       rgba(15, 23, 42, 0.70);
+  --am-meter-tick:       rgba(15, 23, 42, 0.28);
 
   --am-grid-dot:         rgba(15, 23, 42, 0.06);
   --am-grid-dot-strong:  rgba(15, 23, 42, 0.12);

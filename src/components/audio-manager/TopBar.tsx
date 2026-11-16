@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useEscape } from "./useEscape";
 import {
   BroadcastIcon,
-  ChainIcon,
+  GateIcon,
   ChevronDownIcon,
   PhoneIcon,
   RecordIcon,
@@ -186,7 +186,7 @@ export function TopBar({
           title="Live sound gate (automix groups)"
           aria-label="Open live sound gate panel"
         >
-          <ChainIcon size={16} />
+          <GateIcon size={16} />
         </button>
 
         <button
@@ -513,7 +513,7 @@ function DensityToggle({
       <button
         className={`${styles.densityBtn} ${density === "comfortable" ? styles.densityBtnActive : ""}`}
         onClick={() => onChange("comfortable")}
-        title="Comfortable density"
+        title="Cozy density (more spacing)"
         aria-pressed={density === "comfortable"}
       >
         Cozy

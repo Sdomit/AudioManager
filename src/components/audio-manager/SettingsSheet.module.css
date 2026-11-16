@@ -222,5 +222,11 @@
 }
 
 .link {
-  color: var(--am-accent, #4f8cff);
+  color: var(--am-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--am-accent);
+  text-underline-offset: 3px;
+}
+.link:hover {
+  color: var(--am-accent);
 }

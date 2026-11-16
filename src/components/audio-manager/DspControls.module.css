@@ -127,8 +127,8 @@
   width: 32px;
   height: 18px;
   border-radius: 999px;
-  border: 1px solid var(--am-border-default);
-  background: var(--am-surface-1);
+  border: 1px solid var(--am-border-strong);
+  background: var(--am-surface-4);
   cursor: pointer;
   padding: 0;
   flex: none;
@@ -145,7 +145,7 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--am-text-primary);
+  background: var(--am-text-tertiary);
   transition: transform var(--am-dur-fast);
 }
 .toggle[data-on] .toggleKnob {

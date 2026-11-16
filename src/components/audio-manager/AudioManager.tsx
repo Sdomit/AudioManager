@@ -24,7 +24,7 @@ import { openMiniWindow, toggleMiniWindow } from "./miniWindowApi";
 import { listen } from "@tauri-apps/api/event";
 import type { DeviceTemplate } from "./templates";
 import { useAudioManager } from "./useAudioManager";
-import type { BusId, TapSpec } from "./types";
+import type { BusId, TapSpec, ThemePref } from "./types";
 import * as ipc from "../../ipc/commands";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onDevicesChanged } from "../../ipc/events";
@@ -105,10 +105,24 @@ export function AudioManager() {
   const [phoneCount, setPhoneCount] = useState(0);
   const [phoneSessions, setPhoneSessions] = useState<PhoneSessionStatus[]>([]);
   // UI theme (dark default). Persisted locally; also drives the OS title bar.
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
-    try { return localStorage.getItem("am.theme") === "light" ? "light" : "dark"; }
-    catch { return "dark"; }
+  // "system" follows the OS light/dark setting live.
+  const [theme, setTheme] = useState<ThemePref>(() => {
+    try {
+      const v = localStorage.getItem("am.theme");
+      return v === "light" || v === "system" ? v : "dark";
+    } catch { return "dark"; }
   });
+  const [systemDark, setSystemDark] = useState(
+    () => typeof window === "undefined" || !window.matchMedia || window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const on = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const resolvedTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const usedInputIds = new Set(state.inputs.map((i) => i.id));
 
@@ -451,7 +465,7 @@ export function AudioManager() {
   useEffect(() => {
     try { localStorage.setItem("am.theme", theme); } catch {}
     // Match the native title bar to the app theme (no-op outside Tauri).
-    try { void getCurrentWindow().setTheme(theme).catch(() => {}); } catch {}
+    try { void getCurrentWindow().setTheme(theme === "system" ? null : theme).catch(() => {}); } catch {}
   }, [theme]);
 
   useEffect(() => {
@@ -490,7 +504,7 @@ export function AudioManager() {
     <div
       className={`audioManager ${styles.root}`}
       data-density={state.density}
-      data-theme={theme}
+      data-theme={resolvedTheme}
     >
       <TopBar
         presets={state.presets}

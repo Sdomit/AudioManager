@@ -46,7 +46,7 @@ export function RecordingsPanel({
 }: RecordingsPanelProps) {
   const [editingDir, setEditingDir] = useState(false);
   const [dirDraft, setDirDraft] = useState("");
-  const [format, setFormat] = useState<RecordFormat>("float32");
+  const [format, setFormat] = useState<RecordFormat>("int24");
   useEscape(open, onClose);
 
   useEffect(() => {

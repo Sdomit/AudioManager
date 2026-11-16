@@ -619,14 +619,62 @@ impl RecorderSettings {
         }
     }
 
-    pub fn load_or_default(app_data_dir: &Path) -> Self {
-        let path = Self::settings_file(app_data_dir);
-        if let Ok(raw) = fs::read_to_string(&path) {
-            if let Ok(settings) = serde_json::from_str::<RecorderSettings>(&raw) {
-                return settings;
-            }
+    /// First-run defaults, written once when no settings file exists yet.
+    /// New installs record to `<Music>/AudioManager` as 24-bit WAV. Installs
+    /// that already have the old `<app data>/recordings` folder keep it so
+    /// earlier recordings stay listed.
+    pub fn first_run(app_data_dir: &Path, music_dir: Option<&Path>) -> Option<Self> {
+        if Self::read_valid(&Self::settings_file(app_data_dir)).is_some() {
+            return None;
         }
-        Self::default_in(app_data_dir)
+        let legacy = app_data_dir.join("recordings");
+        let recordings_dir = match music_dir {
+            Some(m) if !legacy.exists() => m.join("AudioManager"),
+            _ => legacy,
+        };
+        Some(Self {
+            recordings_dir,
+            format: RecordFormat::Int24,
+        })
+    }
+
+    fn read_valid(path: &Path) -> Option<Self> {
+        serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+    }
+
+    pub fn load_or_default(app_data_dir: &Path) -> Self {
+        Self::read_valid(&Self::settings_file(app_data_dir))
+            .unwrap_or_else(|| Self::default_in(app_data_dir))
+    }
+
+    /// Write first-run defaults without clobbering real settings: the JSON is
+    /// written to a temp file first and moved into place in one step, so an
+    /// interrupted write never leaves a half-written settings file, and a
+    /// valid file saved by another process in the meantime is kept.
+    pub fn save_if_absent(&self, app_data_dir: &Path) -> Result<bool, EngineError> {
+        let path = Self::settings_file(app_data_dir);
+        fs::create_dir_all(app_data_dir).map_err(|e| EngineError {
+            message: format!(
+                "Failed to create settings dir '{}': {e}",
+                app_data_dir.display()
+            ),
+        })?;
+        let json = serde_json::to_string_pretty(self).map_err(|e| EngineError {
+            message: format!("Failed to serialize recorder settings: {e}"),
+        })?;
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        fs::write(&tmp, json).map_err(|e| EngineError {
+            message: format!("Failed to write '{}': {e}", tmp.display()),
+        })?;
+        // hard_link fails if the target exists, so a concurrent writer wins.
+        // An existing but invalid (corrupt) file is replaced by rename.
+        let placed = match fs::hard_link(&tmp, &path) {
+            Ok(()) => true,
+            Err(_) if Self::read_valid(&path).is_none() => fs::rename(&tmp, &path).is_ok(),
+            Err(_) => false,
+        };
+        let _ = fs::remove_file(&tmp);
+        Ok(placed)
     }
 
     pub fn save(&self, app_data_dir: &Path) -> Result<(), EngineError> {
@@ -969,6 +1017,51 @@ mod tests {
         let app = PathBuf::from("/tmp/AudioManagerTest");
         let s = RecorderSettings::default_in(&app);
         assert_eq!(s.recordings_dir, app.join("recordings"));
+    }
+
+    #[test]
+    fn first_run_prefers_music_dir_but_keeps_existing_recordings() {
+        let dir = std::env::temp_dir().join(format!("am-rec-first-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let music = dir.join("Music");
+
+        let s = RecorderSettings::first_run(&dir, Some(&music)).unwrap();
+        assert_eq!(s.recordings_dir, music.join("AudioManager"));
+        assert_eq!(s.format, RecordFormat::Int24);
+
+        fs::create_dir_all(dir.join("recordings")).unwrap();
+        let s = RecorderSettings::first_run(&dir, Some(&music)).unwrap();
+        assert_eq!(s.recordings_dir, dir.join("recordings"));
+
+        assert!(s.save_if_absent(&dir).unwrap());
+        assert!(RecorderSettings::first_run(&dir, Some(&music)).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_if_absent_keeps_valid_settings_and_replaces_corrupt_ones() {
+        let dir = std::env::temp_dir().join(format!("am-rec-absent-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let user = RecorderSettings {
+            recordings_dir: dir.join("mine"),
+            format: RecordFormat::Int16,
+        };
+        user.save(&dir).unwrap();
+        let defaults = RecorderSettings::default_in(&dir);
+        assert!(!defaults.save_if_absent(&dir).unwrap());
+        assert_eq!(
+            RecorderSettings::load_or_default(&dir).recordings_dir,
+            dir.join("mine")
+        );
+
+        fs::write(RecorderSettings::settings_file(&dir), "{ truncated").unwrap();
+        assert!(RecorderSettings::first_run(&dir, None).is_some());
+        assert!(defaults.save_if_absent(&dir).unwrap());
+        assert_eq!(
+            RecorderSettings::load_or_default(&dir).format,
+            defaults.format
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
