@@ -45,16 +45,21 @@ export function CablePanel({ open }: CablePanelProps) {
     }
   }
 
+  // Unguarded status query, for callers that already hold busyRef.
+  async function refresh() {
+    const r = await queryAmvcHelper().catch(
+      (): AmvcQueryResult => ({ kind: "unavailable", reason: "query failed" }),
+    );
+    setResult(r);
+    await refreshAssignments();
+  }
+
   async function recheck() {
     if (busyRef.current) return;
     busyRef.current = true;
     setChecking(true);
     try {
-      const r = await queryAmvcHelper().catch(
-        (): AmvcQueryResult => ({ kind: "unavailable", reason: "query failed" }),
-      );
-      setResult(r);
-      await refreshAssignments();
+      await refresh();
     } finally {
       setChecking(false);
       busyRef.current = false;
@@ -80,9 +85,11 @@ export function CablePanel({ open }: CablePanelProps) {
     setTogglingDevice(true);
     try {
       await setAmvcDeviceEnabled(enable);
-      await recheck();
     } catch {
-      // Error surface via re-check status.
+      // Error surfaces via the refreshed status below.
+    }
+    try {
+      await refresh();
     } finally {
       setTogglingDevice(false);
       busyRef.current = false;

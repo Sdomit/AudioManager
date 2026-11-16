@@ -2579,7 +2579,7 @@ pub fn run() {
             if let Ok(dir) = app.path().app_local_data_dir() {
                 let music = app.path().audio_dir().ok();
                 if let Some(rec) = RecorderSettings::first_run(&dir, music.as_deref()) {
-                    if let Err(e) = rec.save(&dir) {
+                    if let Err(e) = rec.save_if_absent(&dir) {
                         eprintln!("[startup] could not write recorder defaults: {}", e.message);
                     }
                 }
