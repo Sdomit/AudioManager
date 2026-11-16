@@ -81,7 +81,17 @@ export function MeterCanvas({
     const mid  = styles.getPropertyValue("--am-meter-mid").trim()  || "#EAB308";
     const high = styles.getPropertyValue("--am-meter-high").trim() || "#F97316";
     const clip = styles.getPropertyValue("--am-meter-clip").trim() || "#EF4444";
-    const trackBg = styles.getPropertyValue("--am-meter-track").trim() || "rgba(255,255,255,0.05)";
+    // Theme-dependent colors are re-read about once a second so a light/dark
+    // switch applies without remounting the meter.
+    let trackBg = "", peakColor = "", tickColor = "";
+    const readThemeColors = () => {
+      const cs = getComputedStyle(canvas);
+      trackBg = cs.getPropertyValue("--am-meter-track").trim() || "rgba(255,255,255,0.05)";
+      peakColor = cs.getPropertyValue("--am-meter-peak").trim() || "rgba(255,255,255,0.78)";
+      tickColor = cs.getPropertyValue("--am-meter-tick").trim() || "rgba(255,255,255,0.16)";
+    };
+    readThemeColors();
+    let frame = 0;
 
     const vertical = orientation === "vertical";
     const gradient = vertical
@@ -96,6 +106,7 @@ export function MeterCanvas({
 
     let raf = 0;
     const draw = () => {
+      if (++frame % 60 === 0) readThemeColors();
       // Smooth current → target (attack faster than release)
       const t = targetRef.current;
       const c = currentRef.current;
@@ -135,7 +146,7 @@ export function MeterCanvas({
 
       // Peak hold marker
       if (peakHold && peakRef.current > 0.02) {
-        ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
+        ctx.fillStyle = peakColor;
         if (vertical) {
           const y = Math.max(1, h - h * Math.min(1, peakRef.current));
           ctx.fillRect(1, y - 1, w - 2, 2);
@@ -146,7 +157,7 @@ export function MeterCanvas({
       }
 
       // 0 dB tick just inside the meter's high end.
-      ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+      ctx.fillStyle = tickColor;
       if (vertical) {
         const tickY = h * 0.08;
         ctx.fillRect(0, tickY, w, 1);

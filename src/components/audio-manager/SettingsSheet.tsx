@@ -3,7 +3,8 @@ import { version as appVersion } from "../../../package.json";
 
 import * as ipc from "../../ipc/commands";
 import type { DeviceInfo } from "../../types/engine";
-import type { Density } from "./types";
+import type { Density, ThemePref } from "./types";
+import { CablePanel } from "./CablePanel";
 import styles from "./SettingsSheet.module.css";
 
 interface SettingsSheetProps {
@@ -11,8 +12,8 @@ interface SettingsSheetProps {
   onClose: () => void;
   density: Density;
   onDensityChange: (d: Density) => void;
-  theme: "dark" | "light";
-  onThemeChange: (t: "dark" | "light") => void;
+  theme: ThemePref;
+  onThemeChange: (t: ThemePref) => void;
   /** Cached capture devices from AudioManager's device poll (#feature9). */
   inputDevices: DeviceInfo[];
   /** Cached playback devices from AudioManager's device poll. */
@@ -170,7 +171,9 @@ export function SettingsSheet({
 
           {tab === "cable" && (
             <section>
-              <h3 className={styles.sectionTitle}>Virtual audio cable</h3>
+              <h3 className={styles.sectionTitle}>AudioManager Virtual Cable</h3>
+              <CablePanel open={tab === "cable"} />
+              <h3 className={`${styles.sectionTitle} ${styles.spaced}`}>Other virtual cables</h3>
               {cables.length > 0 ? (
                 <>
                   <p className={styles.subtle}>Detected virtual cable endpoints:</p>
@@ -182,9 +185,9 @@ export function SettingsSheet({
                 </>
               ) : (
                 <p className={styles.subtle}>
-                  No virtual cable detected. Install VB-CABLE separately to route a
-                  bus into other apps, then assign its CABLE Input device to a bus
-                  output in the mixer.
+                  No other virtual cable detected. Third-party cables such as
+                  VB-CABLE also work: assign their CABLE Input device to a bus output
+                  in the mixer.
                 </p>
               )}
             </section>
@@ -196,9 +199,10 @@ export function SettingsSheet({
               <select
                 className={styles.select}
                 value={theme}
-                onChange={(e) => onThemeChange(e.target.value as "dark" | "light")}
+                onChange={(e) => onThemeChange(e.target.value as ThemePref)}
                 aria-label="Color theme"
               >
+                <option value="system">Match Windows</option>
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
               </select>
@@ -210,7 +214,7 @@ export function SettingsSheet({
                 onChange={(e) => onDensityChange(e.target.value as Density)}
                 aria-label="Interface density"
               >
-                <option value="comfortable">Comfortable</option>
+                <option value="comfortable">Cozy</option>
                 <option value="compact">Compact</option>
               </select>
               <p className={`${styles.muted} ${styles.spaced}`}>

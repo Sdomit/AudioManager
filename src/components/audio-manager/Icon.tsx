@@ -118,6 +118,15 @@ export const ChainIcon = (p: IconProps) => (
   </Base>
 );
 
+/** Several mics feeding one open gate: used for the Live Sound Gate (automix). */
+export const GateIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 8h4M3 12h7M3 16h4" />
+    <path d="M14 5v14M19 5v14" />
+    <path d="M10 12h11" />
+  </Base>
+);
+
 export const SearchIcon = (p: IconProps) => (
   <Base {...p}>
     <circle cx="11" cy="11" r="7" />

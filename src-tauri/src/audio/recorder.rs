@@ -619,6 +619,25 @@ impl RecorderSettings {
         }
     }
 
+    /// First-run defaults, written once when no settings file exists yet.
+    /// New installs record to `<Music>/AudioManager` as 24-bit WAV. Installs
+    /// that already have the old `<app data>/recordings` folder keep it so
+    /// earlier recordings stay listed.
+    pub fn first_run(app_data_dir: &Path, music_dir: Option<&Path>) -> Option<Self> {
+        if Self::settings_file(app_data_dir).exists() {
+            return None;
+        }
+        let legacy = app_data_dir.join("recordings");
+        let recordings_dir = match music_dir {
+            Some(m) if !legacy.exists() => m.join("AudioManager"),
+            _ => legacy,
+        };
+        Some(Self {
+            recordings_dir,
+            format: RecordFormat::Int24,
+        })
+    }
+
     pub fn load_or_default(app_data_dir: &Path) -> Self {
         let path = Self::settings_file(app_data_dir);
         if let Ok(raw) = fs::read_to_string(&path) {
@@ -969,6 +988,25 @@ mod tests {
         let app = PathBuf::from("/tmp/AudioManagerTest");
         let s = RecorderSettings::default_in(&app);
         assert_eq!(s.recordings_dir, app.join("recordings"));
+    }
+
+    #[test]
+    fn first_run_prefers_music_dir_but_keeps_existing_recordings() {
+        let dir = std::env::temp_dir().join(format!("am-rec-first-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let music = dir.join("Music");
+
+        let s = RecorderSettings::first_run(&dir, Some(&music)).unwrap();
+        assert_eq!(s.recordings_dir, music.join("AudioManager"));
+        assert_eq!(s.format, RecordFormat::Int24);
+
+        fs::create_dir_all(dir.join("recordings")).unwrap();
+        let s = RecorderSettings::first_run(&dir, Some(&music)).unwrap();
+        assert_eq!(s.recordings_dir, dir.join("recordings"));
+
+        s.save(&dir).unwrap();
+        assert!(RecorderSettings::first_run(&dir, Some(&music)).is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
