@@ -569,7 +569,6 @@ export function AudioManager() {
         onSelectDevice={(id, deviceId) => am.setBusDevice(id, deviceId)}
         onContextMenu={(id, x, y) => setBusCtx({ id, x, y })}
         viewMode={busViewMode}
-        floating={busViewMode === "console" && state.routingView === "nodes"}
       />
 
       <main className={styles.main}>

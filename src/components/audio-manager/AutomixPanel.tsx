@@ -11,6 +11,7 @@ import type { AutomixConfig, AutomixGroupDef } from "../../types/engine";
 import { suggestPhoneGroups } from "./automixSuggest";
 import { groupGateCoverage } from "./automixCoverage";
 import type { AudioInput, Bus, Send } from "./types";
+import { useEscape } from "./useEscape";
 import styles from "./AutomixPanel.module.css";
 
 /** Rolling level-history depth per phone input (~6 s at the 150 ms sample tick). */
@@ -58,6 +59,7 @@ export function AutomixPanel({ open, inputs, sends, buses, onClose }: AutomixPan
   const [groups, setGroups] = useState<AutomixGroupDef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[][]>([]);
+  useEscape(open, onClose);
 
   // Latest props/state read by the sampling interval without re-subscribing.
   const inputsRef = useRef(inputs);

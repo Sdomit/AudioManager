@@ -30,7 +30,7 @@ import {
   inputFxEnabled,
   type InputFxKey,
 } from "./inputFx";
-import { gainToDb } from "./units";
+import { gainToDb, UI_UNITY } from "./units";
 import { bipartiteToGraph } from "./graphAdapter";
 import {
   addEdge as graphAddEdge,
@@ -1221,7 +1221,7 @@ export function NodeView({
           fromPort: "out",
           toNode,
           toPort: "in",
-          gain: 0.75,
+          gain: UI_UNITY,
           muted: false,
         };
         try {
@@ -1301,7 +1301,7 @@ export function NodeView({
                 fromPort: "out",
                 toNode,
                 toPort: "in",
-                gain: 0.75,
+                gain: UI_UNITY,
                 muted: false,
               });
             }
@@ -2300,7 +2300,7 @@ export function NodeView({
                     : "rgba(255,255,255,0.4)"
                 }
                 invalid={invalid}
-                gain={0.75}
+                gain={UI_UNITY}
                 muted={false}
                 flowing={false}
                 flowSpeed={0}
@@ -2979,7 +2979,7 @@ const InputNode = memo(function InputNode({
             className={styles.nodeGainSlider}
             style={{ accentColor: "var(--am-accent)" }}
             aria-label={`Gain for ${input.name}`}
-            title="Mic gain (0.75 = unity, up to +20 dB)"
+            title="Mic gain (centre = 0 dB unity, up to +6 dB)"
           />
           <span className={styles.nodeGainReadout}>{gainToDb(input.gain)}</span>
         </div>
@@ -3127,7 +3127,7 @@ const BusNode = memo(function BusNode({
             className={styles.nodeGainSlider}
             style={{ accentColor: busColor(bus.id) }}
             aria-label={`Volume for ${bus.label}`}
-            title="Bus volume (0.75 = unity, up to +20 dB)"
+            title="Bus volume (centre = 0 dB unity, up to +6 dB)"
           />
           <span className={styles.nodeGainReadout}>{gainToDb(bus.volume)}</span>
         </div>

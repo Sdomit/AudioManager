@@ -60,7 +60,7 @@ export function BusContextMenu({
         className={styles.menu}
         role="menu"
         aria-label={`${target.label} (${target.id}) actions`}
-        style={{ left: x, top: y }}
+        style={{ left: Math.min(x, window.innerWidth - 240), top: Math.min(y, window.innerHeight - 260) }}
       >
         <button
           role="menuitem"

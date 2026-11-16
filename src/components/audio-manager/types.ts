@@ -114,7 +114,7 @@ export interface Send {
   inputId: string;
   busId: BusId;
   enabled: boolean;
-  /** UI scale 0..1, where 0.75 ≈ 0 dB unity */
+  /** UI scale 0..1, where 0.5 = 0 dB unity */
   gain: number;
   muted: boolean;
 }

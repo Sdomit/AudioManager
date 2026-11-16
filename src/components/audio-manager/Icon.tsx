@@ -159,6 +159,14 @@ export const XIcon = (p: IconProps) => (
   </Base>
 );
 
+export const TrashIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 7h16" />
+    <path d="M9 7V4h6v3" />
+    <path d="M6 7l1 13h10l1-13" />
+  </Base>
+);
+
 export const CheckIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="m5 12 5 5 9-11" />

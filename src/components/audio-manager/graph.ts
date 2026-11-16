@@ -13,7 +13,7 @@
  *      ports must exist on their respective nodes, fromPort.dir must be
  *      "out", toPort.dir must be "in", and port kinds must match.
  *   3. Graphs are DAGs. `addEdge` rejects self-loops and cycles via DFS.
- *   4. Per-edge `gain` is in the UI scale (0..1, 0.75 ≈ unity) for
+ *   4. Per-edge `gain` is in the UI scale (0..1, 0.5 = unity) for
  *      parity with `Send.gain`. Conversion happens at the engine layer.
  */
 

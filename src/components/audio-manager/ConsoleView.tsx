@@ -1,5 +1,6 @@
 import { MeterCanvas } from "./MeterCanvas";
 import type { Bus, BusId, DetailSelection } from "./types";
+import { volumeToDb } from "./units";
 import styles from "./ConsoleView.module.css";
 
 interface Props {
@@ -97,7 +98,7 @@ function Strip({
         />
       </div>
 
-      <div className={styles.volVal}>{fmtVol(bus.volume)}</div>
+      <div className={styles.volVal}>{volumeToDb(bus.volume)}</div>
 
       <button
         className={`${styles.muteBtn} ${bus.muted ? styles.muteBtnActive : ""}`}
@@ -118,11 +119,4 @@ function fmtDb(level: number): string {
   if (level < 0.001) return "-∞";
   const db = 20 * Math.log10(level);
   return db < -60 ? "-∞" : `${db.toFixed(0)}`;
-}
-
-function fmtVol(vol: number): string {
-  if (vol < 0.001) return "-∞";
-  // 0.75 = unity gain on the slider scale
-  const db = 20 * Math.log10(vol / 0.75);
-  return `${db.toFixed(0)} dB`;
 }
