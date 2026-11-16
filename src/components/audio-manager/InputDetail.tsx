@@ -108,7 +108,7 @@ export function InputDetail({
           </span>
           <div className={styles.headerText}>
             <div className={styles.eyebrow}>Input</div>
-            <h3 className={styles.title}>{input.name}</h3>
+            <h3 className={styles.title} title={input.name}>{input.name}</h3>
           </div>
         </div>
         <button
@@ -123,12 +123,14 @@ export function InputDetail({
         </button>
       </header>
 
-      <div className={styles.deviceRow}>
-        <span className={styles.deviceLabel}>Device</span>
-        <span className={styles.deviceName} title={input.device}>
-          {input.device}
-        </span>
-      </div>
+      {input.device !== input.name && (
+        <div className={styles.deviceRow}>
+          <span className={styles.deviceLabel}>Device</span>
+          <span className={styles.deviceName} title={input.device}>
+            {input.device}
+          </span>
+        </div>
+      )}
 
       {/* Source: rename (#feature8) + swap device (#feature7). */}
       <section className={styles.section}>

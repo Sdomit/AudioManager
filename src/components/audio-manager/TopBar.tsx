@@ -43,7 +43,6 @@ interface TopBarProps {
   /** Toggle the bus rail between card and console views. */
   onToggleBusView: () => void;
   /** Console is only meaningful over the Nodes canvas. */
-  consoleAvailable: boolean;
   onOpenStreamSetup: () => void;
   /** Start a master recording (one BusOut tap per running bus). */
   onStartMasterRecording: () => void;
@@ -85,7 +84,6 @@ export function TopBar({
   onDensityChange,
   busViewMode,
   onToggleBusView,
-  consoleAvailable,
   onOpenStreamSetup,
   onStartMasterRecording,
   onStopAllRecordings,
@@ -220,7 +218,6 @@ export function TopBar({
         <BusViewToggle
           mode={busViewMode}
           onToggle={onToggleBusView}
-          consoleAvailable={consoleAvailable}
         />
 
         <DensityToggle density={density} onChange={onDensityChange} />
@@ -476,22 +473,10 @@ function PresetContextMenu({
 function BusViewToggle({
   mode,
   onToggle,
-  consoleAvailable,
 }: {
   mode: "card" | "console";
   onToggle: () => void;
-  consoleAvailable: boolean;
 }) {
-  if (!consoleAvailable) {
-    return (
-      <div className={styles.densityToggle} role="group" aria-label="Bus view">
-        <button className={`${styles.densityBtn} ${styles.densityBtnActive}`} aria-pressed="true">
-          Cards
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className={styles.densityToggle} role="group" aria-label="Bus view">
       <button

@@ -1028,6 +1028,12 @@ export function NodeView({
     (Math.floor(wrapSize.w) || MIN_CANVAS_W) - COL_PAD - BUS_W,
   );
 
+  // Label follows where the bus nodes actually are (positions persist across
+  // window sizes), falling back to the default column.
+  let busLabelX = Infinity;
+  for (const [nid, p] of nodePositions) if (isBusNodeId(nid) && p.x < busLabelX) busLabelX = p.x;
+  if (!Number.isFinite(busLabelX)) busLabelX = busColumnX;
+
   // Pull stale/off-screen nodes back inside the current bounded canvas.
   useEffect(() => {
     setNodePositions((prev) => {
@@ -1663,7 +1669,7 @@ export function NodeView({
   // Zoom out (never in) and re-center so every node — inputs, effects, outputs —
   // stays visible. Used when the detail panel opens (selecting a node), since
   // the panel narrows the canvas; we shrink to keep the whole graph in view.
-  const fitToContent = useCallback(() => {
+  const fitToContent = useCallback((allowZoomIn = false) => {
     const el = wrapRef.current;
     if (!el) return;
     const vw = el.clientWidth;
@@ -1685,7 +1691,7 @@ export function NodeView({
     const fitZoom = Math.min(vw / contentW, vh / contentH);
     // Only ever zoom out from the current level — keeps everything shown
     // without yanking the user closer than they already were.
-    const zoom = clampZoom(Math.min(viewRef.current.zoom, fitZoom));
+    const zoom = clampZoom(Math.min(allowZoomIn ? 1 : viewRef.current.zoom, fitZoom));
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     setView(clampViewToBounds({ zoom, tx: vw / 2 - cx * zoom, ty: vh / 2 - cy * zoom }));
@@ -1700,9 +1706,21 @@ export function NodeView({
     : "none";
   useEffect(() => {
     if (selKey === "none") return;
-    const t = window.setTimeout(fitToContent, 70);
+    const t = window.setTimeout(() => fitToContent(), 70);
     return () => window.clearTimeout(t);
   }, [selKey, wrapSize.w, fitToContent]);
+
+  // First load: a viewport saved at another window size can leave the graph
+  // tiny or off to one side, so fit it once (zooming in up to 100%).
+  const didInitialFit = useRef(false);
+  useEffect(() => {
+    if (didInitialFit.current || wrapSize.w === 0 || nodePositions.size === 0) return;
+    const t = window.setTimeout(() => {
+      didInitialFit.current = true;
+      fitToContent(true);
+    }, 70);
+    return () => window.clearTimeout(t);
+  }, [wrapSize.w, nodePositions.size, fitToContent]);
 
   // ── Group management ────────────────────────────────────────────────
   // Frontend-only: creating / removing a group is a localStorage write.
@@ -2160,7 +2178,7 @@ export function NodeView({
       >
       <div className={styles.canvas} style={{ width: canvasW, height: canvasH }}>
         <ColumnLabel x={COL_PAD} label="Inputs" hint="drag to rearrange" />
-        <ColumnLabel x={busColumnX} label="Buses" />
+        <ColumnLabel x={busLabelX} label="Buses" />
 
         {/* SVG wires layer */}
         <svg
@@ -2955,7 +2973,7 @@ const InputNode = memo(function InputNode({
         {iconForKind(input.kind)}
       </button>
       <div className={styles.nodeText}>
-        <div className={styles.nodeName}>{input.name}</div>
+        <div className={styles.nodeName} title={input.name}>{input.name}</div>
         <div className={styles.nodeSub}>
           <span className={styles.levelBar} aria-hidden>
             <span
@@ -3356,7 +3374,7 @@ function stateDotColor(state: Bus["state"]): string {
   switch (state) {
     case "running":      return "#22C55E";
     case "clipping":     return "#EF4444";
-    case "silent":       return "#F59E0B";
+    case "silent":       return "#9AA3B2";
     case "error":        return "#EF4444";
     case "unconfigured": return "#6B7280";
     case "idle":

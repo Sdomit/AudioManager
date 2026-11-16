@@ -202,6 +202,6 @@
   font-style: italic;
 }
 .legendItem .dot {
-  --bus-accent: var(--am-accent);
-  --bus-accent-muted: var(--am-accent-muted);
+  --bus-accent: var(--am-text-secondary);
+  --bus-accent-muted: var(--am-surface-4);
 }

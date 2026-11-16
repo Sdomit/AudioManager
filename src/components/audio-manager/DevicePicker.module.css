@@ -44,6 +44,15 @@
   margin-top: 2px;
 }
 
+.sectionLabel {
+  padding: 10px 18px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--am-tracking-wide);
+  text-transform: uppercase;
+  color: var(--am-text-tertiary);
+}
+
 .close {
   background: transparent;
   border: 0;

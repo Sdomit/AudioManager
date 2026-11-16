@@ -29,6 +29,9 @@ const POLL_MS = 250;
  * URL carries the pairing token in its fragment — it is rendered, never
  * logged. Closing the sheet discards the session if nothing ever scanned it.
  */
+const FIREWALL_CMD =
+  'New-NetFirewallRule -DisplayName "AudioManager Phone Pairing" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47800-47809 -Profile Private';
+
 export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairingSheetProps) {
   const [created, setCreated] = useState<PhoneSessionCreated | null>(null);
   const [sessions, setSessions] = useState<PhoneSessionStatus[]>([]);
@@ -38,6 +41,7 @@ export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairi
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [fwCopied, setFwCopied] = useState(false);
   const createdRef = useRef<PhoneSessionCreated | null>(null);
   createdRef.current = created;
 
@@ -209,10 +213,20 @@ export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairi
                 The server is running but a firewall is likely blocking port{" "}
                 {server.port ?? "47800"}. In an <strong>elevated</strong> PowerShell, run:
               </div>
-              <code className={styles.firewallCmd}>
-                New-NetFirewallRule -DisplayName &quot;AudioManager Phone Pairing&quot; -Direction
-                Inbound -Action Allow -Protocol TCP -LocalPort 47800-47809 -Profile Private
-              </code>
+              <code className={styles.firewallCmd}>{FIREWALL_CMD}</code>
+              <button
+                type="button"
+                className={styles.secondaryBtn}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(FIREWALL_CMD);
+                    setFwCopied(true);
+                    window.setTimeout(() => setFwCopied(false), 1500);
+                  } catch {}
+                }}
+              >
+                {fwCopied ? "Copied ✓" : "Copy command"}
+              </button>
             </div>
           )}
           {error ? (

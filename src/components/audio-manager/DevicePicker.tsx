@@ -281,7 +281,7 @@ export function DevicePicker({
 
         {!error && loopbackItems.length > 0 && (
           <>
-            <div className={styles.subtitle}>Capture an app or system sound</div>
+            <div className={styles.sectionLabel}>Capture an app or system sound</div>
             <ul className={styles.list} aria-label="Capture sources">
               {loopbackItems.map((it) => (
                 <li key={it.id}>
@@ -297,7 +297,7 @@ export function DevicePicker({
                 </li>
               ))}
             </ul>
-            <div className={styles.subtitle}>Input devices</div>
+            <div className={styles.sectionLabel}>Input devices</div>
           </>
         )}
 

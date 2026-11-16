@@ -412,7 +412,6 @@ export function AudioManager() {
 
       // V → toggle bus rail view mode (card ↔ console).
       if (e.key === "v" || e.key === "V") {
-        if (cur.state.routingView !== "nodes") return;
         e.preventDefault();
         setBusViewMode((m) => (m === "card" ? "console" : "card"));
         return;
@@ -521,12 +520,7 @@ export function AudioManager() {
         onSetDefaultPreset={am.setDefaultPreset}
         onDensityChange={am.setDensity}
         busViewMode={busViewMode}
-        onToggleBusView={() => {
-          if (state.routingView === "nodes") {
-            setBusViewMode((m) => (m === "card" ? "console" : "card"));
-          }
-        }}
-        consoleAvailable={state.routingView === "nodes"}
+        onToggleBusView={() => setBusViewMode((m) => (m === "card" ? "console" : "card"))}
         onOpenStreamSetup={am.openStreamSetup}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenTemplates={() => setTemplateDialogOpen(true)}

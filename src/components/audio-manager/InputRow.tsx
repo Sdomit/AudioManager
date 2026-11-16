@@ -78,7 +78,7 @@ export function InputRow({
 
       <div className={styles.main}>
         <div className={styles.nameRow}>
-          <span className={styles.name}>{input.name}</span>
+          <span className={styles.name} title={input.name}>{input.name}</span>
           <span className={styles.deviceName} title={input.device}>
             {input.device}
           </span>

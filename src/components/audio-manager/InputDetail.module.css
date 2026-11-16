@@ -47,9 +47,11 @@
   letter-spacing: var(--am-tracking-tight);
   color: var(--am-text-primary);
   margin: 0;
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .removeBtn {

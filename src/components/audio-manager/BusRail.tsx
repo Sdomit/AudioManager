@@ -44,7 +44,11 @@ export function BusRail({
       role="region"
       aria-label="Output buses"
     >
-      {viewMode === "console" ? (
+      {buses.length === 0 ? (
+        <div className={styles.loading} role="status">
+          Starting audio engine…
+        </div>
+      ) : viewMode === "console" ? (
         <ConsoleView
           buses={buses}
           selection={selection}
