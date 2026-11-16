@@ -547,6 +547,7 @@ export function AudioManager() {
 
       <BusRail
         buses={state.buses}
+        engine={state.engine}
         selection={state.selection}
         onSelectBus={(id) => am.setSelection({ kind: "bus", busId: id })}
         onToggleEnabled={(id) => {

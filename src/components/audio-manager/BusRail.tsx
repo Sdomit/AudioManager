@@ -1,10 +1,11 @@
 import { BusCard } from "./BusCard";
 import { ConsoleView } from "./ConsoleView";
-import type { Bus, BusId, DetailSelection } from "./types";
+import type { AudioManagerState, Bus, BusId, DetailSelection } from "./types";
 import styles from "./BusRail.module.css";
 
 interface BusRailProps {
   buses: Bus[];
+  engine: AudioManagerState["engine"];
   selection: DetailSelection;
   onSelectBus: (id: BusId) => void;
   onToggleEnabled: (id: BusId) => void;
@@ -34,6 +35,7 @@ export function BusRail({
   onSelectDevice,
   onContextMenu,
   viewMode,
+  engine,
 }: BusRailProps) {
   const a = buses.filter((b) => b.id.startsWith("A"));
   const b = buses.filter((b) => b.id.startsWith("B"));
@@ -44,9 +46,13 @@ export function BusRail({
       role="region"
       aria-label="Output buses"
     >
-      {buses.length === 0 ? (
+      {engine.status === "error" ? (
+        <div className={styles.loading} role="alert">
+          Couldn&apos;t reach the audio engine: {engine.error}. Restart AudioManager to try again.
+        </div>
+      ) : buses.length === 0 ? (
         <div className={styles.loading} role="status">
-          Starting audio engine…
+          {engine.status === "loading" ? "Starting audio engine…" : "The audio engine reported no output buses."}
         </div>
       ) : viewMode === "console" ? (
         <ConsoleView

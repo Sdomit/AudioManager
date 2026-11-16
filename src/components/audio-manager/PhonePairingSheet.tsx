@@ -41,7 +41,7 @@ export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairi
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [fwCopied, setFwCopied] = useState(false);
+  const [fwCopied, setFwCopied] = useState<"idle" | "ok" | "failed">("idle");
   const createdRef = useRef<PhoneSessionCreated | null>(null);
   createdRef.current = created;
 
@@ -220,12 +220,18 @@ export function PhonePairingSheet({ open, onClose, onAddPhoneInput }: PhonePairi
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(FIREWALL_CMD);
-                    setFwCopied(true);
-                    window.setTimeout(() => setFwCopied(false), 1500);
-                  } catch {}
+                    setFwCopied("ok");
+                  } catch {
+                    setFwCopied("failed");
+                  }
+                  window.setTimeout(() => setFwCopied("idle"), 2500);
                 }}
               >
-                {fwCopied ? "Copied ✓" : "Copy command"}
+                {fwCopied === "ok"
+                  ? "Copied ✓"
+                  : fwCopied === "failed"
+                    ? "Copy failed, select the text above"
+                    : "Copy command"}
               </button>
             </div>
           )}

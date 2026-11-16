@@ -116,6 +116,7 @@ function writeBusRoleOverridesToStorage(map: Record<string, BusRole>): void {
 }
 
 const initialState: AudioManagerState = {
+  engine: { status: "loading", error: null },
   buses: [],
   inputs: [],
   sends: [],
@@ -138,6 +139,7 @@ const initialState: AudioManagerState = {
 
 type Action =
   | { type: "hydrate"; buses: Bus[]; inputs: AudioInput[]; sends: Send[]; presets: Preset[] }
+  | { type: "hydrate_failed"; error: string }
   | { type: "set_bus_enabled"; id: BusId; enabled: boolean }
   | { type: "set_bus_muted"; id: BusId; muted: boolean }
   | { type: "set_bus_volume"; id: BusId; volume: number }
@@ -182,6 +184,8 @@ type Action =
 
 function reducer(state: AudioManagerState, action: Action): AudioManagerState {
   switch (action.type) {
+    case "hydrate_failed":
+      return { ...state, engine: { status: "error", error: action.error } };
     case "hydrate": {
       const inputIds = new Set(action.inputs.map((i) => i.id));
       const busIds = new Set(action.buses.map((b) => b.id));
@@ -220,6 +224,7 @@ function reducer(state: AudioManagerState, action: Action): AudioManagerState {
       });
       return {
         ...state,
+        engine: { status: "ready", error: null },
         buses: busesWithOverrides,
         inputs: inputsWithCurrentMeters,
         sends: action.sends,
@@ -661,9 +666,8 @@ export function useAudioManager(): UseAudioManager {
           console.error("Default preset auto-load failed:", e);
         }
       } catch (e) {
-        // Leave the UI in its empty initial state; surface in console
-        // until Phase D wires an error banner.
         console.error("AudioManager hydrate failed:", e);
+        if (!cancelled) dispatch({ type: "hydrate_failed", error: e instanceof Error ? e.message : String(e) });
       }
     })();
     return () => {

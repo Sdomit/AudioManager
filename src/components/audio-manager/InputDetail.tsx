@@ -123,7 +123,8 @@ export function InputDetail({
         </button>
       </header>
 
-      {input.device !== input.name && (
+      {/* Hardware ids are readable device names; show them only once renamed. */}
+      {(input.kind === "microphone" || input.kind === "virtual") && input.device !== input.name && (
         <div className={styles.deviceRow}>
           <span className={styles.deviceLabel}>Device</span>
           <span className={styles.deviceName} title={input.device}>

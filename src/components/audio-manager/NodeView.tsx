@@ -391,6 +391,9 @@ const LS_NODES_V2     = "am.nodePositions.v2";
 const LS_INPUTS_LEGACY = "am.nodePositions.inputs";
 const LS_BUSES_LEGACY  = "am.nodePositions.buses";
 const LS_VIEW          = "am.nodeView.viewport";
+// Initial auto-fit runs once per app session, not on every NodeView remount,
+// so switching Flow/Matrix -> Nodes keeps the user's zoom.
+let initialFitDone = false;
 const LS_GROUPS        = "am.nodeGroups.v1";
 const LS_FLOATING_FX   = "am.floatingFx.v1";
 const LS_LOCAL_EDGES   = "am.nodeLocalEdges.v1";
@@ -1669,13 +1672,13 @@ export function NodeView({
   // Zoom out (never in) and re-center so every node — inputs, effects, outputs —
   // stays visible. Used when the detail panel opens (selecting a node), since
   // the panel narrows the canvas; we shrink to keep the whole graph in view.
-  const fitToContent = useCallback((allowZoomIn = false) => {
+  const fitToContent = useCallback((allowZoomIn = false): boolean => {
     const el = wrapRef.current;
-    if (!el) return;
+    if (!el) return false;
     const vw = el.clientWidth;
     const vh = el.clientHeight;
     const positions = nodePosRef.current;
-    if (positions.size === 0 || vw === 0 || vh === 0) return;
+    if (positions.size === 0 || vw === 0 || vh === 0) return false;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [nid, p] of positions) {
       const w = nodeWidth(nid);
@@ -1695,6 +1698,7 @@ export function NodeView({
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     setView(clampViewToBounds({ zoom, tx: vw / 2 - cx * zoom, ty: vh / 2 - cy * zoom }));
+    return true;
   }, [clampViewToBounds]);
 
   // Selecting a node opens the detail panel (parent flex sibling), which
@@ -1711,16 +1715,18 @@ export function NodeView({
   }, [selKey, wrapSize.w, fitToContent]);
 
   // First load: a viewport saved at another window size can leave the graph
-  // tiny or off to one side, so fit it once (zooming in up to 100%).
-  const didInitialFit = useRef(false);
+  // tiny or off to one side, so fit it once per app session (zooming in up to
+  // 100%). Waits for hydrated bus nodes and a sized canvas, retries until the
+  // fit succeeds, and yields if the user pans/zooms first.
+  const hasBusNodes = buses.some((b) => nodePositions.has(busNodeId(b.id)));
   useEffect(() => {
-    if (didInitialFit.current || wrapSize.w === 0 || nodePositions.size === 0) return;
+    if (initialFitDone || !hasBusNodes || wrapSize.w === 0 || wrapSize.h === 0) return;
+    const scheduledView = viewRef.current;
     const t = window.setTimeout(() => {
-      didInitialFit.current = true;
-      fitToContent(true);
+      if (viewRef.current !== scheduledView || fitToContent(true)) initialFitDone = true;
     }, 70);
     return () => window.clearTimeout(t);
-  }, [wrapSize.w, nodePositions.size, fitToContent]);
+  }, [hasBusNodes, wrapSize.w, wrapSize.h, fitToContent]);
 
   // ── Group management ────────────────────────────────────────────────
   // Frontend-only: creating / removing a group is a localStorage write.

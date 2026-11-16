@@ -283,6 +283,8 @@ export interface AudioManagerActions {
 }
 
 export interface AudioManagerState {
+  /** Initial backend hydrate: still loading, done, or failed (with message). */
+  engine: { status: "loading" | "ready" | "error"; error: string | null };
   buses: Bus[];
   inputs: AudioInput[];
   sends: Send[];
