@@ -6,7 +6,8 @@ export function deriveStreamSetupSteps(
   inputs: AudioInput[],
   sends: Send[],
 ): StreamSetupStep[] {
-  const bus = buses.find((b) => b.role === "stream") ?? buses.find((b) => b.id === "B1");
+  // Role overrides are cosmetic; B1 is the stream bus the engine routes to capture apps.
+  const bus = buses.find((b) => b.id === "B1");
   if (!bus) return [];
   const name = `${bus.id} ${bus.label}`;
 
@@ -26,8 +27,10 @@ export function deriveStreamSetupSteps(
     ? { id: "routing", title: "Inputs routed to Stream", status: "ok", detail: `${routed.join(", ")}.` }
     : { id: "routing", title: "Inputs routed to Stream", status: "warning", detail: `Nothing is sent to ${name} yet. Turn on its send for your mic.` };
 
-  const live: StreamSetupStep =
-    bus.enabled && !bus.muted
+  const failed = bus.state === "error" || !!bus.error;
+  const live: StreamSetupStep = failed
+    ? { id: "enabled", title: "Stream bus live", status: "error", detail: `${name} output failed: ${bus.error ?? "device error"}.` }
+    : bus.enabled && !bus.muted
       ? { id: "enabled", title: "Stream bus live", status: "ok", detail: `${name} is on and unmuted.` }
       : { id: "enabled", title: "Stream bus live", status: bus.device ? "warning" : "pending", detail: bus.muted ? `${name} is muted.` : `${name} is disabled.` };
 

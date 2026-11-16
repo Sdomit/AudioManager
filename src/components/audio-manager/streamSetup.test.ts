@@ -23,6 +23,25 @@ describe("deriveStreamSetupSteps", () => {
     expect(steps.find((s) => s.id === "routing")?.detail).toContain("Mic");
   });
 
+  it("reports a failed output instead of declaring the stream live", () => {
+    const steps = deriveStreamSetupSteps(
+      [bus({ device: "CABLE Input (VB-Audio Virtual Cable)", enabled: true, state: "error", error: "Device disconnected" })],
+      [mic],
+      [send],
+    );
+    const live = steps.find((s) => s.id === "enabled");
+    expect(live?.status).toBe("error");
+    expect(live?.detail).toContain("Device disconnected");
+  });
+
+  it("checks B1 even when another bus has the Stream role override", () => {
+    const a1 = bus({ id: "A1", role: "stream", label: "Monitor", device: "CABLE Input (VB-Audio Virtual Cable)", enabled: true });
+    const b1 = bus({ role: "monitor" });
+    const steps = deriveStreamSetupSteps([a1, b1], [mic], [{ ...send, busId: "A1" }]);
+    expect(steps.find((s) => s.id === "busdevice")?.status).toBe("error");
+    expect(steps.find((s) => s.id === "routing")?.status).toBe("warning");
+  });
+
   it("warns when the stream bus goes to a physical device", () => {
     const steps = deriveStreamSetupSteps([bus({ device: "Speakers (Realtek)", enabled: true })], [mic], [send]);
     expect(steps.find((s) => s.id === "vcable")?.status).toBe("warning");
